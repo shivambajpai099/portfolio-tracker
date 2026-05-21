@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
-import { formatMoney } from "../../src/utils/format";
+import { colors, radii, spacing, typography } from "../../src/theme";
 import type { Account, AccountType, CashHolding, Currency } from "../../src/types/portfolio";
+import { formatMoney } from "../../src/utils/format";
 
 type AccountDraft = {
   name: string;
@@ -175,70 +176,65 @@ export default function AccountsScreen() {
 
   return (
     <ScreenContainer>
-      <View className="mb-5 flex-row items-center justify-between">
-        <Text className="text-2xl font-semibold text-text">Accounts</Text>
-        <Pressable className="rounded-full bg-accent px-4 py-1.5" onPress={openAddModal}>
-          <Text className="text-sm font-semibold text-bg">Add</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.headerTitle}>Accounts</Text>
+        <Pressable style={styles.addBtn} onPress={openAddModal}>
+          <Text style={styles.addBtnText}>Add</Text>
         </Pressable>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View className="gap-4 pb-10">
+        <View style={styles.listWrap}>
           {accounts.map((account) => {
             const metrics = accountMetrics.get(account.id);
             const cash = cashByAccount.get(account.id) ?? [];
 
             return (
-              <View key={account.id} className="rounded-xl bg-surface p-4">
+              <View key={account.id} style={styles.card}>
                 {/* Account header */}
-                <View className="flex-row items-start justify-between">
-                  <View className="flex-1 pr-3">
-                    <Text className="text-base font-semibold text-text">{account.name}</Text>
-                    <Text className="mt-0.5 text-xs text-muted">{account.broker} · {account.owner}</Text>
+                <View style={styles.cardHeader}>
+                  <View style={styles.cardHeaderLeft}>
+                    <Text style={styles.accountName}>{account.name}</Text>
+                    <Text style={styles.accountMeta}>{account.broker} · {account.owner}</Text>
                   </View>
-                  <View className="items-end">
-                    <Text className="text-xs text-muted">Current</Text>
-                    <Text className="text-sm font-semibold text-text">
+                  <View style={styles.cardHeaderRight}>
+                    <Text style={styles.metricSmallLabel}>Current</Text>
+                    <Text style={styles.metricSmallValue}>
                       {formatMoney(metrics?.currentValue ?? 0, account.baseCurrency)}
                     </Text>
                   </View>
                 </View>
 
-                <View className="mt-1 self-start">
-                  <Text className="text-xs text-muted">
-                    Invested {formatMoney(metrics?.investedValue ?? 0, account.baseCurrency)}
-                  </Text>
-                </View>
+                <Text style={styles.investedText}>Invested {formatMoney(metrics?.investedValue ?? 0, account.baseCurrency)}</Text>
 
                 {/* ── Cash balances ─────────────────────────────── */}
                 {cash.length > 0 ? (
-                  <View className="mt-4 gap-2 border-t border-[#1E2128] pt-3">
-                    <Text className="mb-1 text-xs font-medium text-muted uppercase tracking-widest">Cash</Text>
+                  <View style={styles.cashSection}>
+                    <Text style={styles.sectionLabel}>Cash</Text>
                     {cash.map((c) => {
                       const isEditing = Boolean(cashEditActive[c.id]);
                       return (
-                        <View key={c.id} className="flex-row items-center justify-between">
-                          <Text className="text-xs text-muted">{c.currency}</Text>
-                          <View className="flex-1 flex-row items-center justify-end gap-2">
+                        <View key={c.id} style={styles.cashRow}>
+                          <Text style={styles.cashCurrency}>{c.currency}</Text>
+                          <View style={styles.cashRight}>
                             {isEditing ? (
                               <TextInput
                                 value={cashEditValues[c.id] ?? ""}
-                                onChangeText={(v) =>
-                                  setCashEditValues((prev) => ({ ...prev, [c.id]: v }))
+                                onChangeText={(v) => setCashEditValues((prev) => ({ ...prev, [c.id]: v }))
                                 }
                                 onBlur={() => commitEditCash(c)}
                                 onSubmitEditing={() => commitEditCash(c)}
                                 keyboardType="decimal-pad"
                                 autoFocus
-                                className="min-w-[100px] rounded-lg border border-accent bg-bg px-3 py-1.5 text-right text-sm text-text"
+                                style={styles.cashInput}
                               />
                             ) : (
                               <Pressable onPress={() => startEditCash(c)}>
-                                <Text className="text-sm text-text">{formatMoney(c.balance, c.currency)}</Text>
+                                <Text style={styles.cashValue}>{formatMoney(c.balance, c.currency)}</Text>
                               </Pressable>
                             )}
                             <Pressable onPress={() => removeCashHolding(c.id)}>
-                              <Text className="text-xs text-negative">✕</Text>
+                              <Text style={styles.deleteX}>x</Text>
                             </Pressable>
                           </View>
                         </View>
@@ -248,37 +244,25 @@ export default function AccountsScreen() {
                 ) : null}
 
                 {/* Add cash buttons */}
-                <View className="mt-3 flex-row gap-2">
+                <View style={styles.cashAddRow}>
                   {(["INR", "USD"] as Currency[]).map((currency) => {
-                    const alreadyHas = (cashByAccount.get(account.id) ?? []).some(
-                      (c) => c.currency === currency
-                    );
+                    const alreadyHas = (cashByAccount.get(account.id) ?? []).some((c) => c.currency === currency);
                     if (alreadyHas) return null;
                     return (
-                      <Pressable
-                        key={currency}
-                        className="rounded-lg bg-bg px-3 py-1.5"
-                        onPress={() => addCashForAccount(account.id, currency)}
-                      >
-                        <Text className="text-xs text-muted">+ {currency} cash</Text>
+                      <Pressable key={currency} style={styles.cashAddBtn} onPress={() => addCashForAccount(account.id, currency)}>
+                        <Text style={styles.cashAddText}>+ {currency} cash</Text>
                       </Pressable>
                     );
                   })}
                 </View>
 
                 {/* Account actions */}
-                <View className="mt-3 flex-row gap-2">
-                  <Pressable
-                    className="rounded-lg border border-[#252932] px-3 py-1.5"
-                    onPress={() => openEditModal(account)}
-                  >
-                    <Text className="text-xs text-text">Edit</Text>
+                <View style={styles.actionsRow}>
+                  <Pressable style={styles.editBtn} onPress={() => openEditModal(account)}>
+                    <Text style={styles.editBtnText}>Edit</Text>
                   </Pressable>
-                  <Pressable
-                    className="rounded-lg border border-[#2D1E1E] px-3 py-1.5"
-                    onPress={() => setDeleteTarget(account)}
-                  >
-                    <Text className="text-xs text-negative">Delete</Text>
+                  <Pressable style={styles.deleteBtn} onPress={() => setDeleteTarget(account)}>
+                    <Text style={styles.deleteBtnText}>Delete</Text>
                   </Pressable>
                 </View>
               </View>
@@ -288,94 +272,83 @@ export default function AccountsScreen() {
       </ScrollView>
 
       <Modal visible={isFormVisible} transparent animationType="fade" onRequestClose={closeFormModal}>
-        <View className="flex-1 items-center justify-center bg-black/70 px-5">
-          <View className="w-full rounded-2xl bg-surface p-5">
-            <Text className="text-lg font-semibold text-text">
-              {editingAccountId ? "Edit Account" : "Add Account"}
-            </Text>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{editingAccountId ? "Edit Account" : "Add Account"}</Text>
 
             <TextInput
               value={draft.name}
               onChangeText={(value) => setDraft((prev) => ({ ...prev, name: value }))}
               placeholder="Account name"
-              placeholderTextColor="#8B909A"
-              className="mt-4 rounded-xl bg-bg px-4 py-3 text-text"
+              placeholderTextColor={colors.muted}
+              style={styles.modalInput}
             />
             <TextInput
               value={draft.broker}
               onChangeText={(value) => setDraft((prev) => ({ ...prev, broker: value }))}
               placeholder="Broker"
-              placeholderTextColor="#8B909A"
-              className="mt-2 rounded-xl bg-bg px-4 py-3 text-text"
+              placeholderTextColor={colors.muted}
+              style={styles.modalInputCompact}
             />
             <TextInput
               value={draft.owner}
               onChangeText={(value) => setDraft((prev) => ({ ...prev, owner: value }))}
               placeholder="Owner"
-              placeholderTextColor="#8B909A"
-              className="mt-2 rounded-xl bg-bg px-4 py-3 text-text"
+              placeholderTextColor={colors.muted}
+              style={styles.modalInputCompact}
             />
 
-            <Text className="mt-5 text-xs text-muted">Type</Text>
-            <View className="mt-2 flex-row gap-1.5">
-              {(["brokerage", "retirement", "family"] as AccountType[]).map((type) => (
-                <Pressable
-                  key={type}
-                  className={`rounded-full px-3 py-1 ${draft.type === type ? "bg-accent" : "bg-bg"}`}
-                  onPress={() => setDraft((prev) => ({ ...prev, type }))}
-                >
-                  <Text className={`text-xs font-medium ${draft.type === type ? "text-bg" : "text-muted"}`}>{type}</Text>
-                </Pressable>
-              ))}
+            <Text style={styles.modalLabel}>Type</Text>
+            <View style={styles.pillRow}>
+              {(["brokerage", "retirement", "family"] as AccountType[]).map((type) => {
+                const active = draft.type === type;
+                return (
+                  <Pressable key={type} style={[styles.pill, active && styles.pillActive]} onPress={() => setDraft((prev) => ({ ...prev, type }))}>
+                    <Text style={[styles.pillText, active && styles.pillTextActive]}>{type}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
 
-            <Text className="mt-4 text-xs text-muted">Currency</Text>
-            <View className="mt-2 flex-row gap-1.5">
-              {(["INR", "USD"] as Currency[]).map((currency) => (
-                <Pressable
-                  key={currency}
-                  className={`rounded-full px-3 py-1 ${draft.baseCurrency === currency ? "bg-accent" : "bg-bg"}`}
-                  onPress={() => setDraft((prev) => ({ ...prev, baseCurrency: currency }))}
-                >
-                  <Text className={`text-xs font-medium ${draft.baseCurrency === currency ? "text-bg" : "text-muted"}`}>
-                    {currency}
-                  </Text>
-                </Pressable>
-              ))}
+            <Text style={styles.modalLabel}>Currency</Text>
+            <View style={styles.pillRow}>
+              {(["INR", "USD"] as Currency[]).map((currency) => {
+                const active = draft.baseCurrency === currency;
+                return (
+                  <Pressable
+                    key={currency}
+                    style={[styles.pill, active && styles.pillActive]}
+                    onPress={() => setDraft((prev) => ({ ...prev, baseCurrency: currency }))}
+                  >
+                    <Text style={[styles.pillText, active && styles.pillTextActive]}>{currency}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
 
-            <View className="mt-6 flex-row justify-end gap-3">
-              <Pressable className="px-4 py-2" onPress={closeFormModal}>
-                <Text className="text-muted">Cancel</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.ghostBtn} onPress={closeFormModal}>
+                <Text style={styles.ghostText}>Cancel</Text>
               </Pressable>
-              <Pressable className="rounded-xl bg-accent px-5 py-2.5" onPress={submitForm}>
-                <Text className="font-semibold text-bg">Save</Text>
+              <Pressable style={styles.primaryBtn} onPress={submitForm}>
+                <Text style={styles.primaryText}>Save</Text>
               </Pressable>
             </View>
           </View>
         </View>
       </Modal>
 
-      <Modal
-        visible={Boolean(deleteTarget)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setDeleteTarget(null)}
-      >
-        <View className="flex-1 items-center justify-center bg-black/70 px-5">
-          <View className="w-full rounded-2xl bg-surface p-5">
-            <Text className="text-lg font-semibold text-text">Delete account?</Text>
-            <Text className="mt-1.5 text-sm text-muted">
-              This removes{" "}
-              <Text className="text-text">{deleteTarget?.name}</Text>
-              {" "}and all linked holdings and cash balances permanently.
-            </Text>
-            <View className="mt-6 flex-row justify-end gap-3">
-              <Pressable className="px-4 py-2" onPress={() => setDeleteTarget(null)}>
-                <Text className="text-muted">Cancel</Text>
+      <Modal visible={Boolean(deleteTarget)} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete account?</Text>
+            <Text style={styles.modalDangerText}>This removes {deleteTarget?.name} and all linked holdings and cash balances permanently.</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.ghostBtn} onPress={() => setDeleteTarget(null)}>
+                <Text style={styles.ghostText}>Cancel</Text>
               </Pressable>
-              <Pressable className="rounded-xl bg-negative px-5 py-2.5" onPress={confirmDelete}>
-                <Text className="font-semibold text-text">Delete</Text>
+              <Pressable style={styles.dangerBtn} onPress={confirmDelete}>
+                <Text style={styles.primaryText}>Delete</Text>
               </Pressable>
             </View>
           </View>
@@ -385,3 +358,260 @@ export default function AccountsScreen() {
   );
 }
 
+const styles = StyleSheet.create({
+  headerRow: {
+    marginBottom: spacing.xl,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  headerTitle: {
+    color: colors.text,
+    fontSize: typography.heading,
+    fontWeight: typography.weightSemibold,
+  },
+  addBtn: {
+    borderRadius: radii.pill,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+  },
+  addBtnText: {
+    color: colors.bg,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  listWrap: {
+    gap: spacing.lg,
+    paddingBottom: spacing.xxxl,
+  },
+  card: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
+  cardHeaderLeft: {
+    flex: 1,
+    paddingRight: spacing.md,
+  },
+  cardHeaderRight: {
+    alignItems: "flex-end",
+  },
+  accountName: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  accountMeta: {
+    marginTop: 2,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  metricSmallLabel: {
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  metricSmallValue: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  investedText: {
+    marginTop: 4,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  cashSection: {
+    marginTop: spacing.lg,
+    gap: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: "#1E2128",
+    paddingTop: spacing.md,
+  },
+  sectionLabel: {
+    marginBottom: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  cashRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  cashCurrency: {
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  cashRight: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: spacing.sm,
+  },
+  cashValue: {
+    color: colors.text,
+    fontSize: typography.body,
+  },
+  cashInput: {
+    minWidth: 100,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    backgroundColor: colors.bg,
+    color: colors.text,
+    textAlign: "right",
+    fontSize: typography.body,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  deleteX: {
+    color: colors.negative,
+    fontSize: typography.caption,
+  },
+  cashAddRow: {
+    marginTop: spacing.md,
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  cashAddBtn: {
+    borderRadius: radii.md,
+    backgroundColor: colors.bg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  cashAddText: {
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  actionsRow: {
+    marginTop: spacing.md,
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  editBtn: {
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: "#252932",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  editBtnText: {
+    color: colors.text,
+    fontSize: typography.caption,
+  },
+  deleteBtn: {
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: "#2D1E1E",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  deleteBtnText: {
+    color: colors.negative,
+    fontSize: typography.caption,
+  },
+  modalOverlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingHorizontal: spacing.xl,
+  },
+  modalCard: {
+    width: "100%",
+    borderRadius: radii.xl,
+    backgroundColor: colors.surface,
+    padding: spacing.xl,
+  },
+  modalTitle: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  modalInput: {
+    marginTop: spacing.lg,
+    borderRadius: radii.lg,
+    backgroundColor: colors.bg,
+    color: colors.text,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  modalInputCompact: {
+    marginTop: spacing.sm,
+    borderRadius: radii.lg,
+    backgroundColor: colors.bg,
+    color: colors.text,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  modalLabel: {
+    marginTop: spacing.lg,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  pillRow: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    gap: spacing.xs,
+  },
+  pill: {
+    borderRadius: radii.pill,
+    backgroundColor: colors.bg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  pillActive: {
+    backgroundColor: colors.accent,
+  },
+  pillText: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+  },
+  pillTextActive: {
+    color: colors.bg,
+  },
+  modalActions: {
+    marginTop: spacing.xxl,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.md,
+  },
+  ghostBtn: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  ghostText: {
+    color: colors.muted,
+  },
+  primaryBtn: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+  },
+  dangerBtn: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.negative,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+  },
+  primaryText: {
+    color: colors.text,
+    fontWeight: typography.weightSemibold,
+  },
+  modalDangerText: {
+    marginTop: spacing.sm,
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+});

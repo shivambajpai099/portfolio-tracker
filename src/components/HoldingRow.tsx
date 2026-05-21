@@ -1,4 +1,5 @@
-import { Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { colors, radii, spacing, typography } from "../theme";
 
 interface HoldingRowProps {
   symbol: string;
@@ -8,13 +9,37 @@ interface HoldingRowProps {
 
 export function HoldingRow({ symbol, subtitle, value }: HoldingRowProps) {
   return (
-    <View className="flex-row items-center justify-between rounded-xl bg-surface p-4">
+    <View style={styles.row}>
       <View>
-        <Text className="text-base font-semibold text-text">{symbol}</Text>
-        <Text className="text-sm text-muted">{subtitle}</Text>
+        <Text style={styles.symbol}>{symbol}</Text>
+        <Text style={styles.subtitle}>{subtitle}</Text>
       </View>
-      <Text className="text-base font-semibold text-text">{value}</Text>
+      <Text style={styles.value}>{value}</Text>
     </View>
   );
 }
 
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+  },
+  symbol: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  subtitle: {
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  value: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+});

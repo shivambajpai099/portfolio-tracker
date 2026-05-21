@@ -1,4 +1,5 @@
-import { Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { colors, radii, spacing, typography } from "../theme";
 
 interface StatCardProps {
   label: string;
@@ -7,10 +8,27 @@ interface StatCardProps {
 
 export function StatCard({ label, value }: StatCardProps) {
   return (
-    <View className="rounded-2xl bg-surface p-4">
-      <Text className="text-sm text-muted">{label}</Text>
-      <Text className="mt-2 text-2xl font-semibold text-text">{value}</Text>
+    <View style={styles.card}>
+      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.value}>{value}</Text>
     </View>
   );
 }
 
+const styles = StyleSheet.create({
+  card: {
+    borderRadius: radii.xl,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+  },
+  label: {
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  value: {
+    marginTop: spacing.sm,
+    color: colors.text,
+    fontSize: typography.title,
+    fontWeight: typography.weightSemibold,
+  },
+});

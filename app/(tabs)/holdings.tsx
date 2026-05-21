@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
+import { colors, radii, spacing, typography } from "../../src/theme";
 import type { Currency, Holding } from "../../src/types/portfolio";
 import { formatMoney } from "../../src/utils/format";
 
@@ -72,9 +73,9 @@ export default function HoldingsScreen() {
 
   const toReportingCurrency = (value: number, currency: Currency): number => {
     if (settings.reportingCurrency === "INR") {
-      return toINR(value, currency, fxRates.USDINR);
+      return toINR(value, currency, fxRates);
     }
-    return toUSD(value, currency, fxRates.USDINR);
+    return toUSD(value, currency, fxRates);
   };
 
   const groupedHoldings = useMemo<GroupedHolding[]>(() => {
@@ -201,10 +202,10 @@ export default function HoldingsScreen() {
   return (
     <ScreenContainer>
       {/* Header */}
-      <View className="mb-5 flex-row items-center justify-between">
-        <Text className="text-2xl font-semibold text-text">Holdings</Text>
-        <Pressable className="rounded-full bg-accent px-4 py-1.5" onPress={() => setIsAddVisible(true)}>
-          <Text className="text-sm font-semibold text-bg">Add</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.headerTitle}>Holdings</Text>
+        <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
+          <Text style={styles.addBtnText}>Add</Text>
         </Pressable>
       </View>
 
@@ -213,86 +214,82 @@ export default function HoldingsScreen() {
         value={searchText}
         onChangeText={setSearchText}
         placeholder="Search ticker, company or account"
-        placeholderTextColor="#8B909A"
-        className="mb-4 rounded-xl bg-surface px-4 py-3 text-sm text-text"
+        placeholderTextColor={colors.muted}
+        style={styles.searchInput}
       />
 
       {/* Sort chips */}
-      <View className="mb-2 flex-row flex-wrap gap-1.5">
+      <View style={styles.chipWrap}>
         {([
           ["current_desc", "Value"],
           ["allocation_desc", "Alloc"],
           ["gain_desc", "Gain"],
-          ["ticker_asc", "A–Z"],
-        ] as const).map(([key, label]) => (
-          <Pressable
-            key={key}
-            className={`rounded-full px-3 py-1 ${sortKey === key ? "bg-accent" : "bg-surface"}`}
-            onPress={() => setSortKey(key)}
-          >
-            <Text className={`text-xs font-medium ${sortKey === key ? "text-bg" : "text-muted"}`}>{label}</Text>
-          </Pressable>
-        ))}
-        <View className="w-px self-stretch bg-[#252932] mx-0.5" />
-        {(["ALL", "INR", "USD"] as CurrencyFilter[]).map((value) => (
-          <Pressable
-            key={value}
-            className={`rounded-full px-3 py-1 ${currencyFilter === value ? "bg-accent" : "bg-surface"}`}
-            onPress={() => setCurrencyFilter(value)}
-          >
-            <Text className={`text-xs font-medium ${currencyFilter === value ? "text-bg" : "text-muted"}`}>{value}</Text>
-          </Pressable>
-        ))}
-        {(["ALL", "GAIN", "LOSS"] as PerfFilter[]).map((value) => (
-          <Pressable
-            key={value}
-            className={`rounded-full px-3 py-1 ${perfFilter === value ? "bg-accent" : "bg-surface"}`}
-            onPress={() => setPerfFilter(value)}
-          >
-            <Text className={`text-xs font-medium ${perfFilter === value ? "text-bg" : "text-muted"}`}>{value}</Text>
-          </Pressable>
-        ))}
+          ["ticker_asc", "A-Z"],
+        ] as const).map(([key, label]) => {
+          const active = sortKey === key;
+          return (
+            <Pressable key={key} style={[styles.chip, active && styles.chipActive]} onPress={() => setSortKey(key)}>
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+
+        <View style={styles.divider} />
+
+        {(["ALL", "INR", "USD"] as CurrencyFilter[]).map((value) => {
+          const active = currencyFilter === value;
+          return (
+            <Pressable key={value} style={[styles.chip, active && styles.chipActive]} onPress={() => setCurrencyFilter(value)}>
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{value}</Text>
+            </Pressable>
+          );
+        })}
+
+        {(["ALL", "GAIN", "LOSS"] as PerfFilter[]).map((value) => {
+          const active = perfFilter === value;
+          return (
+            <Pressable key={value} style={[styles.chip, active && styles.chipActive]} onPress={() => setPerfFilter(value)}>
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{value}</Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View className="mt-4 gap-4 pb-10">
+        <View style={styles.listWrap}>
           {visibleGroups.map((group) => {
             const isExpanded = Boolean(expandedSymbols[group.symbol]);
 
             return (
-              <View key={group.symbol} className="rounded-2xl bg-surface p-4">
-                <Pressable
-                  onPress={() =>
-                    setExpandedSymbols((prev) => ({ ...prev, [group.symbol]: !prev[group.symbol] }))
-                  }
-                >
+              <View key={group.symbol} style={styles.groupCard}>
+                <Pressable onPress={() => setExpandedSymbols((prev) => ({ ...prev, [group.symbol]: !prev[group.symbol] }))}>
                   {/* Symbol + allocation % */}
-                  <View className="mb-3 flex-row items-start justify-between">
-                    <View className="flex-1 pr-4">
-                      <Text className="text-base font-semibold text-text">{group.symbol}</Text>
-                      <Text className="mt-0.5 text-xs text-muted">{group.companyName}</Text>
+                  <View style={styles.groupTitleRow}>
+                    <View style={styles.groupTitleWrap}>
+                      <Text style={styles.groupSymbol}>{group.symbol}</Text>
+                      <Text style={styles.groupName}>{group.companyName}</Text>
                     </View>
-                    <Text className="text-base font-semibold text-text">{group.allocationPct.toFixed(1)}%</Text>
+                    <Text style={styles.groupAllocation}>{group.allocationPct.toFixed(1)}%</Text>
                   </View>
 
                   {/* Allocation bar */}
-                  <View className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-bg">
-                    <View style={{ width: `${group.allocationPct}%`, backgroundColor: "#67E8F9", height: "100%" }} />
+                  <View style={styles.allocTrack}>
+                    <View style={[styles.allocFill, { width: `${group.allocationPct}%` }]} />
                   </View>
 
                   {/* Metrics row */}
-                  <View className="flex-row justify-between">
+                  <View style={styles.metricRow}>
                     <View>
-                      <Text className="text-[10px] text-muted">Current</Text>
-                      <Text className="mt-0.5 text-sm text-text">{formatMoney(group.currentValue, settings.reportingCurrency)}</Text>
+                      <Text style={styles.metricLabel}>Current</Text>
+                      <Text style={styles.metricValue}>{formatMoney(group.currentValue, settings.reportingCurrency)}</Text>
                     </View>
-                    <View className="items-center">
-                      <Text className="text-[10px] text-muted">Invested</Text>
-                      <Text className="mt-0.5 text-sm text-text">{formatMoney(group.investedValue, settings.reportingCurrency)}</Text>
+                    <View style={styles.metricCenter}>
+                      <Text style={styles.metricLabel}>Invested</Text>
+                      <Text style={styles.metricValue}>{formatMoney(group.investedValue, settings.reportingCurrency)}</Text>
                     </View>
-                    <View className="items-end">
-                      <Text className="text-[10px] text-muted">Gain/Loss</Text>
-                      <Text className={`mt-0.5 text-sm font-medium ${group.gainLoss >= 0 ? "text-positive" : "text-negative"}`}>
+                    <View style={styles.metricRight}>
+                      <Text style={styles.metricLabel}>Gain/Loss</Text>
+                      <Text style={[styles.metricValue, group.gainLoss >= 0 ? styles.positiveText : styles.negativeText]}>
                         {formatMoney(group.gainLoss, settings.reportingCurrency)}
                       </Text>
                     </View>
@@ -300,31 +297,29 @@ export default function HoldingsScreen() {
                 </Pressable>
 
                 {/* Account chips */}
-                <View className="mt-3 flex-row flex-wrap gap-1.5">
+                <View style={styles.accountChipWrap}>
                   {group.linkedAccountsLabel.map((label) => (
-                    <Text key={`${group.symbol}-${label}`} className="rounded-full bg-bg px-2.5 py-0.5 text-[10px] text-muted">
-                      {label}
-                    </Text>
+                    <Text key={`${group.symbol}-${label}`} style={styles.accountChip}>{label}</Text>
                   ))}
                 </View>
 
                 {/* Expanded lots */}
                 {isExpanded ? (
-                  <View className="mt-4 gap-2 border-t border-[#1E2128] pt-3">
+                  <View style={styles.expandedWrap}>
                     {group.lots.map((lot) => (
-                      <View key={lot.id} className="flex-row items-center justify-between py-1">
-                        <View className="flex-1 pr-4">
-                          <Text className="text-xs text-text">{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
-                          <Text className="mt-0.5 text-[10px] text-muted">
+                      <View key={lot.id} style={styles.lotRow}>
+                        <View style={styles.lotInfo}>
+                          <Text style={styles.lotAccount}>{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
+                          <Text style={styles.lotMeta}>
                             {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
                           </Text>
                         </View>
-                        <View className="flex-row gap-4">
+                        <View style={styles.lotActions}>
                           <Pressable onPress={() => openEdit(lot)}>
-                            <Text className="text-xs text-accent">Edit</Text>
+                            <Text style={styles.editText}>Edit</Text>
                           </Pressable>
                           <Pressable onPress={() => setDeleteTarget(lot)}>
-                            <Text className="text-xs text-negative">Delete</Text>
+                            <Text style={styles.deleteText}>Delete</Text>
                           </Pressable>
                         </View>
                       </View>
@@ -336,8 +331,8 @@ export default function HoldingsScreen() {
           })}
 
           {visibleGroups.length === 0 ? (
-            <View className="mt-8 items-center">
-              <Text className="text-sm text-muted">No holdings match current filters.</Text>
+            <View style={styles.emptyWrap}>
+              <Text style={styles.emptyText}>No holdings match current filters.</Text>
             </View>
           ) : null}
         </View>
@@ -364,81 +359,75 @@ export default function HoldingsScreen() {
       />
 
       <Modal visible={Boolean(editTarget)} transparent animationType="fade" onRequestClose={() => setEditTarget(null)}>
-        <View className="flex-1 items-center justify-center bg-black/70 px-5">
-          <View className="w-full rounded-2xl bg-surface p-5">
-            <Text className="text-lg font-semibold text-text">Edit Holding</Text>
-            <Text className="mt-0.5 text-sm text-muted">{editTarget?.symbol} · {editTarget?.companyName}</Text>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Edit Holding</Text>
+            <Text style={styles.modalSubTitle}>{editTarget?.symbol} · {editTarget?.companyName}</Text>
 
-            <Text className="mt-5 text-xs text-muted">Account</Text>
-            <View className="mt-2 flex-row flex-wrap gap-1.5">
-              {accounts.map((account) => (
-                <Pressable
-                  key={account.id}
-                  className={`rounded-full px-3 py-1 ${editDraft.accountId === account.id ? "bg-accent" : "bg-bg"}`}
-                  onPress={() => setEditDraft((prev) => ({ ...prev, accountId: account.id }))}
-                >
-                  <Text className={`text-xs font-medium ${editDraft.accountId === account.id ? "text-bg" : "text-text"}`}>
-                    {account.name}
-                  </Text>
-                </Pressable>
-              ))}
+            <Text style={styles.modalLabel}>Account</Text>
+            <View style={styles.modalPillRow}>
+              {accounts.map((account) => {
+                const active = editDraft.accountId === account.id;
+                return (
+                  <Pressable
+                    key={account.id}
+                    style={[styles.modalPill, active && styles.modalPillActive]}
+                    onPress={() => setEditDraft((prev) => ({ ...prev, accountId: account.id }))}
+                  >
+                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{account.name}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
 
             <TextInput
               value={editDraft.quantity}
               onChangeText={(value) => setEditDraft((prev) => ({ ...prev, quantity: value }))}
               placeholder="Quantity"
-              placeholderTextColor="#8B909A"
+              placeholderTextColor={colors.muted}
               keyboardType="decimal-pad"
-              className="mt-4 rounded-xl bg-bg px-4 py-3 text-text"
+              style={styles.modalInput}
             />
             <TextInput
               value={editDraft.averagePrice}
               onChangeText={(value) => setEditDraft((prev) => ({ ...prev, averagePrice: value }))}
               placeholder="Average buy price"
-              placeholderTextColor="#8B909A"
+              placeholderTextColor={colors.muted}
               keyboardType="decimal-pad"
-              className="mt-2 rounded-xl bg-bg px-4 py-3 text-text"
+              style={styles.modalInputCompact}
             />
             <TextInput
               value={editDraft.marketPrice}
               onChangeText={(value) => setEditDraft((prev) => ({ ...prev, marketPrice: value }))}
               placeholder="Current market price"
-              placeholderTextColor="#8B909A"
+              placeholderTextColor={colors.muted}
               keyboardType="decimal-pad"
-              className="mt-2 rounded-xl bg-bg px-4 py-3 text-text"
+              style={styles.modalInputCompact}
             />
 
-            <View className="mt-6 flex-row justify-end gap-3">
-              <Pressable className="px-4 py-2" onPress={() => setEditTarget(null)}>
-                <Text className="text-muted">Cancel</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.ghostBtn} onPress={() => setEditTarget(null)}>
+                <Text style={styles.ghostText}>Cancel</Text>
               </Pressable>
-              <Pressable className="rounded-xl bg-accent px-5 py-2.5" onPress={submitEdit}>
-                <Text className="font-semibold text-bg">Save</Text>
+              <Pressable style={styles.primaryBtn} onPress={submitEdit}>
+                <Text style={styles.primaryText}>Save</Text>
               </Pressable>
             </View>
           </View>
         </View>
       </Modal>
 
-      <Modal
-        visible={Boolean(deleteTarget)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setDeleteTarget(null)}
-      >
-        <View className="flex-1 items-center justify-center bg-black/70 px-5">
-          <View className="w-full rounded-2xl bg-surface p-5">
-            <Text className="text-lg font-semibold text-text">Delete holding?</Text>
-            <Text className="mt-1.5 text-sm text-muted">
-              This removes <Text className="text-text">{deleteTarget?.symbol}</Text> permanently.
-            </Text>
-            <View className="mt-6 flex-row justify-end gap-3">
-              <Pressable className="px-4 py-2" onPress={() => setDeleteTarget(null)}>
-                <Text className="text-muted">Cancel</Text>
+      <Modal visible={Boolean(deleteTarget)} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete holding?</Text>
+            <Text style={styles.modalDangerText}>This removes {deleteTarget?.symbol} permanently.</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.ghostBtn} onPress={() => setDeleteTarget(null)}>
+                <Text style={styles.ghostText}>Cancel</Text>
               </Pressable>
-              <Pressable className="rounded-xl bg-negative px-5 py-2.5" onPress={confirmDelete}>
-                <Text className="font-semibold text-text">Delete</Text>
+              <Pressable style={styles.dangerBtn} onPress={confirmDelete}>
+                <Text style={styles.primaryText}>Delete</Text>
               </Pressable>
             </View>
           </View>
@@ -448,3 +437,300 @@ export default function HoldingsScreen() {
   );
 }
 
+const styles = StyleSheet.create({
+  headerRow: {
+    marginBottom: spacing.xl,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  headerTitle: {
+    color: colors.text,
+    fontSize: typography.heading,
+    fontWeight: typography.weightSemibold,
+  },
+  addBtn: {
+    borderRadius: radii.pill,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+  },
+  addBtnText: {
+    color: colors.bg,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  searchInput: {
+    marginBottom: spacing.lg,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    color: colors.text,
+    fontSize: typography.body,
+  },
+  chipWrap: {
+    marginBottom: spacing.sm,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  chip: {
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.surface,
+  },
+  chipActive: {
+    backgroundColor: colors.accent,
+  },
+  chipText: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+  },
+  chipTextActive: {
+    color: colors.bg,
+  },
+  divider: {
+    width: 1,
+    alignSelf: "stretch",
+    marginHorizontal: spacing.xs,
+    backgroundColor: "#252932",
+  },
+  listWrap: {
+    marginTop: spacing.lg,
+    gap: spacing.lg,
+    paddingBottom: spacing.xxxl,
+  },
+  groupCard: {
+    borderRadius: radii.xl,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+  },
+  groupTitleRow: {
+    marginBottom: spacing.md,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
+  groupTitleWrap: {
+    flex: 1,
+    paddingRight: spacing.lg,
+  },
+  groupSymbol: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  groupName: {
+    marginTop: 2,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  groupAllocation: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  allocTrack: {
+    marginBottom: spacing.md,
+    height: 6,
+    width: "100%",
+    overflow: "hidden",
+    borderRadius: radii.pill,
+    backgroundColor: colors.bg,
+  },
+  allocFill: {
+    width: "30%",
+    height: "100%",
+    backgroundColor: colors.accent,
+  },
+  metricRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  metricCenter: {
+    alignItems: "center",
+  },
+  metricRight: {
+    alignItems: "flex-end",
+  },
+  metricLabel: {
+    color: colors.muted,
+    fontSize: typography.micro,
+  },
+  metricValue: {
+    marginTop: 2,
+    color: colors.text,
+    fontSize: typography.body,
+  },
+  accountChipWrap: {
+    marginTop: spacing.md,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+  },
+  accountChip: {
+    borderRadius: radii.pill,
+    backgroundColor: colors.bg,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    color: colors.muted,
+    fontSize: typography.micro,
+  },
+  expandedWrap: {
+    marginTop: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: "#1E2128",
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+  },
+  lotRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.xs,
+  },
+  lotInfo: {
+    flex: 1,
+    paddingRight: spacing.lg,
+  },
+  lotAccount: {
+    color: colors.text,
+    fontSize: typography.caption,
+  },
+  lotMeta: {
+    marginTop: 2,
+    color: colors.muted,
+    fontSize: typography.micro,
+  },
+  lotActions: {
+    flexDirection: "row",
+    gap: spacing.lg,
+  },
+  editText: {
+    color: colors.accent,
+    fontSize: typography.caption,
+  },
+  deleteText: {
+    color: colors.negative,
+    fontSize: typography.caption,
+  },
+  emptyWrap: {
+    marginTop: spacing.xxxl,
+    alignItems: "center",
+  },
+  emptyText: {
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  positiveText: {
+    color: colors.positive,
+  },
+  negativeText: {
+    color: colors.negative,
+  },
+  modalOverlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingHorizontal: spacing.xl,
+  },
+  modalCard: {
+    width: "100%",
+    borderRadius: radii.xl,
+    backgroundColor: colors.surface,
+    padding: spacing.xl,
+  },
+  modalTitle: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  modalSubTitle: {
+    marginTop: 2,
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  modalLabel: {
+    marginTop: spacing.xl,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  modalPillRow: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+  },
+  modalPill: {
+    borderRadius: radii.pill,
+    backgroundColor: colors.bg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  modalPillActive: {
+    backgroundColor: colors.accent,
+  },
+  modalPillText: {
+    color: colors.text,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+  },
+  modalPillTextActive: {
+    color: colors.bg,
+  },
+  modalInput: {
+    marginTop: spacing.lg,
+    borderRadius: radii.lg,
+    backgroundColor: colors.bg,
+    color: colors.text,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  modalInputCompact: {
+    marginTop: spacing.sm,
+    borderRadius: radii.lg,
+    backgroundColor: colors.bg,
+    color: colors.text,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  modalActions: {
+    marginTop: spacing.xxl,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.md,
+  },
+  ghostBtn: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  ghostText: {
+    color: colors.muted,
+  },
+  primaryBtn: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+  },
+  dangerBtn: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.negative,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+  },
+  primaryText: {
+    color: colors.text,
+    fontWeight: typography.weightSemibold,
+  },
+  modalDangerText: {
+    marginTop: spacing.sm,
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+});

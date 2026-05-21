@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { searchTickerSuggestions } from "../services/yahooFinanceService";
+import { colors, radii, spacing, typography } from "../theme";
 import type { TickerSuggestion } from "../types/marketData";
 import type { Account, Currency } from "../types/portfolio";
 
@@ -136,11 +137,11 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
-      <View className="flex-1 items-center justify-center bg-black/70 px-5">
-        <View className="max-h-[90%] w-full rounded-2xl bg-surface p-5">
-          <Text className="text-xl font-semibold text-text">Add Holding</Text>
+      <View style={styles.overlay}>
+        <View style={styles.modalCard}>
+          <Text style={styles.title}>Add Holding</Text>
 
-          <Text className="mt-4 text-sm text-muted">Search Ticker</Text>
+          <Text style={styles.label}>Search Ticker</Text>
           <TextInput
             value={query}
             onChangeText={(value) => {
@@ -148,34 +149,32 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
               setSelected(null);
             }}
             placeholder="e.g. AAPL, RELIANCE.NS"
-            placeholderTextColor="#8B909A"
+            placeholderTextColor={colors.muted}
             autoCapitalize="characters"
-            className="mt-2 rounded-lg border border-[#252932] bg-bg px-3 py-3 text-text"
+            style={styles.input}
           />
 
           {isLoading ? (
-            <View className="mt-3 flex-row items-center gap-2">
-              <ActivityIndicator color="#67E8F9" />
-              <Text className="text-sm text-muted">Searching...</Text>
+            <View style={styles.loadingRow}>
+              <ActivityIndicator color={colors.accent} />
+              <Text style={styles.mutedText}>Searching...</Text>
             </View>
           ) : null}
 
-          {errorText ? <Text className="mt-3 text-sm text-negative">{errorText}</Text> : null}
+          {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
 
           {suggestions.length > 0 ? (
-            <View className="mt-3 max-h-40 rounded-lg border border-[#252932] bg-bg">
+            <View style={styles.suggestionsWrap}>
               <ScrollView keyboardShouldPersistTaps="handled">
                 {suggestions.map((item) => (
                   <Pressable
                     key={`${item.symbol}-${item.exchange}`}
-                    className="border-b border-[#1E2128] px-3 py-2"
+                    style={styles.suggestionItem}
                     onPress={() => handleSelectTicker(item)}
                   >
-                    <Text className="text-sm font-semibold text-text">{item.symbol}</Text>
-                    <Text className="text-xs text-muted">{item.companyName}</Text>
-                    <Text className="text-xs text-muted">
-                      {item.exchange} - {item.currency}
-                    </Text>
+                    <Text style={styles.suggestionSymbol}>{item.symbol}</Text>
+                    <Text style={styles.suggestionMeta}>{item.companyName}</Text>
+                    <Text style={styles.suggestionMeta}>{item.exchange} - {item.currency}</Text>
                   </Pressable>
                 ))}
               </ScrollView>
@@ -183,54 +182,52 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
           ) : null}
 
           {selected ? (
-            <View className="mt-4 rounded-lg bg-bg p-3">
-              <Text className="text-sm text-text">{selected.symbol}</Text>
-              <Text className="mt-1 text-xs text-muted">{selected.companyName}</Text>
-              <Text className="mt-1 text-xs text-muted">
-                {selected.exchange} - {selected.currency}
-              </Text>
+            <View style={styles.selectedCard}>
+              <Text style={styles.selectedSymbol}>{selected.symbol}</Text>
+              <Text style={styles.suggestionMeta}>{selected.companyName}</Text>
+              <Text style={styles.suggestionMeta}>{selected.exchange} - {selected.currency}</Text>
             </View>
           ) : null}
 
-          <Text className="mt-4 text-sm text-muted">Account</Text>
-          <View className="mt-2 flex-row flex-wrap gap-2">
-            {accounts.map((account) => (
-              <Pressable
-                key={account.id}
-                className={`rounded-lg px-3 py-2 ${accountId === account.id ? "bg-accent" : "bg-bg"}`}
-                onPress={() => setAccountId(account.id)}
-              >
-                <Text className={`${accountId === account.id ? "text-bg" : "text-text"}`}>{account.name}</Text>
-              </Pressable>
-            ))}
+          <Text style={styles.label}>Account</Text>
+          <View style={styles.pillRow}>
+            {accounts.map((account) => {
+              const active = accountId === account.id;
+              return (
+                <Pressable
+                  key={account.id}
+                  style={[styles.pill, active && styles.pillActive]}
+                  onPress={() => setAccountId(account.id)}
+                >
+                  <Text style={[styles.pillText, active && styles.pillTextActive]}>{account.name}</Text>
+                </Pressable>
+              );
+            })}
           </View>
 
           <TextInput
             value={quantity}
             onChangeText={setQuantity}
             placeholder="Quantity"
-            placeholderTextColor="#8B909A"
+            placeholderTextColor={colors.muted}
             keyboardType="decimal-pad"
-            className="mt-3 rounded-lg border border-[#252932] bg-bg px-3 py-3 text-text"
+            style={styles.inputCompact}
           />
           <TextInput
             value={averagePrice}
             onChangeText={setAveragePrice}
             placeholder="Average buy price"
-            placeholderTextColor="#8B909A"
+            placeholderTextColor={colors.muted}
             keyboardType="decimal-pad"
-            className="mt-3 rounded-lg border border-[#252932] bg-bg px-3 py-3 text-text"
+            style={styles.inputCompact}
           />
 
-          <View className="mt-6 flex-row justify-end gap-2">
-            <Pressable className="rounded-lg border border-muted px-4 py-2" onPress={handleClose}>
-              <Text className="text-muted">Cancel</Text>
+          <View style={styles.actionsRow}>
+            <Pressable style={styles.cancelBtn} onPress={handleClose}>
+              <Text style={styles.cancelText}>Cancel</Text>
             </Pressable>
-            <Pressable
-              className={`rounded-lg px-4 py-2 ${canSubmit ? "bg-accent" : "bg-[#39414F]"}`}
-              onPress={handleCreate}
-            >
-              <Text className={`font-semibold ${canSubmit ? "text-bg" : "text-muted"}`}>Save</Text>
+            <Pressable style={[styles.saveBtn, !canSubmit && styles.saveBtnDisabled]} onPress={handleCreate}>
+              <Text style={[styles.saveText, !canSubmit && styles.saveTextDisabled]}>Save</Text>
             </Pressable>
           </View>
         </View>
@@ -239,3 +236,151 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   );
 }
 
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingHorizontal: spacing.xl,
+  },
+  modalCard: {
+    maxHeight: "90%",
+    width: "100%",
+    borderRadius: radii.xl,
+    backgroundColor: colors.surface,
+    padding: spacing.xl,
+  },
+  title: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  label: {
+    marginTop: spacing.lg,
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  input: {
+    marginTop: spacing.sm,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: "#252932",
+    backgroundColor: colors.bg,
+    color: colors.text,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  inputCompact: {
+    marginTop: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: "#252932",
+    backgroundColor: colors.bg,
+    color: colors.text,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  loadingRow: {
+    marginTop: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  mutedText: {
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  errorText: {
+    marginTop: spacing.md,
+    color: colors.negative,
+    fontSize: typography.body,
+  },
+  suggestionsWrap: {
+    marginTop: spacing.md,
+    maxHeight: 160,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: "#252932",
+    backgroundColor: colors.bg,
+  },
+  suggestionItem: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#1E2128",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  suggestionSymbol: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  suggestionMeta: {
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  selectedCard: {
+    marginTop: spacing.lg,
+    borderRadius: radii.md,
+    backgroundColor: colors.bg,
+    padding: spacing.md,
+  },
+  selectedSymbol: {
+    color: colors.text,
+    fontSize: typography.body,
+  },
+  pillRow: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  pill: {
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.bg,
+  },
+  pillActive: {
+    backgroundColor: colors.accent,
+  },
+  pillText: {
+    color: colors.text,
+    fontSize: typography.body,
+  },
+  pillTextActive: {
+    color: colors.bg,
+  },
+  actionsRow: {
+    marginTop: spacing.xxl,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.sm,
+  },
+  cancelBtn: {
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.muted,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  cancelText: {
+    color: colors.muted,
+  },
+  saveBtn: {
+    borderRadius: radii.md,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  saveBtnDisabled: {
+    backgroundColor: "#39414F",
+  },
+  saveText: {
+    color: colors.bg,
+    fontWeight: typography.weightSemibold,
+  },
+  saveTextDisabled: {
+    color: colors.muted,
+  },
+});

@@ -2,9 +2,10 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { useState } from "react";
-import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
+import { colors, radii, spacing, typography } from "../../src/theme";
 import type { Currency } from "../../src/types/portfolio";
 
 interface PortfolioExport {
@@ -17,17 +18,17 @@ interface PortfolioExport {
 }
 
 export default function SettingsScreen() {
-  const fxRates      = usePortfolioStore((s) => s.fxRates);
-  const settings     = usePortfolioStore((s) => s.settings);
-  const accounts     = usePortfolioStore((s) => s.accounts);
-  const holdings     = usePortfolioStore((s) => s.holdings);
+  const fxRates = usePortfolioStore((s) => s.fxRates);
+  const settings = usePortfolioStore((s) => s.settings);
+  const accounts = usePortfolioStore((s) => s.accounts);
+  const holdings = usePortfolioStore((s) => s.holdings);
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
-  const updateFxRates   = usePortfolioStore((s) => s.updateFxRates);
-  const updateSettings  = usePortfolioStore((s) => s.updateSettings);
-  const addAccount      = usePortfolioStore((s) => s.addAccount);
-  const addHolding      = usePortfolioStore((s) => s.addHolding);
-  const addCashHolding  = usePortfolioStore((s) => s.addCashHolding);
-  const clearAllData    = usePortfolioStore((s) => s.clearAllData);
+  const updateFxRates = usePortfolioStore((s) => s.updateFxRates);
+  const updateSettings = usePortfolioStore((s) => s.updateSettings);
+  const addAccount = usePortfolioStore((s) => s.addAccount);
+  const addHolding = usePortfolioStore((s) => s.addHolding);
+  const addCashHolding = usePortfolioStore((s) => s.addCashHolding);
+  const clearAllData = usePortfolioStore((s) => s.clearAllData);
 
   const [rateInput, setRateInput] = useState(String(fxRates.USDINR));
   const [rateError, setRateError] = useState("");
@@ -166,108 +167,98 @@ export default function SettingsScreen() {
 
   return (
     <ScreenContainer>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
-        <Text className="mb-6 text-3xl font-semibold text-text">Settings</Text>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <Text style={styles.title}>Settings</Text>
 
         {statusMsg ? (
-          <View className="mb-5 rounded-xl bg-surface px-4 py-3">
-            <Text className="text-sm text-accent">{statusMsg}</Text>
+          <View style={styles.statusCard}>
+            <Text style={styles.statusText}>{statusMsg}</Text>
           </View>
         ) : null}
 
         {/* ── Exchange rate ────────────────────────────────────────── */}
         <SectionLabel>Exchange Rate</SectionLabel>
-        <View className="mb-6">
-          <Text className="mb-2 text-xs text-muted">1 USD equals</Text>
-          <View className="flex-row items-center gap-3">
+        <View style={styles.sectionWrap}>
+          <Text style={styles.rateHint}>1 USD equals</Text>
+          <View style={styles.rateRow}>
             <TextInput
               value={rateInput}
-              onChangeText={(v) => { setRateInput(v); setRateError(""); }}
+              onChangeText={(v) => {
+                setRateInput(v);
+                setRateError("");
+              }}
               onSubmitEditing={commitRate}
               keyboardType="decimal-pad"
               returnKeyType="done"
-              className="flex-1 rounded-xl bg-surface px-4 py-3 text-base text-text"
-              placeholderTextColor="#8B909A"
+              style={styles.rateInput}
+              placeholderTextColor={colors.muted}
             />
-            <Text className="text-sm text-muted">INR</Text>
-            <Pressable className="rounded-xl bg-accent px-4 py-3" onPress={commitRate}>
-              <Text className="font-semibold text-bg">Save</Text>
+            <Text style={styles.inrText}>INR</Text>
+            <Pressable style={styles.saveBtn} onPress={commitRate}>
+              <Text style={styles.saveBtnText}>Save</Text>
             </Pressable>
           </View>
-          {rateError ? <Text className="mt-1.5 text-xs text-negative">{rateError}</Text> : null}
+          {rateError ? <Text style={styles.errorText}>{rateError}</Text> : null}
         </View>
 
         {/* ── Reporting currency ───────────────────────────────────── */}
         <SectionLabel>Reporting Currency</SectionLabel>
-        <View className="mb-6 flex-row gap-2">
-          {(["INR", "USD"] as Currency[]).map((c) => (
-            <Pressable
-              key={c}
-              onPress={() => setReportingCurrency(c)}
-              className={`rounded-xl px-5 py-3 ${settings.reportingCurrency === c ? "bg-accent" : "bg-surface"}`}
-            >
-              <Text className={`font-semibold ${settings.reportingCurrency === c ? "text-bg" : "text-muted"}`}>{c}</Text>
-            </Pressable>
-          ))}
+        <View style={styles.currencyRow}>
+          {(["INR", "USD"] as Currency[]).map((c) => {
+            const active = settings.reportingCurrency === c;
+            return (
+              <Pressable key={c} onPress={() => setReportingCurrency(c)} style={[styles.currencyPill, active && styles.currencyPillActive]}>
+                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{c}</Text>
+              </Pressable>
+            );
+          })}
         </View>
 
         {/* ── Data ─────────────────────────────────────────────────── */}
         <SectionLabel>Data</SectionLabel>
-        <View className="mb-2 gap-2">
-          <Pressable
-            onPress={handleExport}
-            className="flex-row items-center justify-between rounded-xl bg-surface px-4 py-4"
-          >
+        <View style={styles.cardList}>
+          <Pressable onPress={handleExport} style={styles.actionCard}>
             <View>
-              <Text className="text-sm font-medium text-text">Export Portfolio</Text>
-              <Text className="mt-0.5 text-xs text-muted">Save a JSON backup of all your data</Text>
+              <Text style={styles.actionTitle}>Export Portfolio</Text>
+              <Text style={styles.actionSubtitle}>Save a JSON backup of all your data</Text>
             </View>
-            <Text className="text-muted">↑</Text>
+            <Text style={styles.actionArrow}>↑</Text>
           </Pressable>
 
-          <Pressable
-            onPress={handleImport}
-            className="flex-row items-center justify-between rounded-xl bg-surface px-4 py-4"
-          >
+          <Pressable onPress={handleImport} style={styles.actionCard}>
             <View>
-              <Text className="text-sm font-medium text-text">Import Portfolio</Text>
-              <Text className="mt-0.5 text-xs text-muted">Restore from a JSON backup file</Text>
+              <Text style={styles.actionTitle}>Import Portfolio</Text>
+              <Text style={styles.actionSubtitle}>Restore from a JSON backup file</Text>
             </View>
-            <Text className="text-muted">↓</Text>
+            <Text style={styles.actionArrow}>↓</Text>
           </Pressable>
         </View>
 
         {/* ── Danger zone ──────────────────────────────────────────── */}
-        <SectionLabel className="mt-6">Danger Zone</SectionLabel>
-        <Pressable
-          onPress={() => setShowClearConfirm(true)}
-          className="flex-row items-center justify-between rounded-xl bg-surface px-4 py-4"
-        >
+        <SectionLabel style={styles.dangerLabel}>Danger Zone</SectionLabel>
+        <Pressable onPress={() => setShowClearConfirm(true)} style={styles.actionCard}>
           <View>
-            <Text className="text-sm font-medium text-negative">Clear All Data</Text>
-            <Text className="mt-0.5 text-xs text-muted">Permanently removes all accounts, holdings and balances</Text>
+            <Text style={styles.dangerTitle}>Clear All Data</Text>
+            <Text style={styles.actionSubtitle}>Permanently removes all accounts, holdings and balances</Text>
           </View>
-          <Text className="text-negative">✕</Text>
+          <Text style={styles.dangerTitle}>×</Text>
         </Pressable>
       </ScrollView>
 
       {/* ── Clear confirmation modal ─────────────────────────────── */}
       <Modal visible={showClearConfirm} transparent animationType="fade" onRequestClose={() => setShowClearConfirm(false)}>
-        <View className="flex-1 items-center justify-center bg-black/70 px-5">
-          <View className="w-full rounded-2xl bg-surface p-5">
-            <Text className="text-xl font-semibold text-text">Clear all data?</Text>
-            <Text className="mt-2 text-sm text-muted">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Clear all data?</Text>
+            <Text style={styles.modalText}>
               This will permanently delete all accounts, holdings, and cash balances. This cannot be undone.
             </Text>
-            <View className="mt-6 flex-row justify-end gap-2">
-              <Pressable
-                className="rounded-xl border border-[#252932] px-4 py-2.5"
-                onPress={() => setShowClearConfirm(false)}
-              >
-                <Text className="text-muted">Cancel</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.ghostBtn} onPress={() => setShowClearConfirm(false)}>
+                <Text style={styles.ghostText}>Cancel</Text>
               </Pressable>
-              <Pressable className="rounded-xl bg-negative px-4 py-2.5" onPress={confirmClear}>
-                <Text className="font-semibold text-text">Clear</Text>
+              <Pressable style={styles.dangerBtn} onPress={confirmClear}>
+                <Text style={styles.dangerBtnText}>Clear</Text>
               </Pressable>
             </View>
           </View>
@@ -277,10 +268,180 @@ export default function SettingsScreen() {
   );
 }
 
-function SectionLabel({ children, className }: { children: string; className?: string }) {
-  return (
-    <Text className={`mb-3 text-xs font-medium uppercase tracking-widest text-muted ${className ?? ""}`}>
-      {children}
-    </Text>
-  );
+function SectionLabel({ children, style }: { children: string; style?: object }) {
+  return <Text style={[styles.sectionLabel, style]}>{children}</Text>;
 }
+
+const styles = StyleSheet.create({
+  scrollContent: {
+    paddingBottom: 40,
+  },
+  title: {
+    marginBottom: spacing.xxl,
+    color: colors.text,
+    fontSize: typography.heading,
+    fontWeight: typography.weightSemibold,
+  },
+  statusCard: {
+    marginBottom: spacing.xl,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  statusText: {
+    color: colors.accent,
+    fontSize: typography.body,
+  },
+  sectionLabel: {
+    marginBottom: spacing.md,
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  sectionWrap: {
+    marginBottom: spacing.xxl,
+  },
+  rateHint: {
+    marginBottom: spacing.sm,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  rateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  rateInput: {
+    flex: 1,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    color: colors.text,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    fontSize: typography.body,
+  },
+  inrText: {
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  saveBtn: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  saveBtnText: {
+    color: colors.bg,
+    fontWeight: typography.weightSemibold,
+  },
+  errorText: {
+    marginTop: spacing.xs,
+    color: colors.negative,
+    fontSize: typography.caption,
+  },
+  currencyRow: {
+    marginBottom: spacing.xxl,
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  currencyPill: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+  },
+  currencyPillActive: {
+    backgroundColor: colors.accent,
+  },
+  currencyPillText: {
+    color: colors.muted,
+    fontWeight: typography.weightSemibold,
+  },
+  currencyPillTextActive: {
+    color: colors.bg,
+  },
+  cardList: {
+    marginBottom: spacing.sm,
+    gap: spacing.sm,
+  },
+  actionCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  actionTitle: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
+  },
+  actionSubtitle: {
+    marginTop: 2,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  actionArrow: {
+    color: colors.muted,
+  },
+  dangerLabel: {
+    marginTop: spacing.xxl,
+  },
+  dangerTitle: {
+    color: colors.negative,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
+  },
+  modalOverlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingHorizontal: spacing.xl,
+  },
+  modalCard: {
+    width: "100%",
+    borderRadius: radii.xl,
+    backgroundColor: colors.surface,
+    padding: spacing.xl,
+  },
+  modalTitle: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  modalText: {
+    marginTop: spacing.sm,
+    color: colors.muted,
+    fontSize: typography.body,
+  },
+  modalActions: {
+    marginTop: spacing.xxl,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.sm,
+  },
+  ghostBtn: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  ghostText: {
+    color: colors.muted,
+  },
+  dangerBtn: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.negative,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  dangerBtnText: {
+    color: colors.text,
+    fontWeight: typography.weightSemibold,
+  },
+});
+

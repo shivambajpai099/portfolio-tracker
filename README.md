@@ -7,7 +7,7 @@ Simple, local-first portfolio tracking app architecture for Android, iOS, and We
 - Expo + TypeScript
 - Expo Router
 - Zustand + AsyncStorage persistence
-- NativeWind (Tailwind utility classes)
+- React Native StyleSheet + shared theme tokens
 
 ## Local Persistence
 
