@@ -2,23 +2,28 @@ import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
 import type { Currency, Holding } from "../../src/types/portfolio";
 import { formatMoney } from "../../src/utils/format";
 
-type SortKey = "current_desc" | "allocation_desc" | "gain_desc" | "ticker_asc";
+type SortKey = "allocation_desc" | "gain_desc" | "alpha_asc" | "value_desc";
 type PerfFilter = "ALL" | "GAIN" | "LOSS";
 type CurrencyFilter = "ALL" | Currency;
+type GroupByKey = "stock" | "account" | "country" | "asset_type";
 
-type GroupedHolding = {
-  symbol: string;
-  companyName: string;
+type DisplayGroup = {
+  id: string;
+  title: string;
+  subtitle: string;
   investedValue: number;
   currentValue: number;
   gainLoss: number;
+  gainLossPct: number;
   allocationPct: number;
+  netWorthPct: number;
   linkedAccountsLabel: string[];
   currencies: Currency[];
   lots: Holding[];
@@ -39,20 +44,28 @@ const parseNumber = (value: string): number => {
   return Number.isFinite(parsed) ? parsed : NaN;
 };
 
+const isIndiaHolding = (holding: Holding): boolean => {
+  const sym = holding.symbol.toUpperCase();
+  return holding.currency === "INR" || sym.endsWith(".NS") || sym.endsWith(".BO");
+};
+
 export default function HoldingsScreen() {
   const settings = usePortfolioStore((state) => state.settings);
+  const updateSettings = usePortfolioStore((state) => state.updateSettings);
   const accounts = usePortfolioStore((state) => state.accounts);
   const fxRates = usePortfolioStore((state) => state.fxRates);
   const holdings = usePortfolioStore((state) => state.holdings);
+  const cashHoldings = usePortfolioStore((state) => state.cashHoldings);
   const addHolding = usePortfolioStore((state) => state.addHolding);
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
 
   const [searchText, setSearchText] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("current_desc");
+  const [sortKey, setSortKey] = useState<SortKey>("value_desc");
+  const [groupBy, setGroupBy] = useState<GroupByKey>("stock");
   const [currencyFilter, setCurrencyFilter] = useState<CurrencyFilter>("ALL");
   const [perfFilter, setPerfFilter] = useState<PerfFilter>("ALL");
-  const [expandedSymbols, setExpandedSymbols] = useState<Record<string, boolean>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [editTarget, setEditTarget] = useState<Holding | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Holding | null>(null);
@@ -63,6 +76,12 @@ export default function HoldingsScreen() {
     marketPrice: "",
   });
 
+  const accountById = useMemo(() => {
+    const map = new Map<string, (typeof accounts)[0]>();
+    for (const account of accounts) map.set(account.id, account);
+    return map;
+  }, [accounts]);
+
   const accountNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const account of accounts) {
@@ -71,31 +90,65 @@ export default function HoldingsScreen() {
     return map;
   }, [accounts]);
 
-  const toReportingCurrency = (value: number, currency: Currency): number => {
-    if (settings.reportingCurrency === "INR") {
-      return toINR(value, currency, fxRates);
+  const toRC = (value: number, currency: Currency): number =>
+    settings.reportingCurrency === "INR"
+      ? toINR(value, currency, fxRates)
+      : toUSD(value, currency, fxRates);
+
+  const totalCashRC = useMemo(
+    () => cashHoldings.reduce((sum, c) => sum + toRC(c.balance, c.currency), 0),
+    [cashHoldings, settings.reportingCurrency, fxRates.USDINR]
+  );
+
+  // Returns the group identity for a holding based on the active groupBy key.
+  const getGroupMeta = (holding: Holding): { id: string; title: string; subtitle: string } => {
+    const symbol = holding.symbol.toUpperCase();
+    const india = isIndiaHolding(holding);
+    switch (groupBy) {
+      case "account": {
+        const acct = accountById.get(holding.accountId);
+        return {
+          id: holding.accountId,
+          title: acct?.name ?? holding.accountId,
+          subtitle: acct ? `${acct.broker} · ${acct.owner}` : "",
+        };
+      }
+      case "country":
+        return india
+          ? { id: "india", title: "India", subtitle: "" }
+          : { id: "us", title: "United States", subtitle: "" };
+      case "asset_type":
+        return india
+          ? { id: "india_equity", title: "Indian Equities", subtitle: "INR-denominated stocks" }
+          : { id: "intl_equity", title: "International Equities", subtitle: "USD-denominated stocks" };
+      case "stock":
+      default:
+        return { id: symbol, title: symbol, subtitle: holding.companyName };
     }
-    return toUSD(value, currency, fxRates);
   };
 
-  const groupedHoldings = useMemo<GroupedHolding[]>(() => {
-    const grouped = new Map<string, GroupedHolding>();
+  const displayGroups = useMemo<DisplayGroup[]>(() => {
+    const grouped = new Map<string, DisplayGroup>();
 
     for (const holding of holdings) {
-      const symbol = holding.symbol.toUpperCase();
-      const invested = toReportingCurrency(holding.quantity * holding.averagePrice, holding.currency);
-      const current = toReportingCurrency(holding.quantity * holding.marketPrice, holding.currency);
+      const { id, title, subtitle } = getGroupMeta(holding);
+      const invested = toRC(holdingCost(holding), holding.currency);
+      const current = toRC(holdingMarketValue(holding), holding.currency);
+      const accountLabel = accountNameById.get(holding.accountId) ?? holding.accountId;
 
-      const existing = grouped.get(symbol);
+      const existing = grouped.get(id);
       if (!existing) {
-        grouped.set(symbol, {
-          symbol,
-          companyName: holding.companyName,
+        grouped.set(id, {
+          id,
+          title,
+          subtitle,
           investedValue: invested,
           currentValue: current,
           gainLoss: current - invested,
+          gainLossPct: 0,
           allocationPct: 0,
-          linkedAccountsLabel: [accountNameById.get(holding.accountId) ?? holding.accountId],
+          netWorthPct: 0,
+          linkedAccountsLabel: [accountLabel],
           currencies: [holding.currency],
           lots: [holding],
         });
@@ -105,7 +158,6 @@ export default function HoldingsScreen() {
       existing.investedValue += invested;
       existing.currentValue += current;
       existing.gainLoss = existing.currentValue - existing.investedValue;
-      const accountLabel = accountNameById.get(holding.accountId) ?? holding.accountId;
       if (!existing.linkedAccountsLabel.includes(accountLabel)) {
         existing.linkedAccountsLabel.push(accountLabel);
       }
@@ -116,45 +168,50 @@ export default function HoldingsScreen() {
     }
 
     const values = [...grouped.values()];
-    const totalCurrent = values.reduce((sum, item) => sum + item.currentValue, 0);
+
+    const totalCurrentHoldings = values.reduce((sum, g) => sum + g.currentValue, 0);
+    const netWorthTotal = totalCurrentHoldings + totalCashRC;
+    const totalBasis = values.reduce(
+      (sum, g) => sum + (settings.allocationBasis === "INVESTED_VALUE" ? g.investedValue : g.currentValue),
+      0
+    );
+    const allocationDenom = totalBasis + (settings.allocationIncludeCash ? totalCashRC : 0);
+
     for (const item of values) {
-      item.allocationPct = totalCurrent > 0 ? (item.currentValue / totalCurrent) * 100 : 0;
+      item.gainLossPct = item.investedValue > 0 ? (item.gainLoss / item.investedValue) * 100 : 0;
+      const basisValue = settings.allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue;
+      item.allocationPct = allocationDenom > 0 ? (basisValue / allocationDenom) * 100 : 0;
+      item.netWorthPct = netWorthTotal > 0 ? (item.currentValue / netWorthTotal) * 100 : 0;
     }
 
     return values;
-  }, [holdings, accountNameById, settings.reportingCurrency, fxRates.USDINR]);
+  }, [holdings, accounts, accountNameById, groupBy, settings.reportingCurrency, settings.allocationBasis, settings.allocationIncludeCash, fxRates.USDINR, totalCashRC]);
 
   const visibleGroups = useMemo(() => {
     const query = searchText.trim().toLowerCase();
 
-    return groupedHoldings
+    return displayGroups
       .filter((group) => {
         const matchesQuery =
           query.length === 0 ||
-          group.symbol.toLowerCase().includes(query) ||
-          group.companyName.toLowerCase().includes(query) ||
-          group.linkedAccountsLabel.join(" ").toLowerCase().includes(query);
+          group.title.toLowerCase().includes(query) ||
+          group.subtitle.toLowerCase().includes(query) ||
+          group.linkedAccountsLabel.join(" ").toLowerCase().includes(query) ||
+          group.lots.some((l) => l.symbol.toLowerCase().includes(query) || l.companyName.toLowerCase().includes(query));
         const matchesCurrency = currencyFilter === "ALL" || group.currencies.includes(currencyFilter);
         const matchesPerf =
           perfFilter === "ALL" ||
           (perfFilter === "GAIN" && group.gainLoss >= 0) ||
           (perfFilter === "LOSS" && group.gainLoss < 0);
-
         return matchesQuery && matchesCurrency && matchesPerf;
       })
       .sort((a, b) => {
-        if (sortKey === "ticker_asc") {
-          return a.symbol.localeCompare(b.symbol);
-        }
-        if (sortKey === "allocation_desc") {
-          return b.allocationPct - a.allocationPct;
-        }
-        if (sortKey === "gain_desc") {
-          return b.gainLoss - a.gainLoss;
-        }
-        return b.currentValue - a.currentValue;
+        if (sortKey === "alpha_asc") return a.title.localeCompare(b.title);
+        if (sortKey === "allocation_desc") return b.allocationPct - a.allocationPct;
+        if (sortKey === "gain_desc") return b.gainLoss - a.gainLoss;
+        return b.currentValue - a.currentValue; // value_desc
       });
-  }, [groupedHoldings, searchText, currencyFilter, perfFilter, sortKey]);
+  }, [displayGroups, searchText, currencyFilter, perfFilter, sortKey]);
 
   const openEdit = (holding: Holding) => {
     setEditTarget(holding);
@@ -167,37 +224,23 @@ export default function HoldingsScreen() {
   };
 
   const submitEdit = () => {
-    if (!editTarget) {
-      return;
-    }
-
+    if (!editTarget) return;
     const quantity = parseNumber(editDraft.quantity);
     const averagePrice = parseNumber(editDraft.averagePrice);
     const marketPrice = parseNumber(editDraft.marketPrice);
-
-    if (!editDraft.accountId || quantity <= 0 || averagePrice <= 0 || marketPrice <= 0) {
-      return;
-    }
-
-    updateHolding(editTarget.id, {
-      accountId: editDraft.accountId,
-      quantity,
-      averagePrice,
-      marketPrice,
-      updatedAt: nowIso(),
-    });
-
+    if (!editDraft.accountId || quantity <= 0 || averagePrice <= 0 || marketPrice <= 0) return;
+    updateHolding(editTarget.id, { accountId: editDraft.accountId, quantity, averagePrice, marketPrice, updatedAt: nowIso() });
     setEditTarget(null);
   };
 
   const confirmDelete = () => {
-    if (!deleteTarget) {
-      return;
-    }
-
+    if (!deleteTarget) return;
     removeHolding(deleteTarget.id);
     setDeleteTarget(null);
   };
+
+  const toggleGroup = (id: string) =>
+    setExpandedGroups((prev) => ({ ...prev, [id]: !prev[id] }));
 
   return (
     <ScreenContainer>
@@ -218,13 +261,69 @@ export default function HoldingsScreen() {
         style={styles.searchInput}
       />
 
-      {/* Sort chips */}
+      {/* Group-by chips */}
       <View style={styles.chipWrap}>
         {([
-          ["current_desc", "Value"],
+          ["stock", "Stock"],
+          ["account", "Account"],
+          ["country", "Country"],
+          ["asset_type", "Type"],
+        ] as const).map(([key, label]) => {
+          const active = groupBy === key;
+          return (
+            <Pressable
+              key={key}
+              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => { setGroupBy(key); setExpandedGroups({}); }}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* Allocation basis / cash inclusion filters */}
+      <View style={styles.chipWrap}>
+        {([
+          ["CURRENT_VALUE", "Current %"],
+          ["INVESTED_VALUE", "Invested %"],
+        ] as const).map(([basis, label]) => {
+          const active = settings.allocationBasis === basis;
+          return (
+            <Pressable
+              key={basis}
+              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => updateSettings({ allocationBasis: basis })}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+
+        {([
+          [true, "Include Cash"],
+          [false, "Exclude Cash"],
+        ] as const).map(([include, label]) => {
+          const active = settings.allocationIncludeCash === include;
+          return (
+            <Pressable
+              key={label}
+              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => updateSettings({ allocationIncludeCash: include })}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* Sort + filter chips */}
+      <View style={styles.chipWrap}>
+        {([
+          ["value_desc", "Value"],
           ["allocation_desc", "Alloc"],
           ["gain_desc", "Gain"],
-          ["ticker_asc", "A-Z"],
+          ["alpha_asc", "A–Z"],
         ] as const).map(([key, label]) => {
           const active = sortKey === key;
           return (
@@ -258,72 +357,100 @@ export default function HoldingsScreen() {
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.listWrap}>
           {visibleGroups.map((group) => {
-            const isExpanded = Boolean(expandedSymbols[group.symbol]);
+            const isExpanded = Boolean(expandedGroups[group.id]);
+            const gainPositive = group.gainLoss >= 0;
 
             return (
-              <View key={group.symbol} style={styles.groupCard}>
-                <Pressable onPress={() => setExpandedSymbols((prev) => ({ ...prev, [group.symbol]: !prev[group.symbol] }))}>
-                  {/* Symbol + allocation % */}
+              <View key={group.id} style={styles.groupCard}>
+                <Pressable onPress={() => toggleGroup(group.id)}>
+                  {/* Title row */}
                   <View style={styles.groupTitleRow}>
                     <View style={styles.groupTitleWrap}>
-                      <Text style={styles.groupSymbol}>{group.symbol}</Text>
-                      <Text style={styles.groupName}>{group.companyName}</Text>
+                      <Text style={styles.groupSymbol}>{group.title}</Text>
+                      {group.subtitle ? <Text style={styles.groupName}>{group.subtitle}</Text> : null}
                     </View>
-                    <Text style={styles.groupAllocation}>{group.allocationPct.toFixed(1)}%</Text>
+                    <View style={styles.allocationBlock}>
+                      <Text style={styles.groupAllocation}>{group.allocationPct.toFixed(1)}%</Text>
+                      <Text style={styles.allocationContext}>
+                        {settings.allocationBasis === "INVESTED_VALUE" ? "invested" : "current"}
+                        {settings.allocationIncludeCash ? "" : " · excl. cash"}
+                      </Text>
+                    </View>
                   </View>
 
                   {/* Allocation bar */}
                   <View style={styles.allocTrack}>
-                    <View style={[styles.allocFill, { width: `${group.allocationPct}%` }]} />
+                    <View style={[styles.allocFill, { width: `${Math.min(group.allocationPct, 100)}%` }]} />
                   </View>
 
                   {/* Metrics row */}
                   <View style={styles.metricRow}>
                     <View>
-                      <Text style={styles.metricLabel}>Current</Text>
-                      <Text style={styles.metricValue}>{formatMoney(group.currentValue, settings.reportingCurrency)}</Text>
-                    </View>
-                    <View style={styles.metricCenter}>
                       <Text style={styles.metricLabel}>Invested</Text>
                       <Text style={styles.metricValue}>{formatMoney(group.investedValue, settings.reportingCurrency)}</Text>
                     </View>
+                    <View style={styles.metricCenter}>
+                      <View style={styles.metricLabelRow}>
+                        <Text style={styles.metricLabel}>Current</Text>
+                        <Text style={styles.netWorthBadge}>{group.netWorthPct.toFixed(1)}% of net worth</Text>
+                      </View>
+                      <Text style={styles.metricValue}>{formatMoney(group.currentValue, settings.reportingCurrency)}</Text>
+                    </View>
                     <View style={styles.metricRight}>
-                      <Text style={styles.metricLabel}>Gain/Loss</Text>
-                      <Text style={[styles.metricValue, group.gainLoss >= 0 ? styles.positiveText : styles.negativeText]}>
-                        {formatMoney(group.gainLoss, settings.reportingCurrency)}
+                      <Text style={styles.metricLabel}>Gain / Loss</Text>
+                      <Text style={[styles.metricValue, gainPositive ? styles.positiveText : styles.negativeText]}>
+                        {gainPositive ? "+" : ""}{formatMoney(group.gainLoss, settings.reportingCurrency)}
+                      </Text>
+                      <Text style={[styles.gainLossPct, gainPositive ? styles.positiveText : styles.negativeText]}>
+                        {gainPositive ? "+" : ""}{group.gainLossPct.toFixed(2)}%
                       </Text>
                     </View>
                   </View>
                 </Pressable>
 
-                {/* Account chips */}
-                <View style={styles.accountChipWrap}>
-                  {group.linkedAccountsLabel.map((label) => (
-                    <Text key={`${group.symbol}-${label}`} style={styles.accountChip}>{label}</Text>
-                  ))}
-                </View>
+                {/* Account chips — only in stock view */}
+                {groupBy === "stock" ? (
+                  <View style={styles.accountChipWrap}>
+                    {group.linkedAccountsLabel.map((label) => (
+                      <Text key={`${group.id}-${label}`} style={styles.accountChip}>{label}</Text>
+                    ))}
+                  </View>
+                ) : null}
 
                 {/* Expanded lots */}
                 {isExpanded ? (
                   <View style={styles.expandedWrap}>
-                    {group.lots.map((lot) => (
-                      <View key={lot.id} style={styles.lotRow}>
-                        <View style={styles.lotInfo}>
-                          <Text style={styles.lotAccount}>{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
-                          <Text style={styles.lotMeta}>
-                            {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
-                          </Text>
+                    {group.lots.map((lot) => {
+                      const lotCurrent = toRC(holdingMarketValue(lot), lot.currency);
+                      const lotInvested = toRC(holdingCost(lot), lot.currency);
+                      const lotGain = lotCurrent - lotInvested;
+                      const lotGainPositive = lotGain >= 0;
+                      return (
+                        <View key={lot.id} style={styles.lotRow}>
+                          <View style={styles.lotInfo}>
+                            {groupBy !== "stock" ? (
+                              <Text style={styles.lotSymbol}>{lot.symbol} · {lot.companyName}</Text>
+                            ) : null}
+                            <Text style={styles.lotAccount}>{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
+                            <Text style={styles.lotMeta}>
+                              {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
+                              {"  "}
+                              <Text style={[lotGainPositive ? styles.positiveText : styles.negativeText]}>
+                                {lotGainPositive ? "+" : ""}{formatMoney(lotGain, settings.reportingCurrency)}
+                              </Text>
+                            </Text>
+                          </View>
+                          <View style={styles.lotActions}>
+                            <Pressable onPress={() => openEdit(lot)}>
+                              <Text style={styles.editText}>Edit</Text>
+                            </Pressable>
+                            <Pressable onPress={() => setDeleteTarget(lot)}>
+                              <Text style={styles.deleteText}>Delete</Text>
+                            </Pressable>
+                          </View>
                         </View>
-                        <View style={styles.lotActions}>
-                          <Pressable onPress={() => openEdit(lot)}>
-                            <Text style={styles.editText}>Edit</Text>
-                          </Pressable>
-                          <Pressable onPress={() => setDeleteTarget(lot)}>
-                            <Text style={styles.deleteText}>Delete</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    ))}
+                      );
+                    })}
                   </View>
                 ) : null}
               </View>
@@ -529,42 +656,65 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: typography.caption,
   },
+  allocationBlock: {
+    alignItems: "flex-end",
+  },
   groupAllocation: {
     color: colors.text,
     fontSize: typography.subheading,
     fontWeight: typography.weightSemibold,
   },
+  allocationContext: {
+    marginTop: 2,
+    color: colors.muted,
+    fontSize: typography.micro,
+  },
   allocTrack: {
     marginBottom: spacing.md,
-    height: 6,
+    height: 4,
     width: "100%",
     overflow: "hidden",
     borderRadius: radii.pill,
     backgroundColor: colors.bg,
   },
   allocFill: {
-    width: "30%",
     height: "100%",
     backgroundColor: colors.accent,
+    borderRadius: radii.pill,
   },
   metricRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "flex-end",
   },
   metricCenter: {
     alignItems: "center",
   },
-  metricRight: {
-    alignItems: "flex-end",
+  metricLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
   },
   metricLabel: {
     color: colors.muted,
     fontSize: typography.micro,
   },
+  netWorthBadge: {
+    color: colors.muted,
+    fontSize: typography.micro,
+    opacity: 0.7,
+  },
   metricValue: {
     marginTop: 2,
     color: colors.text,
     fontSize: typography.body,
+  },
+  metricRight: {
+    alignItems: "flex-end",
+  },
+  gainLossPct: {
+    fontSize: typography.micro,
+    marginTop: 1,
   },
   accountChipWrap: {
     marginTop: spacing.md,
@@ -596,6 +746,11 @@ const styles = StyleSheet.create({
   lotInfo: {
     flex: 1,
     paddingRight: spacing.lg,
+  },
+  lotSymbol: {
+    color: colors.text,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
   lotAccount: {
     color: colors.text,

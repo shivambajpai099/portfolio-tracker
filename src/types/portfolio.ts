@@ -1,7 +1,13 @@
 export type Currency = "INR" | "USD";
 export type TimestampISO = string;
 
-export type AccountType = "brokerage" | "retirement" | "family";
+export type AccountType = "BROKER" | "SAVINGS";
+
+/** Returns true if the account type supports equity/fund holdings. */
+export const accountSupportsHoldings = (type: AccountType): boolean => type === "BROKER";
+
+/** Returns true if the account type supports cash balances. */
+export const accountSupportsCash = (_type: AccountType): boolean => true;
 
 export interface Account {
   id: string;
@@ -37,9 +43,15 @@ export interface CashHolding {
   updatedAt?: TimestampISO;
 }
 
+export type AllocationBasis = "CURRENT_VALUE" | "INVESTED_VALUE";
+
 export interface PortfolioSettings {
   reportingCurrency: Currency;
   includeFamilyAccounts: boolean;
+  /** Whether allocation % is calculated from current market value or invested cost. */
+  allocationBasis: AllocationBasis;
+  /** Whether cash balances are included when computing allocation percentages. */
+  allocationIncludeCash: boolean;
   lastViewedAt?: TimestampISO;
   updatedAt?: TimestampISO;
 }

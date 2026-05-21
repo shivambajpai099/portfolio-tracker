@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import type { Currency } from "../types/portfolio";
 import type { LivePriceQuote, ServiceError, ServiceResult, TickerSuggestion } from "../types/marketData";
 
@@ -41,6 +42,7 @@ const TTL_MS = 15 * 60 * 1000;
 
 const SEARCH_BASE = "https://query1.finance.yahoo.com/v1/finance/search";
 const QUOTE_BASE = "https://query1.finance.yahoo.com/v7/finance/quote";
+const WEB_CORS_PROXY = "https://cors.isomorphic-git.org/";
 
 const nowIso = () => new Date().toISOString();
 
@@ -50,6 +52,9 @@ const isFresh = (entry: CacheEntry<unknown>): boolean => {
 };
 
 const normalizeSymbol = (symbol: string): string => symbol.trim().toUpperCase();
+
+const resolveEndpoint = (url: string): string =>
+  Platform.OS === "web" ? `${WEB_CORS_PROXY}${url}` : url;
 
 const inferCurrency = (rawCurrency: string | undefined, symbol: string): Currency => {
   if (rawCurrency === "INR") {
@@ -122,7 +127,7 @@ export const searchTickerSuggestions = async (
   }
 
   try {
-    const endpoint = `${SEARCH_BASE}?q=${encodeURIComponent(trimmed)}&quotesCount=10&newsCount=0`;
+    const endpoint = resolveEndpoint(`${SEARCH_BASE}?q=${encodeURIComponent(trimmed)}&quotesCount=10&newsCount=0`);
     const response = await fetch(endpoint, { signal });
 
     if (!response.ok) {
@@ -193,7 +198,7 @@ export const fetchLivePrices = async (
   }
 
   try {
-    const endpoint = `${QUOTE_BASE}?symbols=${encodeURIComponent(key)}`;
+    const endpoint = resolveEndpoint(`${QUOTE_BASE}?symbols=${encodeURIComponent(key)}`);
     const response = await fetch(endpoint, { signal });
 
     if (!response.ok) {

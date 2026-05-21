@@ -6,7 +6,7 @@ export const seedAccounts: Account[] = [
     name: "Primary Investments",
     owner: "You",
     broker: "Zerodha",
-    type: "brokerage",
+    type: "BROKER",
     baseCurrency: "INR",
   },
   {
@@ -14,7 +14,7 @@ export const seedAccounts: Account[] = [
     name: "US Growth",
     owner: "You",
     broker: "IBKR",
-    type: "brokerage",
+    type: "BROKER",
     baseCurrency: "USD",
   },
   {
@@ -22,7 +22,7 @@ export const seedAccounts: Account[] = [
     name: "Family Core",
     owner: "Family",
     broker: "Fidelity",
-    type: "family",
+    type: "BROKER",
     baseCurrency: "USD",
   },
 ];
@@ -92,5 +92,7 @@ export const seedCashHoldings: CashHolding[] = [
 export const seedSettings: PortfolioSettings = {
   reportingCurrency: "INR",
   includeFamilyAccounts: true,
+  allocationBasis: "CURRENT_VALUE",
+  allocationIncludeCash: true,
 };
 

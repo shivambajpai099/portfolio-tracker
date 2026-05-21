@@ -7,6 +7,7 @@ import {
   calcGeographicSplit,
   calcPortfolioTotals,
   calcSymbolAllocations,
+  convert,
 } from "../../src/features/portfolio/calculations";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
@@ -28,6 +29,7 @@ const DONUT_PALETTE = [
   "#E879F9",
 ];
 
+const CASH_COLOR = "#374151";
 const GEO_INDIA_COLOR = "#F59E0B";
 const GEO_US_COLOR = "#6366F1";
 
@@ -36,6 +38,7 @@ export default function DashboardScreen() {
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
+  const updateSettings = usePortfolioStore((s) => s.updateSettings);
 
   const [geoFilter, setGeoFilter] = useState<GeoFilter>("ALL");
 
@@ -54,18 +57,46 @@ export default function DashboardScreen() {
     [filteredHoldings, cashHoldings, fxRates, rc]
   );
   const allocations = useMemo(
-    () => calcSymbolAllocations(filteredHoldings, fxRates, rc),
-    [filteredHoldings, fxRates, rc]
+    () => calcSymbolAllocations(filteredHoldings, cashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash),
+    [filteredHoldings, cashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash]
   );
   const geoSplit = useMemo(() => calcGeographicSplit(holdings, fxRates, rc), [holdings, fxRates, rc]);
   const concentration = useMemo(() => calcConcentrationRisk(allocations), [allocations]);
 
+  const cashValueRC = useMemo(
+    () => cashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
+    [cashHoldings, rc, fxRates]
+  );
+
+  // The sum of symbol allocationPcts may be < 100 when cash is included in the denominator.
+  // The remainder is the cash slice.
+  const cashAllocationPct = useMemo(() => {
+    if (!settings.allocationIncludeCash || cashValueRC === 0) return 0;
+    const symbolsTotal = allocations.reduce((sum, a) => sum + a.allocationPct, 0);
+    return Math.max(0, 100 - symbolsTotal);
+  }, [allocations, settings.allocationIncludeCash, cashValueRC]);
+
+  const allocationDonutSlices = useMemo(() => {
+    const slices = allocations.map((a, i) => ({
+      value: a.allocationPct,
+      color: DONUT_PALETTE[i % DONUT_PALETTE.length],
+    }));
+    if (cashAllocationPct > 0) {
+      slices.push({ value: cashAllocationPct, color: CASH_COLOR });
+    }
+    return slices;
+  }, [allocations, cashAllocationPct]);
+
+  // Hero donut — same slices (no cash, just position overview)
   const donutSlices = useMemo(
     () => allocations.map((a, i) => ({ value: a.allocationPct, color: DONUT_PALETTE[i % DONUT_PALETTE.length] })),
     [allocations]
   );
 
-  const gainPositive = totals.gainLoss >= 0;
+  const allocationContextLabel = [
+    settings.allocationBasis === "INVESTED_VALUE" ? "By invested value" : "By current value",
+    settings.allocationIncludeCash ? "cash included" : "cash excluded",
+  ].join(" · ");
 
   const concentrationColor =
     concentration.level === "HIGH"
@@ -99,14 +130,6 @@ export default function DashboardScreen() {
               <View style={styles.heroStatRow}>
                 <Text style={styles.heroStatKey}>Invested</Text>
                 <Text style={styles.heroStatValue}>{formatMoney(totals.investedValue, rc)}</Text>
-              </View>
-              <View style={styles.heroStatRow}>
-                <Text style={styles.heroStatKey}>Gain/Loss</Text>
-                <Text style={[styles.heroStatGain, gainPositive ? styles.positiveText : styles.negativeText]}>
-                  {gainPositive ? "+" : ""}
-                  {formatMoney(totals.gainLoss, rc)}
-                  <Text style={styles.heroGainPercent}> {gainPositive ? "+" : ""}{totals.gainLossPct.toFixed(2)}%</Text>
-                </Text>
               </View>
             </View>
           </View>
@@ -161,37 +184,119 @@ export default function DashboardScreen() {
           </View>
         ) : null}
 
-        <Text style={styles.sectionLabel}>Allocations</Text>
-        <View>
-          {allocations.map((item, i) => {
-            const barColor = DONUT_PALETTE[i % DONUT_PALETTE.length];
-            const pctGain = item.gainLossPct;
-            return (
-              <View key={item.symbol} style={styles.allocationItem}>
+        <View style={styles.sectionGap}>
+          <Text style={styles.sectionLabel}>Allocations</Text>
+          <Text style={styles.allocationContext}>{allocationContextLabel}</Text>
+
+          <View style={styles.filterRowWrap}>
+            {([
+              ["CURRENT_VALUE", "Current %"],
+              ["INVESTED_VALUE", "Invested %"],
+            ] as const).map(([basis, label]) => {
+              const active = settings.allocationBasis === basis;
+              return (
+                <Pressable
+                  key={basis}
+                  onPress={() => updateSettings({ allocationBasis: basis })}
+                  style={[styles.filterPill, active && styles.filterPillActive]}
+                >
+                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{label}</Text>
+                </Pressable>
+              );
+            })}
+            {([
+              [true, "Include Cash"],
+              [false, "Exclude Cash"],
+            ] as const).map(([include, label]) => {
+              const active = settings.allocationIncludeCash === include;
+              return (
+                <Pressable
+                  key={label}
+                  onPress={() => updateSettings({ allocationIncludeCash: include })}
+                  style={[styles.filterPill, active && styles.filterPillActive]}
+                >
+                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {/* Allocation donut */}
+          <View style={styles.allocDonutWrap}>
+            <DonutChart slices={allocationDonutSlices} size={160} strokeWidth={22} />
+            <View style={styles.allocDonutCenter}>
+              <Text style={styles.allocDonutCenterValue}>{allocations.length}</Text>
+              <Text style={styles.allocDonutCenterLabel}>positions</Text>
+            </View>
+          </View>
+
+          {/* Ranked list */}
+          <View style={styles.allocList}>
+            {allocations.map((item, i) => {
+              const barColor = DONUT_PALETTE[i % DONUT_PALETTE.length];
+              const displayValue = settings.allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue;
+              return (
+                <View key={item.symbol} style={styles.allocationItem}>
+                  <View style={styles.allocationHeader}>
+                    <View style={styles.allocationTitleWrap}>
+                      <Text style={styles.allocationRank}>{i + 1}</Text>
+                      <View style={[styles.allocationDot, { backgroundColor: barColor }]} />
+                      <View>
+                        <Text style={styles.allocationSymbol}>{item.symbol}</Text>
+                        <Text style={styles.allocationName}>{item.companyName}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.allocationRight}>
+                      <Text style={styles.allocationPct}>{item.allocationPct.toFixed(1)}%</Text>
+                      <Text style={styles.allocationValue}>{formatMoney(displayValue, rc)}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.allocationTrack}>
+                    <View style={[styles.allocationFill, { width: `${Math.min(item.allocationPct, 100)}%`, backgroundColor: barColor }]} />
+                  </View>
+
+                  <View style={styles.allocationFooter}>
+                    <Text style={styles.allocationGainLabel}>Current {formatMoney(item.currentValue, rc)}</Text>
+                    <Text style={styles.allocationGainLabel}>Invested {formatMoney(item.investedValue, rc)}</Text>
+                  </View>
+                  <View style={styles.allocationFooter}>
+                    <Text style={styles.allocationGainLabel}>Gain / Loss</Text>
+                    <Text style={[styles.allocationGain, item.gainLossPct >= 0 ? styles.positiveText : styles.negativeText]}>
+                      {item.gainLossPct >= 0 ? "+" : ""}{item.gainLossPct.toFixed(2)}%
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+
+            {/* Cash row — shown when cash is included */}
+            {cashAllocationPct > 0 ? (
+              <View style={styles.allocationItem}>
                 <View style={styles.allocationHeader}>
                   <View style={styles.allocationTitleWrap}>
-                    <Text style={styles.allocationSymbol}>{item.symbol}</Text>
-                    <Text style={styles.allocationName}>{item.companyName}</Text>
+                    <Text style={styles.allocationRank}>{allocations.length + 1}</Text>
+                    <View style={[styles.allocationDot, { backgroundColor: CASH_COLOR }]} />
+                    <View>
+                      <Text style={styles.allocationSymbol}>CASH</Text>
+                      <Text style={styles.allocationName}>Cash &amp; Equivalents</Text>
+                    </View>
                   </View>
-                  <Text style={styles.allocationPct}>{item.allocationPct.toFixed(1)}%</Text>
+                  <View style={styles.allocationRight}>
+                    <Text style={styles.allocationPct}>{cashAllocationPct.toFixed(1)}%</Text>
+                    <Text style={styles.allocationValue}>{formatMoney(cashValueRC, rc)}</Text>
+                  </View>
                 </View>
-
                 <View style={styles.allocationTrack}>
-                  <View style={[styles.allocationFill, { width: `${item.allocationPct}%`, backgroundColor: barColor }]} />
-                </View>
-
-                <View style={styles.allocationFooter}>
-                  <Text style={styles.allocationValue}>{formatMoney(item.currentValue, rc)}</Text>
-                  <Text style={[styles.allocationGain, pctGain >= 0 ? styles.positiveText : styles.negativeText]}>
-                    {pctGain >= 0 ? "+" : ""}
-                    {pctGain.toFixed(2)}%
-                  </Text>
+                  <View style={[styles.allocationFill, { width: `${Math.min(cashAllocationPct, 100)}%`, backgroundColor: CASH_COLOR }]} />
                 </View>
               </View>
-            );
-          })}
+            ) : null}
 
-          {allocations.length === 0 ? <Text style={styles.emptyText}>Add holdings to see your allocation.</Text> : null}
+            {allocations.length === 0 && cashAllocationPct === 0 ? (
+              <Text style={styles.emptyText}>Add holdings to see your allocation.</Text>
+            ) : null}
+          </View>
         </View>
       </ScrollView>
     </ScreenContainer>
@@ -303,12 +408,45 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xxxl,
   },
   sectionLabel: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xs,
     color: colors.muted,
     fontSize: typography.micro,
     fontWeight: typography.weightMedium,
     letterSpacing: 1,
     textTransform: "uppercase",
+  },
+  allocationContext: {
+    marginBottom: spacing.md,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
+  filterRowWrap: {
+    marginBottom: spacing.xl,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+  },
+  allocDonutWrap: {
+    alignSelf: "center",
+    marginBottom: spacing.xxxl,
+    position: "relative",
+  },
+  allocDonutCenter: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  allocDonutCenterValue: {
+    color: colors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+  },
+  allocDonutCenterLabel: {
+    color: colors.muted,
+    fontSize: typography.micro,
+  },
+  allocList: {
+    gap: 0,
   },
   geoRow: {
     marginBottom: spacing.sm,
@@ -385,36 +523,58 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
   },
   allocationItem: {
-    marginBottom: spacing.xxl,
+    marginBottom: spacing.xl,
   },
   allocationHeader: {
     marginBottom: spacing.sm,
     flexDirection: "row",
-    alignItems: "baseline",
+    alignItems: "center",
     justifyContent: "space-between",
   },
   allocationTitleWrap: {
     flexDirection: "row",
-    alignItems: "baseline",
+    alignItems: "center",
     gap: spacing.sm,
+    flex: 1,
+    paddingRight: spacing.lg,
+  },
+  allocationRank: {
+    width: 18,
+    color: colors.muted,
+    fontSize: typography.micro,
+    textAlign: "right",
+  },
+  allocationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   allocationSymbol: {
     color: colors.text,
-    fontSize: typography.subheading,
+    fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
   allocationName: {
     color: colors.muted,
-    fontSize: typography.caption,
+    fontSize: typography.micro,
+    marginTop: 1,
+  },
+  allocationRight: {
+    alignItems: "flex-end",
   },
   allocationPct: {
     color: colors.text,
-    fontSize: typography.subheading,
+    fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
+  allocationValue: {
+    color: colors.muted,
+    fontSize: typography.micro,
+    marginTop: 1,
+  },
   allocationTrack: {
-    marginBottom: spacing.sm,
-    height: 6,
+    marginBottom: spacing.xs,
+    height: 4,
     width: "100%",
     overflow: "hidden",
     borderRadius: radii.pill,
@@ -422,17 +582,18 @@ const styles = StyleSheet.create({
   },
   allocationFill: {
     height: "100%",
+    borderRadius: radii.pill,
   },
   allocationFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  allocationValue: {
+  allocationGainLabel: {
     color: colors.muted,
-    fontSize: typography.caption,
+    fontSize: typography.micro,
   },
   allocationGain: {
-    fontSize: typography.caption,
+    fontSize: typography.micro,
     fontWeight: typography.weightMedium,
   },
   positiveText: {

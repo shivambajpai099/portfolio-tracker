@@ -6,7 +6,7 @@ import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, Vi
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
-import type { Currency } from "../../src/types/portfolio";
+import type { AllocationBasis, Currency } from "../../src/types/portfolio";
 
 interface PortfolioExport {
   exportedAt: string;
@@ -209,6 +209,41 @@ export default function SettingsScreen() {
             return (
               <Pressable key={c} onPress={() => setReportingCurrency(c)} style={[styles.currencyPill, active && styles.currencyPillActive]}>
                 <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{c}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {/* ── Allocation settings ──────────────────────────────────── */}
+        <SectionLabel>Allocation Basis</SectionLabel>
+        <View style={styles.currencyRow}>
+          {(["CURRENT_VALUE", "INVESTED_VALUE"] as AllocationBasis[]).map((basis) => {
+            const active = settings.allocationBasis === basis;
+            const label = basis === "CURRENT_VALUE" ? "Current Value" : "Invested Value";
+            return (
+              <Pressable
+                key={basis}
+                onPress={() => updateSettings({ allocationBasis: basis })}
+                style={[styles.currencyPill, active && styles.currencyPillActive]}
+              >
+                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <SectionLabel>Cash in Allocation</SectionLabel>
+        <View style={styles.currencyRow}>
+          {([true, false] as const).map((include) => {
+            const active = settings.allocationIncludeCash === include;
+            const label = include ? "Include Cash" : "Exclude Cash";
+            return (
+              <Pressable
+                key={String(include)}
+                onPress={() => updateSettings({ allocationIncludeCash: include })}
+                style={[styles.currencyPill, active && styles.currencyPillActive]}
+              >
+                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{label}</Text>
               </Pressable>
             );
           })}

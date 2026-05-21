@@ -115,18 +115,24 @@ export const usePortfolioStore = create<PortfolioState>()(
         }),
 
       totalValueInINR: () => {
-        const { holdings, fxRates } = get();
-        return holdings.reduce((sum: number, item: Holding) => {
-          const value = holdingMarketValue(item);
-          return sum + toINR(value, item.currency, fxRates.USDINR);
+        const { holdings, cashHoldings, fxRates } = get();
+        const holdingsValue = holdings.reduce((sum: number, item: Holding) => {
+          return sum + toINR(holdingMarketValue(item), item.currency, fxRates);
         }, 0);
+        const cashValue = cashHoldings.reduce((sum: number, item) => {
+          return sum + toINR(item.balance, item.currency, fxRates);
+        }, 0);
+        return holdingsValue + cashValue;
       },
       totalValueInUSD: () => {
-        const { holdings, fxRates } = get();
-        return holdings.reduce((sum: number, item: Holding) => {
-          const value = holdingMarketValue(item);
-          return sum + toUSD(value, item.currency, fxRates.USDINR);
+        const { holdings, cashHoldings, fxRates } = get();
+        const holdingsValue = holdings.reduce((sum: number, item: Holding) => {
+          return sum + toUSD(holdingMarketValue(item), item.currency, fxRates);
         }, 0);
+        const cashValue = cashHoldings.reduce((sum: number, item) => {
+          return sum + toUSD(item.balance, item.currency, fxRates);
+        }, 0);
+        return holdingsValue + cashValue;
       },
       exposure: () => {
         const { holdings, fxRates } = get();

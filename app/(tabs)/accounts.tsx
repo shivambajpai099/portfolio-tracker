@@ -18,7 +18,7 @@ const emptyDraft: AccountDraft = {
   name: "",
   owner: "",
   broker: "",
-  type: "brokerage",
+  type: "BROKER",
   baseCurrency: "INR",
 };
 
@@ -40,6 +40,7 @@ export default function AccountsScreen() {
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [draft, setDraft] = useState<AccountDraft>(emptyDraft);
+  const [savingsInitialBalance, setSavingsInitialBalance] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
 
   // cash inline-edit: key = cashHolding.id, value = draft string
@@ -111,6 +112,7 @@ export default function AccountsScreen() {
   const openAddModal = () => {
     setEditingAccountId(null);
     setDraft(emptyDraft);
+    setSavingsInitialBalance("");
     setIsFormVisible(true);
   };
 
@@ -123,6 +125,7 @@ export default function AccountsScreen() {
       type: account.type,
       baseCurrency: account.baseCurrency,
     });
+    setSavingsInitialBalance("");
     setIsFormVisible(true);
   };
 
@@ -130,15 +133,17 @@ export default function AccountsScreen() {
     setIsFormVisible(false);
     setEditingAccountId(null);
     setDraft(emptyDraft);
+    setSavingsInitialBalance("");
   };
 
   const submitForm = () => {
     const trimmedName = draft.name.trim();
     const trimmedOwner = draft.owner.trim();
     const trimmedBroker = draft.broker.trim();
-    if (!trimmedName || !trimmedOwner || !trimmedBroker) {
-      return;
-    }
+    const isSavings = draft.type === "SAVINGS";
+
+    if (!trimmedName || !trimmedOwner) return;
+    if (!isSavings && !trimmedBroker) return;
 
     if (editingAccountId) {
       updateAccount(editingAccountId, {
@@ -150,8 +155,9 @@ export default function AccountsScreen() {
         updatedAt: nowIso(),
       });
     } else {
+      const accountId = createAccountId();
       addAccount({
-        id: createAccountId(),
+        id: accountId,
         name: trimmedName,
         owner: trimmedOwner,
         broker: trimmedBroker,
@@ -160,6 +166,17 @@ export default function AccountsScreen() {
         createdAt: nowIso(),
         updatedAt: nowIso(),
       });
+
+      if (isSavings) {
+        const initialBalance = parseFloat(savingsInitialBalance);
+        addCashHolding({
+          id: createCashId(),
+          accountId,
+          currency: draft.baseCurrency,
+          balance: Number.isFinite(initialBalance) && initialBalance >= 0 ? initialBalance : 0,
+          updatedAt: nowIso(),
+        });
+      }
     }
 
     closeFormModal();
@@ -284,13 +301,6 @@ export default function AccountsScreen() {
               style={styles.modalInput}
             />
             <TextInput
-              value={draft.broker}
-              onChangeText={(value) => setDraft((prev) => ({ ...prev, broker: value }))}
-              placeholder="Broker"
-              placeholderTextColor={colors.muted}
-              style={styles.modalInputCompact}
-            />
-            <TextInput
               value={draft.owner}
               onChangeText={(value) => setDraft((prev) => ({ ...prev, owner: value }))}
               placeholder="Owner"
@@ -300,15 +310,29 @@ export default function AccountsScreen() {
 
             <Text style={styles.modalLabel}>Type</Text>
             <View style={styles.pillRow}>
-              {(["brokerage", "retirement", "family"] as AccountType[]).map((type) => {
+              {(["BROKER", "SAVINGS"] as AccountType[]).map((type) => {
                 const active = draft.type === type;
                 return (
-                  <Pressable key={type} style={[styles.pill, active && styles.pillActive]} onPress={() => setDraft((prev) => ({ ...prev, type }))}>
+                  <Pressable
+                    key={type}
+                    style={[styles.pill, active && styles.pillActive]}
+                    onPress={() => setDraft((prev) => ({ ...prev, type }))}
+                  >
                     <Text style={[styles.pillText, active && styles.pillTextActive]}>{type}</Text>
                   </Pressable>
                 );
               })}
             </View>
+
+            {draft.type === "BROKER" && (
+              <TextInput
+                value={draft.broker}
+                onChangeText={(value) => setDraft((prev) => ({ ...prev, broker: value }))}
+                placeholder="Broker"
+                placeholderTextColor={colors.muted}
+                style={styles.modalInputCompact}
+              />
+            )}
 
             <Text style={styles.modalLabel}>Currency</Text>
             <View style={styles.pillRow}>
@@ -325,6 +349,20 @@ export default function AccountsScreen() {
                 );
               })}
             </View>
+
+            {draft.type === "SAVINGS" && !editingAccountId && (
+              <>
+                <Text style={styles.modalLabel}>Initial Balance</Text>
+                <TextInput
+                  value={savingsInitialBalance}
+                  onChangeText={setSavingsInitialBalance}
+                  placeholder="0.00"
+                  placeholderTextColor={colors.muted}
+                  keyboardType="decimal-pad"
+                  style={styles.modalInputCompact}
+                />
+              </>
+            )}
 
             <View style={styles.modalActions}>
               <Pressable style={styles.ghostBtn} onPress={closeFormModal}>

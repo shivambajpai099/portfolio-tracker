@@ -1,4 +1,4 @@
-import type { CashHolding, Currency, FxRates, Holding } from "../../types/portfolio";
+import type { AllocationBasis, CashHolding, Currency, FxRates, Holding, LivePriceCache } from "../../types/portfolio";
 
 // ---------------------------------------------------------------------------
 // FX helpers
@@ -18,21 +18,34 @@ export const convert = (value: number, from: Currency, to: Currency, rates: FxRa
 };
 
 // ---------------------------------------------------------------------------
+// Live price resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the market price for a holding.
+ * Uses the live price cache when available; falls back to the stored marketPrice.
+ */
+export const resolveMarketPrice = (holding: Holding, priceCache?: LivePriceCache): number => {
+  const entry = priceCache?.bySymbol[holding.symbol.toUpperCase()];
+  return entry?.price ?? holding.marketPrice;
+};
+
+// ---------------------------------------------------------------------------
 // Holding-level
 // ---------------------------------------------------------------------------
 
 export const holdingCost = (holding: Holding): number =>
   holding.quantity * holding.averagePrice;
 
-export const holdingMarketValue = (holding: Holding): number =>
-  holding.quantity * holding.marketPrice;
+export const holdingMarketValue = (holding: Holding, priceCache?: LivePriceCache): number =>
+  holding.quantity * resolveMarketPrice(holding, priceCache);
 
-export const holdingGainLoss = (holding: Holding): number =>
-  holdingMarketValue(holding) - holdingCost(holding);
+export const holdingGainLoss = (holding: Holding, priceCache?: LivePriceCache): number =>
+  holdingMarketValue(holding, priceCache) - holdingCost(holding);
 
-export const holdingGainLossPct = (holding: Holding): number => {
+export const holdingGainLossPct = (holding: Holding, priceCache?: LivePriceCache): number => {
   const cost = holdingCost(holding);
-  return cost === 0 ? 0 : (holdingGainLoss(holding) / cost) * 100;
+  return cost === 0 ? 0 : (holdingGainLoss(holding, priceCache) / cost) * 100;
 };
 
 // ---------------------------------------------------------------------------
@@ -51,13 +64,14 @@ export const calcPortfolioTotals = (
   holdings: Holding[],
   cashHoldings: CashHolding[],
   rates: FxRates,
-  reportingCurrency: Currency
+  reportingCurrency: Currency,
+  priceCache?: LivePriceCache
 ): PortfolioTotals => {
   let currentValue = 0;
   let investedValue = 0;
 
   for (const holding of holdings) {
-    currentValue += convert(holdingMarketValue(holding), holding.currency, reportingCurrency, rates);
+    currentValue += convert(holdingMarketValue(holding, priceCache), holding.currency, reportingCurrency, rates);
     investedValue += convert(holdingCost(holding), holding.currency, reportingCurrency, rates);
   }
 
@@ -91,14 +105,18 @@ export interface SymbolAllocation {
 
 export const calcSymbolAllocations = (
   holdings: Holding[],
+  cashHoldings: CashHolding[],
   rates: FxRates,
-  reportingCurrency: Currency
+  reportingCurrency: Currency,
+  allocationBasis: AllocationBasis = "CURRENT_VALUE",
+  allocationIncludeCash = true,
+  priceCache?: LivePriceCache
 ): SymbolAllocation[] => {
   const map = new Map<string, SymbolAllocation>();
 
   for (const holding of holdings) {
     const symbol = holding.symbol.toUpperCase();
-    const current = convert(holdingMarketValue(holding), holding.currency, reportingCurrency, rates);
+    const current = convert(holdingMarketValue(holding, priceCache), holding.currency, reportingCurrency, rates);
     const invested = convert(holdingCost(holding), holding.currency, reportingCurrency, rates);
 
     const existing = map.get(symbol);
@@ -126,10 +144,23 @@ export const calcSymbolAllocations = (
   }
 
   const items = [...map.values()];
-  const totalCurrent = items.reduce((sum, item) => sum + item.currentValue, 0);
+  const holdingsTotal = items.reduce(
+    (sum, item) => sum + (allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue),
+    0
+  );
+
+  let cashTotal = 0;
+  if (allocationIncludeCash) {
+    for (const cash of cashHoldings) {
+      cashTotal += convert(cash.balance, cash.currency, reportingCurrency, rates);
+    }
+  }
+
+  const denominator = holdingsTotal + cashTotal;
 
   for (const item of items) {
-    item.allocationPct = totalCurrent > 0 ? (item.currentValue / totalCurrent) * 100 : 0;
+    const numerator = allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue;
+    item.allocationPct = denominator > 0 ? (numerator / denominator) * 100 : 0;
     item.gainLossPct = item.investedValue > 0 ? (item.gainLoss / item.investedValue) * 100 : 0;
   }
 
@@ -161,13 +192,14 @@ const isIndiaSymbol = (symbol: string, currency: Currency): boolean =>
 export const calcGeographicSplit = (
   holdings: Holding[],
   rates: FxRates,
-  reportingCurrency: Currency
+  reportingCurrency: Currency,
+  priceCache?: LivePriceCache
 ): GeographicSplit => {
   let indiaValue = 0;
   let usValue = 0;
 
   for (const holding of holdings) {
-    const value = convert(holdingMarketValue(holding), holding.currency, reportingCurrency, rates);
+    const value = convert(holdingMarketValue(holding, priceCache), holding.currency, reportingCurrency, rates);
     if (isIndiaSymbol(holding.symbol, holding.currency)) {
       indiaValue += value;
     } else {
@@ -236,14 +268,17 @@ export const calcPortfolioSnapshot = (
   holdings: Holding[],
   cashHoldings: CashHolding[],
   rates: FxRates,
-  reportingCurrency: Currency
+  reportingCurrency: Currency,
+  allocationBasis: AllocationBasis = "CURRENT_VALUE",
+  allocationIncludeCash = true,
+  priceCache?: LivePriceCache
 ): PortfolioSnapshot => {
-  const allocations = calcSymbolAllocations(holdings, rates, reportingCurrency);
+  const allocations = calcSymbolAllocations(holdings, cashHoldings, rates, reportingCurrency, allocationBasis, allocationIncludeCash, priceCache);
   return {
-    totals: calcPortfolioTotals(holdings, cashHoldings, rates, reportingCurrency),
+    totals: calcPortfolioTotals(holdings, cashHoldings, rates, reportingCurrency, priceCache),
     allocations,
     topAllocations: topAllocations(allocations),
-    geographicSplit: calcGeographicSplit(holdings, rates, reportingCurrency),
+    geographicSplit: calcGeographicSplit(holdings, rates, reportingCurrency, priceCache),
     concentration: calcConcentrationRisk(allocations),
   };
 };
