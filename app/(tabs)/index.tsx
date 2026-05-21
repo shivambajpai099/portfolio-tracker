@@ -52,20 +52,30 @@ export default function DashboardScreen() {
     });
   }, [holdings, geoFilter]);
 
+  const filteredCashHoldings = useMemo(() => {
+    if (geoFilter === "ALL") return cashHoldings;
+    return cashHoldings.filter((cash) => (geoFilter === "INDIA" ? cash.currency === "INR" : cash.currency === "USD"));
+  }, [cashHoldings, geoFilter]);
+
+  const totalsCashHoldings = useMemo(
+    () => (settings.allocationIncludeCash ? filteredCashHoldings : []),
+    [settings.allocationIncludeCash, filteredCashHoldings]
+  );
+
   const totals = useMemo(
-    () => calcPortfolioTotals(filteredHoldings, cashHoldings, fxRates, rc),
-    [filteredHoldings, cashHoldings, fxRates, rc]
+    () => calcPortfolioTotals(filteredHoldings, totalsCashHoldings, fxRates, rc),
+    [filteredHoldings, totalsCashHoldings, fxRates, rc]
   );
   const allocations = useMemo(
-    () => calcSymbolAllocations(filteredHoldings, cashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash),
-    [filteredHoldings, cashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash]
+    () => calcSymbolAllocations(filteredHoldings, filteredCashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash),
+    [filteredHoldings, filteredCashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash]
   );
   const geoSplit = useMemo(() => calcGeographicSplit(holdings, fxRates, rc), [holdings, fxRates, rc]);
   const concentration = useMemo(() => calcConcentrationRisk(allocations), [allocations]);
 
   const cashValueRC = useMemo(
-    () => cashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
-    [cashHoldings, rc, fxRates]
+    () => filteredCashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
+    [filteredCashHoldings, rc, fxRates]
   );
 
   // The sum of symbol allocationPcts may be < 100 when cash is included in the denominator.
@@ -235,6 +245,8 @@ export default function DashboardScreen() {
             {allocations.map((item, i) => {
               const barColor = DONUT_PALETTE[i % DONUT_PALETTE.length];
               const displayValue = settings.allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue;
+              const secondaryLabel = settings.allocationBasis === "INVESTED_VALUE" ? "Current" : "Invested";
+              const secondaryValue = settings.allocationBasis === "INVESTED_VALUE" ? item.currentValue : item.investedValue;
               return (
                 <View key={item.symbol} style={styles.allocationItem}>
                   <View style={styles.allocationHeader}>
@@ -257,11 +269,11 @@ export default function DashboardScreen() {
                   </View>
 
                   <View style={styles.allocationFooter}>
-                    <Text style={styles.allocationGainLabel}>Current {formatMoney(item.currentValue, rc)}</Text>
-                    <Text style={styles.allocationGainLabel}>Invested {formatMoney(item.investedValue, rc)}</Text>
+                    <Text style={styles.allocationGainLabel}>{secondaryLabel} {formatMoney(secondaryValue, rc)}</Text>
+                    <Text style={styles.allocationGainLabel}>Gain / Loss {formatMoney(item.gainLoss, rc)}</Text>
                   </View>
                   <View style={styles.allocationFooter}>
-                    <Text style={styles.allocationGainLabel}>Gain / Loss</Text>
+                    <Text style={styles.allocationGainLabel}>Gain / Loss %</Text>
                     <Text style={[styles.allocationGain, item.gainLossPct >= 0 ? styles.positiveText : styles.negativeText]}>
                       {item.gainLossPct >= 0 ? "+" : ""}{item.gainLossPct.toFixed(2)}%
                     </Text>

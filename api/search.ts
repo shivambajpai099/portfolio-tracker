@@ -3,7 +3,7 @@ type CacheEntry = {
   fetchedAtMs: number;
 };
 
-const CACHE_TTL_MS = 60 * 1000;
+const CACHE_TTL_MS = 20 * 60 * 1000;
 const CACHE = new Map<string, CacheEntry>();
 
 const YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search";
@@ -25,7 +25,7 @@ export default async function handler(req: any, res: any) {
 
   const q = toStringQuery(req.query?.q).trim();
   if (q.length < 2) {
-    res.setHeader("Cache-Control", "public, s-maxage=30, stale-while-revalidate=60");
+    res.setHeader("Cache-Control", "public, s-maxage=1200, stale-while-revalidate=600");
     res.status(200).json({ quotes: [] });
     return;
   }
@@ -33,7 +33,7 @@ export default async function handler(req: any, res: any) {
   const key = q.toLowerCase();
   const cached = CACHE.get(key);
   if (cached && isFresh(cached)) {
-    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+    res.setHeader("Cache-Control", "public, s-maxage=1200, stale-while-revalidate=600");
     res.setHeader("X-Cache", "HIT");
     res.status(200).json(cached.payload);
     return;
@@ -51,7 +51,7 @@ export default async function handler(req: any, res: any) {
 
     if (!upstream.ok) {
       if (cached) {
-        res.setHeader("Cache-Control", "public, s-maxage=30, stale-while-revalidate=120");
+        res.setHeader("Cache-Control", "public, s-maxage=1200, stale-while-revalidate=600");
         res.setHeader("X-Cache", "STALE");
         res.status(200).json(cached.payload);
         return;
@@ -69,7 +69,7 @@ export default async function handler(req: any, res: any) {
     res.status(200).json(payload);
   } catch {
     if (cached) {
-      res.setHeader("Cache-Control", "public, s-maxage=30, stale-while-revalidate=120");
+      res.setHeader("Cache-Control", "public, s-maxage=1200, stale-while-revalidate=600");
       res.setHeader("X-Cache", "STALE");
       res.status(200).json(cached.payload);
       return;

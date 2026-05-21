@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { searchTickerSuggestions } from "../services/yahooFinanceService";
+import { fetchLivePrices, searchTickerSuggestions } from "../services/yahooFinanceService";
 import { colors, radii, spacing, typography } from "../theme";
 import type { TickerSuggestion } from "../types/marketData";
 import type { Account, Currency } from "../types/portfolio";
@@ -12,6 +12,7 @@ interface AddHoldingInput {
   currency: Currency;
   quantity: number;
   averagePrice: number;
+  marketPrice: number;
 }
 
 interface AddHoldingModalProps {
@@ -35,6 +36,9 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   const [quantity, setQuantity] = useState("");
   const [averagePrice, setAveragePrice] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [livePriceLoading, setLivePriceLoading] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [suggestions, setSuggestions] = useState<SelectedTicker[]>([]);
 
@@ -85,6 +89,33 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     };
   }, [query, selected, visible]);
 
+  useEffect(() => {
+    if (!visible || !selected) {
+      setLivePrice(null);
+      setLivePriceLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLivePriceLoading(true);
+    fetchLivePrices([selected.symbol], controller.signal)
+      .then((result) => {
+        if (result.ok && result.data[0]?.price) {
+          setLivePrice(result.data[0].price);
+        } else {
+          setLivePrice(null);
+        }
+      })
+      .catch(() => {
+        setLivePrice(null);
+      })
+      .finally(() => {
+        setLivePriceLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [selected, visible]);
+
   const canSubmit = useMemo(() => {
     const qty = parseNumber(quantity);
     const avg = parseNumber(averagePrice);
@@ -98,6 +129,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     setAveragePrice("");
     setSuggestions([]);
     setIsLoading(false);
+    setIsSaving(false);
     setErrorText("");
   };
 
@@ -110,9 +142,10 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     setSelected(item);
     setQuery(item.symbol);
     setSuggestions([]);
+    setErrorText("");
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!selected) {
       return;
     }
@@ -123,6 +156,20 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
       return;
     }
 
+    setIsSaving(true);
+
+    let marketPrice = livePrice ?? avg;
+    try {
+      if (livePrice == null) {
+        const result = await fetchLivePrices([selected.symbol]);
+        if (result.ok && result.data[0]?.price) {
+          marketPrice = result.data[0].price;
+        }
+      }
+    } catch {
+      // Keep marketPrice fallback to the average buy price so add flow remains offline-safe.
+    }
+
     onCreate({
       accountId,
       symbol: selected.symbol,
@@ -130,6 +177,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
       currency: selected.currency,
       quantity: qty,
       averagePrice: avg,
+      marketPrice,
     });
 
     handleClose();
@@ -186,6 +234,9 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
               <Text style={styles.selectedSymbol}>{selected.symbol}</Text>
               <Text style={styles.suggestionMeta}>{selected.companyName}</Text>
               <Text style={styles.suggestionMeta}>{selected.exchange} - {selected.currency}</Text>
+              <Text style={styles.suggestionMeta}>
+                Current price: {livePriceLoading ? "Loading..." : livePrice != null ? `${livePrice.toFixed(2)} ${selected.currency}` : "Unavailable"}
+              </Text>
             </View>
           ) : null}
 
@@ -226,8 +277,14 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
             <Pressable style={styles.cancelBtn} onPress={handleClose}>
               <Text style={styles.cancelText}>Cancel</Text>
             </Pressable>
-            <Pressable style={[styles.saveBtn, !canSubmit && styles.saveBtnDisabled]} onPress={handleCreate}>
-              <Text style={[styles.saveText, !canSubmit && styles.saveTextDisabled]}>Save</Text>
+            <Pressable
+              style={[styles.saveBtn, (!canSubmit || isSaving) && styles.saveBtnDisabled]}
+              onPress={handleCreate}
+              disabled={!canSubmit || isSaving}
+            >
+              <Text style={[styles.saveText, (!canSubmit || isSaving) && styles.saveTextDisabled]}>
+                {isSaving ? "Saving..." : "Save"}
+              </Text>
             </Pressable>
           </View>
         </View>

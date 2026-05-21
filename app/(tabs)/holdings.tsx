@@ -3,6 +3,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
+import { fetchLivePrices } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
@@ -67,6 +68,8 @@ export default function HoldingsScreen() {
   const [perfFilter, setPerfFilter] = useState<PerfFilter>("ALL");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [isAddVisible, setIsAddVisible] = useState(false);
+  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+  const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<Holding | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Holding | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft>({
@@ -94,6 +97,50 @@ export default function HoldingsScreen() {
     settings.reportingCurrency === "INR"
       ? toINR(value, currency, fxRates)
       : toUSD(value, currency, fxRates);
+
+  const formatRelativeTime = (iso: string): string => {
+    const diffMs = Date.now() - new Date(iso).getTime();
+    if (!Number.isFinite(diffMs) || diffMs < 0) {
+      return "just now";
+    }
+
+    const minutes = Math.floor(diffMs / 60000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
+  const refreshAllMarketPrices = async () => {
+    if (isRefreshingPrices || holdings.length === 0) {
+      return;
+    }
+
+    setIsRefreshingPrices(true);
+    try {
+      const uniqueSymbols = [...new Set(holdings.map((h) => h.symbol.toUpperCase()))];
+      const result = await fetchLivePrices(uniqueSymbols);
+      const quoteMap = new Map(result.ok && result.data ? result.data.map((quote) => [quote.symbol.toUpperCase(), quote]) : []);
+
+      for (const holding of holdings) {
+        const quote = quoteMap.get(holding.symbol.toUpperCase());
+        if (!quote) {
+          continue;
+        }
+
+        updateHolding(holding.id, {
+          marketPrice: quote.price,
+          updatedAt: nowIso(),
+        });
+      }
+
+      setLastPricesRefreshedAt(result.fetchedAt ?? nowIso());
+    } finally {
+      setIsRefreshingPrices(false);
+    }
+  };
 
   const totalCashRC = useMemo(
     () => cashHoldings.reduce((sum, c) => sum + toRC(c.balance, c.currency), 0),
@@ -247,10 +294,18 @@ export default function HoldingsScreen() {
       {/* Header */}
       <View style={styles.headerRow}>
         <Text style={styles.headerTitle}>Holdings</Text>
-        <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
-          <Text style={styles.addBtnText}>Add</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable style={[styles.refreshBtn, isRefreshingPrices && styles.refreshBtnDisabled]} onPress={refreshAllMarketPrices} disabled={isRefreshingPrices || holdings.length === 0}>
+            <Text style={styles.refreshBtnText}>{isRefreshingPrices ? "Refreshing..." : "Refresh"}</Text>
+          </Pressable>
+          <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
+            <Text style={styles.addBtnText}>Add</Text>
+          </Pressable>
+        </View>
       </View>
+      {lastPricesRefreshedAt ? (
+        <Text style={styles.refreshMeta}>Prices refreshed {formatRelativeTime(lastPricesRefreshedAt)}</Text>
+      ) : null}
 
       {/* Search */}
       <TextInput
@@ -435,6 +490,8 @@ export default function HoldingsScreen() {
                             <Text style={styles.lotMeta}>
                               {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
                               {"  "}
+                              · cur {formatMoney(lot.marketPrice, lot.currency)}
+                              {"  "}
                               <Text style={[lotGainPositive ? styles.positiveText : styles.negativeText]}>
                                 {lotGainPositive ? "+" : ""}{formatMoney(lotGain, settings.reportingCurrency)}
                               </Text>
@@ -477,7 +534,7 @@ export default function HoldingsScreen() {
             companyName: input.companyName,
             quantity: input.quantity,
             averagePrice: input.averagePrice,
-            marketPrice: input.averagePrice,
+            marketPrice: input.marketPrice,
             currency: input.currency,
             asOf: nowIso(),
             updatedAt: nowIso(),
@@ -571,9 +628,35 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  refreshMeta: {
+    marginTop: -spacing.sm,
+    marginBottom: spacing.lg,
+    color: colors.muted,
+    fontSize: typography.caption,
+  },
   headerTitle: {
     color: colors.text,
     fontSize: typography.heading,
+    fontWeight: typography.weightSemibold,
+  },
+  refreshBtn: {
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.muted,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  refreshBtnDisabled: {
+    opacity: 0.6,
+  },
+  refreshBtnText: {
+    color: colors.muted,
+    fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
   addBtn: {

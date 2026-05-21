@@ -38,7 +38,7 @@ interface CacheEntry<T> {
 
 const SEARCH_CACHE = new Map<string, CacheEntry<TickerSuggestion[]>>();
 const PRICE_CACHE = new Map<string, CacheEntry<LivePriceQuote[]>>();
-const TTL_MS = 15 * 60 * 1000;
+const TTL_MS = 20 * 60 * 1000;
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
 
