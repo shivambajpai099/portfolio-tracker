@@ -23,6 +23,10 @@ The app uses Zustand `persist` middleware with AsyncStorage to auto-load on star
 ```text
 app/
   _layout.tsx
+  (auth)/
+    _layout.tsx
+    login.tsx
+    signup.tsx
   (tabs)/
     _layout.tsx
     index.tsx
@@ -35,10 +39,14 @@ src/
     ScreenContainer.tsx
     StatCard.tsx
   features/
+    auth/
+      authService.ts
+      supabaseClient.ts
     portfolio/
       mockData.ts
       selectors.ts
   store/
+    authStore.ts
     portfolioStore.ts
   theme/
     colors.ts
@@ -54,6 +62,27 @@ src/
 npm install
 npm run start
 ```
+
+## Supabase Auth Setup
+
+Create a `.env` file in the project root:
+
+```bash
+EXPO_PUBLIC_SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co"
+EXPO_PUBLIC_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
+```
+
+Auth currently supports:
+
+- email/password signup
+- email/password login
+- logout
+- persistent sessions (web + mobile)
+
+Notes:
+
+- `EXPO_PUBLIC_*` variables are required for Expo runtime access.
+- This setup only handles authentication; portfolio sync is intentionally not implemented yet.
 
 ## Cross-platform targets
 

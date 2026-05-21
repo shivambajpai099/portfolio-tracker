@@ -4,6 +4,7 @@ import * as Sharing from "expo-sharing";
 import { useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
 import type { AllocationBasis, Currency } from "../../src/types/portfolio";
@@ -29,6 +30,7 @@ export default function SettingsScreen() {
   const addHolding = usePortfolioStore((s) => s.addHolding);
   const addCashHolding = usePortfolioStore((s) => s.addCashHolding);
   const clearAllData = usePortfolioStore((s) => s.clearAllData);
+  const signOut = useAuthStore((s) => s.signOut);
 
   const [rateInput, setRateInput] = useState(String(fxRates.USDINR));
   const [rateError, setRateError] = useState("");
@@ -165,6 +167,15 @@ export default function SettingsScreen() {
     flash("All data cleared.");
   };
 
+  const handleSignOut = async () => {
+    const ok = await signOut();
+    if (!ok) {
+      flash("Unable to sign out. Please try again.");
+      return;
+    }
+    flash("Signed out.");
+  };
+
   return (
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -266,6 +277,18 @@ export default function SettingsScreen() {
               <Text style={styles.actionSubtitle}>Restore from a JSON backup file</Text>
             </View>
             <Text style={styles.actionArrow}>↓</Text>
+          </Pressable>
+        </View>
+
+        {/* ── Auth ─────────────────────────────────────────────────── */}
+        <SectionLabel>Auth</SectionLabel>
+        <View style={styles.cardList}>
+          <Pressable onPress={handleSignOut} style={styles.actionCard}>
+            <View>
+              <Text style={styles.actionTitle}>Sign Out</Text>
+              <Text style={styles.actionSubtitle}>End current session on this device</Text>
+            </View>
+            <Text style={styles.actionArrow}>→</Text>
           </Pressable>
         </View>
 
