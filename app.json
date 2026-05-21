@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Portfolio Tracker",
+    "slug": "portfolio-tracker",
+    "scheme": "portfoliotracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios", "android", "web"],
+    "plugins": [
+      "expo-router",
+      "expo-document-picker"
+    ],
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "backgroundColor": "#0B0C10"
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
+
