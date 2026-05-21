@@ -40,9 +40,7 @@ const SEARCH_CACHE = new Map<string, CacheEntry<TickerSuggestion[]>>();
 const PRICE_CACHE = new Map<string, CacheEntry<LivePriceQuote[]>>();
 const TTL_MS = 15 * 60 * 1000;
 
-const SEARCH_BASE = "https://query1.finance.yahoo.com/v1/finance/search";
-const QUOTE_BASE = "https://query1.finance.yahoo.com/v7/finance/quote";
-const WEB_CORS_PROXY = "https://cors.isomorphic-git.org/";
+const API_BASE = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
 
 const nowIso = () => new Date().toISOString();
 
@@ -53,8 +51,9 @@ const isFresh = (entry: CacheEntry<unknown>): boolean => {
 
 const normalizeSymbol = (symbol: string): string => symbol.trim().toUpperCase();
 
-const resolveEndpoint = (url: string): string =>
-  Platform.OS === "web" ? `${WEB_CORS_PROXY}${url}` : url;
+const hasProxyBase = Platform.OS === "web" || API_BASE.length > 0;
+
+const resolveApiUrl = (path: string): string => (API_BASE ? `${API_BASE}${path}` : path);
 
 const inferCurrency = (rawCurrency: string | undefined, symbol: string): Currency => {
   if (rawCurrency === "INR") {
@@ -126,8 +125,16 @@ export const searchTickerSuggestions = async (
     return { ok: true, data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   }
 
+  if (!hasProxyBase) {
+    return {
+      ok: false,
+      error: buildError("Market-data proxy is not configured. Set EXPO_PUBLIC_API_BASE_URL for native builds.", "API"),
+      fromCache: false,
+    };
+  }
+
   try {
-    const endpoint = resolveEndpoint(`${SEARCH_BASE}?q=${encodeURIComponent(trimmed)}&quotesCount=10&newsCount=0`);
+    const endpoint = resolveApiUrl(`/api/search?q=${encodeURIComponent(trimmed)}`);
     const response = await fetch(endpoint, { signal });
 
     if (!response.ok) {
@@ -197,8 +204,16 @@ export const fetchLivePrices = async (
     return { ok: true, data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   }
 
+  if (!hasProxyBase) {
+    return {
+      ok: false,
+      error: buildError("Market-data proxy is not configured. Set EXPO_PUBLIC_API_BASE_URL for native builds.", "API"),
+      fromCache: false,
+    };
+  }
+
   try {
-    const endpoint = resolveEndpoint(`${QUOTE_BASE}?symbols=${encodeURIComponent(key)}`);
+    const endpoint = resolveApiUrl(`/api/quote?symbols=${encodeURIComponent(key)}`);
     const response = await fetch(endpoint, { signal });
 
     if (!response.ok) {

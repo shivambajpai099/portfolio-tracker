@@ -70,6 +70,7 @@ Create a `.env` file in the project root:
 ```bash
 EXPO_PUBLIC_SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co"
 EXPO_PUBLIC_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
+EXPO_PUBLIC_API_BASE_URL="https://YOUR_VERCEL_DOMAIN"
 ```
 
 Auth currently supports:
@@ -82,6 +83,7 @@ Auth currently supports:
 Notes:
 
 - `EXPO_PUBLIC_*` variables are required for Expo runtime access.
+- Web uses relative `/api/*` routes automatically; set `EXPO_PUBLIC_API_BASE_URL` for native builds so mobile can call the same Vercel serverless proxy endpoints.
 
 ## Cloud Sync (Snapshot-based)
 
