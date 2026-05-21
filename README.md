@@ -82,7 +82,32 @@ Auth currently supports:
 Notes:
 
 - `EXPO_PUBLIC_*` variables are required for Expo runtime access.
-- This setup only handles authentication; portfolio sync is intentionally not implemented yet.
+
+## Cloud Sync (Snapshot-based)
+
+The app remains **local-first** and keeps using AsyncStorage as the primary source for startup and offline access.
+
+Cloud sync stores each user's portfolio as one flexible JSON blob in Supabase.
+
+### Supabase table
+
+Run SQL from `supabase/portfolio_snapshots.sql`.
+
+Table: `portfolio_snapshots`
+
+- `id`
+- `user_id`
+- `portfolio_json`
+- `created_at`
+- `updated_at`
+
+### Sync behavior
+
+- Local AsyncStorage state loads immediately on startup.
+- After auth + local hydration, latest cloud snapshot sync runs in background.
+- All updates persist locally first through the existing Zustand store.
+- Local updates are pushed to Supabase after save (debounced), with automatic retry for transient/offline failures.
+- When cloud data is newer, local state is replaced from the cloud snapshot.
 
 ## Cross-platform targets
 

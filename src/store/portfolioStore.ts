@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import type { PortfolioSnapshotData } from "../features/portfolio/cloudSnapshot";
 import { exposureBySymbol, holdingMarketValue, toINR, toUSD } from "../features/portfolio/selectors";
 import { seedAccounts, seedCashHoldings, seedFxRates, seedHoldings, seedSettings } from "../features/portfolio/mockData";
 import type {
@@ -18,8 +19,11 @@ interface PortfolioState {
   cashHoldings: CashHolding[];
   settings: PortfolioSettings;
   fxRates: FxRates;
+  snapshotUpdatedAt: string;
   hydrated: boolean;
   setHydrated: (value: boolean) => void;
+  getSnapshot: () => PortfolioSnapshotData;
+  replaceFromSnapshot: (snapshot: PortfolioSnapshotData) => void;
 
   addAccount: (account: Account) => void;
   updateAccount: (accountId: string, updates: Partial<Account>) => void;
@@ -50,61 +54,92 @@ export const usePortfolioStore = create<PortfolioState>()(
       cashHoldings: seedCashHoldings,
       settings: seedSettings,
       fxRates: seedFxRates,
+      snapshotUpdatedAt: new Date().toISOString(),
       hydrated: false,
       setHydrated: (value: boolean) => set({ hydrated: value }),
+      getSnapshot: () => {
+        const { accounts, holdings, cashHoldings, settings, fxRates, snapshotUpdatedAt } = get();
+        return {
+          accounts,
+          holdings,
+          cashHoldings,
+          settings,
+          fxRates,
+          snapshotUpdatedAt,
+        };
+      },
+      replaceFromSnapshot: (snapshot: PortfolioSnapshotData) =>
+        set({
+          accounts: snapshot.accounts,
+          holdings: snapshot.holdings,
+          cashHoldings: snapshot.cashHoldings,
+          settings: snapshot.settings,
+          fxRates: snapshot.fxRates,
+          snapshotUpdatedAt: snapshot.snapshotUpdatedAt,
+        }),
 
       addAccount: (account: Account) =>
         set((state) => ({
           accounts: [...state.accounts, account],
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
       updateAccount: (accountId: string, updates: Partial<Account>) =>
         set((state) => ({
           accounts: state.accounts.map((account) =>
             account.id === accountId ? { ...account, ...updates } : account
           ),
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
       removeAccount: (accountId: string) =>
         set((state) => ({
           accounts: state.accounts.filter((account) => account.id !== accountId),
           holdings: state.holdings.filter((holding) => holding.accountId !== accountId),
           cashHoldings: state.cashHoldings.filter((cashHolding) => cashHolding.accountId !== accountId),
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
 
       addHolding: (holding: Holding) =>
         set((state) => ({
           holdings: [...state.holdings, holding],
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
       updateHolding: (holdingId: string, updates: Partial<Holding>) =>
         set((state) => ({
           holdings: state.holdings.map((holding) =>
             holding.id === holdingId ? { ...holding, ...updates } : holding
           ),
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
       removeHolding: (holdingId: string) =>
         set((state) => ({
           holdings: state.holdings.filter((holding) => holding.id !== holdingId),
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
 
       addCashHolding: (cashHolding: CashHolding) =>
         set((state) => ({
           cashHoldings: [...state.cashHoldings, cashHolding],
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
       updateCashHolding: (cashHoldingId: string, updates: Partial<CashHolding>) =>
         set((state) => ({
           cashHoldings: state.cashHoldings.map((cashHolding) =>
             cashHolding.id === cashHoldingId ? { ...cashHolding, ...updates } : cashHolding
           ),
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
       removeCashHolding: (cashHoldingId: string) =>
         set((state) => ({
           cashHoldings: state.cashHoldings.filter((cashHolding) => cashHolding.id !== cashHoldingId),
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
 
       updateSettings: (updates: Partial<PortfolioSettings>) =>
         set((state) => ({
           settings: { ...state.settings, ...updates },
+          snapshotUpdatedAt: new Date().toISOString(),
         })),
-      updateFxRates: (rates: FxRates) => set({ fxRates: rates }),
+      updateFxRates: (rates: FxRates) => set({ fxRates: rates, snapshotUpdatedAt: new Date().toISOString() }),
       clearAllData: () =>
         set({
           accounts: [],
@@ -112,6 +147,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           cashHoldings: [],
           settings: seedSettings,
           fxRates: seedFxRates,
+          snapshotUpdatedAt: new Date().toISOString(),
         }),
 
       totalValueInINR: () => {
@@ -148,8 +184,19 @@ export const usePortfolioStore = create<PortfolioState>()(
         cashHoldings: state.cashHoldings,
         settings: state.settings,
         fxRates: state.fxRates,
+        snapshotUpdatedAt: state.snapshotUpdatedAt,
       }),
       onRehydrateStorage: () => (state: PortfolioState | undefined) => {
+        if (state && !state.snapshotUpdatedAt) {
+          state.replaceFromSnapshot({
+            accounts: state.accounts,
+            holdings: state.holdings,
+            cashHoldings: state.cashHoldings,
+            settings: state.settings,
+            fxRates: state.fxRates,
+            snapshotUpdatedAt: new Date().toISOString(),
+          });
+        }
         state?.setHydrated(true);
       },
     }

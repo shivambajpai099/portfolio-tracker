@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Platform, View } from "react-native";
+import { PortfolioCloudSyncBootstrap } from "../src/features/portfolio/PortfolioCloudSyncBootstrap";
 import { cleanupAuthStore, useAuthStore } from "../src/store/authStore";
 
 export default function RootLayout() {
@@ -17,6 +18,7 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style="light" backgroundColor="#0B0C10" />
+      <PortfolioCloudSyncBootstrap />
       {Platform.OS === "web" ? (
         <View style={{ flex: 1, backgroundColor: "#0B0C10" }}>
           <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#0B0C10" } }}>

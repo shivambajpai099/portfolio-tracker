@@ -6,6 +6,18 @@ interface AuthSubscription {
   unsubscribe: () => void;
 }
 
+interface QueryResult<T> {
+  data: T;
+  error: { message: string } | null;
+}
+
+interface SupabaseTableQuery {
+  select: (_columns: string) => SupabaseTableQuery;
+  eq: (_column: string, _value: string) => SupabaseTableQuery;
+  maybeSingle: <T>() => Promise<QueryResult<T | null>>;
+  upsert: (_values: unknown, _options?: { onConflict?: string }) => Promise<QueryResult<null>>;
+}
+
 interface SupabaseLikeClient {
   auth: {
     getSession: () => Promise<{ data: { session: { user: { id: string; email?: string | null } | null } | null }; error: { message: string } | null }>;
@@ -14,6 +26,7 @@ interface SupabaseLikeClient {
     signOut: () => Promise<{ error: { message: string } | null }>;
     onAuthStateChange: (callback: (event: unknown, session: { user: { id: string; email?: string | null } | null } | null) => void) => { data: { subscription: AuthSubscription } };
   };
+  from: (_table: string) => SupabaseTableQuery;
 }
 
 type CreateClientFn = (url: string, anonKey: string, options: unknown) => SupabaseLikeClient;
@@ -68,6 +81,15 @@ const anonKey = hasSupabaseConfig ? rawAnonKey : "placeholder-anon-key";
 const noopError = { message: "Supabase client is unavailable. Install @supabase/supabase-js and restart." };
 
 const createNoopClient = (): SupabaseLikeClient => ({
+  from: () => {
+    const query: SupabaseTableQuery = {
+      select: () => query,
+      eq: () => query,
+      maybeSingle: async () => ({ data: null, error: noopError }),
+      upsert: async () => ({ data: null, error: noopError }),
+    };
+    return query;
+  },
   auth: {
     getSession: async () => ({ data: { session: null }, error: noopError }),
     signInWithPassword: async () => ({ data: { session: null, user: null }, error: noopError }),
