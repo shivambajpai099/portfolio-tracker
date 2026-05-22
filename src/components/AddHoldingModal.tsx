@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { PortfolioGuideModal } from "./PortfolioGuideModal";
 import { fetchLivePrices, searchTickerSuggestions } from "../services/yahooFinanceService";
 import { colors, radii, spacing, typography } from "../theme";
 import type { TickerSuggestion } from "../types/marketData";
@@ -41,6 +42,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   const [livePriceLoading, setLivePriceLoading] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [suggestions, setSuggestions] = useState<SelectedTicker[]>([]);
+  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
     if (!visible) {
@@ -135,6 +137,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
   const handleClose = () => {
     resetState();
+    setShowGuide(false);
     onClose();
   };
 
@@ -187,7 +190,12 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
       <View style={styles.overlay}>
         <View style={styles.modalCard}>
-          <Text style={styles.title}>Add Holding</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.title}>Add Holding</Text>
+            <Pressable style={styles.helpBtn} onPress={() => setShowGuide(true)}>
+              <Text style={styles.helpBtnText}>How to fill</Text>
+            </Pressable>
+          </View>
 
           <Text style={styles.label}>Search Ticker</Text>
           <TextInput
@@ -264,6 +272,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
             keyboardType="decimal-pad"
             style={styles.inputCompact}
           />
+          <Text style={styles.inputHint}>Quantity = total units you currently own (for example, 12.5).</Text>
           <TextInput
             value={averagePrice}
             onChangeText={setAveragePrice}
@@ -272,6 +281,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
             keyboardType="decimal-pad"
             style={styles.inputCompact}
           />
+          <Text style={styles.inputHint}>Average buy price = weighted cost per unit in the same currency as the ticker.</Text>
 
           <View style={styles.actionsRow}>
             <Pressable style={styles.cancelBtn} onPress={handleClose}>
@@ -289,6 +299,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
           </View>
         </View>
       </View>
+      <PortfolioGuideModal visible={showGuide} onClose={() => setShowGuide(false)} />
     </Modal>
   );
 }
@@ -312,6 +323,22 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: typography.subheading,
     fontWeight: typography.weightSemibold,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  helpBtn: {
+    borderRadius: radii.md,
+    backgroundColor: colors.bg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  helpBtnText: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
   label: {
     marginTop: spacing.lg,
@@ -337,6 +364,11 @@ const styles = StyleSheet.create({
     color: colors.text,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
+  },
+  inputHint: {
+    marginTop: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.micro,
   },
   loadingRow: {
     marginTop: spacing.md,

@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
+import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import {
   calcConcentrationRisk,
@@ -38,9 +39,25 @@ export default function DashboardScreen() {
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
+  const hydrated = usePortfolioStore((s) => s.hydrated);
   const updateSettings = usePortfolioStore((s) => s.updateSettings);
 
   const [geoFilter, setGeoFilter] = useState<GeoFilter>("ALL");
+  const [showGuide, setShowGuide] = useState(false);
+
+  useEffect(() => {
+    if (!hydrated || settings.onboardingTipsSeen) {
+      return;
+    }
+    setShowGuide(true);
+  }, [hydrated, settings.onboardingTipsSeen]);
+
+  const closeGuide = () => {
+    setShowGuide(false);
+    if (!settings.onboardingTipsSeen) {
+      updateSettings({ onboardingTipsSeen: true });
+    }
+  };
 
   const rc: Currency = settings.reportingCurrency;
 
@@ -146,6 +163,11 @@ export default function DashboardScreen() {
             })}
           </View>
         </View>
+
+        <Pressable style={styles.guideCta} onPress={() => setShowGuide(true)}>
+          <Text style={styles.guideCtaTitle}>New here? Open Portfolio Guide</Text>
+          <Text style={styles.guideCtaSubtitle}>See how metrics work and how to enter holdings correctly.</Text>
+        </Pressable>
 
         <View style={styles.heroRow}>
           <View style={styles.heroLeft}>
@@ -320,6 +342,7 @@ export default function DashboardScreen() {
           </View>
         </View>
       </ScrollView>
+      <PortfolioGuideModal visible={showGuide} onClose={closeGuide} />
     </ScreenContainer>
   );
 }
@@ -338,6 +361,24 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
+  },
+  guideCta: {
+    marginTop: -spacing.xl,
+    marginBottom: spacing.xxl,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  guideCtaTitle: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
+  },
+  guideCtaSubtitle: {
+    marginTop: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.caption,
   },
   filterRow: {
     flexDirection: "row",

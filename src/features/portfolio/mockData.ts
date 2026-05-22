@@ -94,5 +94,6 @@ export const seedSettings: PortfolioSettings = {
   includeFamilyAccounts: true,
   allocationBasis: "CURRENT_VALUE",
   allocationIncludeCash: true,
+  onboardingTipsSeen: false,
 };
 

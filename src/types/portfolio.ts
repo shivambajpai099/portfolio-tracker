@@ -52,6 +52,8 @@ export interface PortfolioSettings {
   allocationBasis: AllocationBasis;
   /** Whether cash balances are included when computing allocation percentages. */
   allocationIncludeCash: boolean;
+  /** True after the onboarding tips modal has been shown once. */
+  onboardingTipsSeen: boolean;
   lastViewedAt?: TimestampISO;
   updatedAt?: TimestampISO;
 }

@@ -13,6 +13,12 @@ import type {
   PortfolioSettings,
 } from "../types/portfolio";
 
+const normalizeSettings = (settings: Partial<PortfolioSettings> | undefined): PortfolioSettings => ({
+  ...seedSettings,
+  ...(settings ?? {}),
+  onboardingTipsSeen: Boolean(settings?.onboardingTipsSeen),
+});
+
 interface PortfolioState {
   accounts: Account[];
   holdings: Holding[];
@@ -73,7 +79,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           accounts: snapshot.accounts,
           holdings: snapshot.holdings,
           cashHoldings: snapshot.cashHoldings,
-          settings: snapshot.settings,
+          settings: normalizeSettings(snapshot.settings),
           fxRates: snapshot.fxRates,
           snapshotUpdatedAt: snapshot.snapshotUpdatedAt,
         }),
@@ -192,10 +198,12 @@ export const usePortfolioStore = create<PortfolioState>()(
             accounts: state.accounts,
             holdings: state.holdings,
             cashHoldings: state.cashHoldings,
-            settings: state.settings,
+            settings: normalizeSettings(state.settings),
             fxRates: state.fxRates,
             snapshotUpdatedAt: new Date().toISOString(),
           });
+        } else if (state && typeof state.settings?.onboardingTipsSeen !== "boolean") {
+          state.updateSettings(normalizeSettings(state.settings));
         }
         state?.setHydrated(true);
       },

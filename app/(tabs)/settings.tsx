@@ -3,6 +3,7 @@ import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
@@ -35,6 +36,7 @@ export default function SettingsScreen() {
   const [rateInput, setRateInput] = useState(String(fxRates.USDINR));
   const [rateError, setRateError] = useState("");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
 
   const flash = (msg: string) => {
@@ -176,6 +178,18 @@ export default function SettingsScreen() {
     flash("Signed out.");
   };
 
+  const closeGuide = () => {
+    setShowGuide(false);
+    if (!settings.onboardingTipsSeen) {
+      updateSettings({ onboardingTipsSeen: true });
+    }
+  };
+
+  const showGuideNextLaunch = () => {
+    updateSettings({ onboardingTipsSeen: false });
+    flash("Guide will auto-open next time you open the app.");
+  };
+
   return (
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -261,6 +275,25 @@ export default function SettingsScreen() {
         </View>
 
         {/* ── Data ─────────────────────────────────────────────────── */}
+        <SectionLabel>Help</SectionLabel>
+        <View style={styles.cardList}>
+          <Pressable onPress={() => setShowGuide(true)} style={styles.actionCard}>
+            <View>
+              <Text style={styles.actionTitle}>Portfolio Guide</Text>
+              <Text style={styles.actionSubtitle}>Understand metrics, filters, and how to input holdings</Text>
+            </View>
+            <Text style={styles.actionArrow}>?</Text>
+          </Pressable>
+          <Pressable onPress={showGuideNextLaunch} style={styles.actionCard}>
+            <View>
+              <Text style={styles.actionTitle}>Show Guide on Next Launch</Text>
+              <Text style={styles.actionSubtitle}>Useful when sharing the app with someone new</Text>
+            </View>
+            <Text style={styles.actionArrow}>↻</Text>
+          </Pressable>
+        </View>
+
+        {/* ── Data ─────────────────────────────────────────────────── */}
         <SectionLabel>Data</SectionLabel>
         <View style={styles.cardList}>
           <Pressable onPress={handleExport} style={styles.actionCard}>
@@ -322,6 +355,7 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
+      <PortfolioGuideModal visible={showGuide} onClose={closeGuide} />
     </ScreenContainer>
   );
 }
