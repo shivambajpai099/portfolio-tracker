@@ -264,9 +264,6 @@ export default function DashboardScreen() {
                     </View>
                   </View>
 
-                  <View style={styles.allocationTrack}>
-                    <View style={[styles.allocationFill, { width: `${Math.min(item.allocationPct, 100)}%`, backgroundColor: barColor }]} />
-                  </View>
 
                   <View style={styles.allocationFooter}>
                     <Text style={styles.allocationGainLabel}>{secondaryLabel} {formatMoney(secondaryValue, rc)}</Text>
@@ -298,9 +295,6 @@ export default function DashboardScreen() {
                     <Text style={styles.allocationPct}>{cashAllocationPct.toFixed(1)}%</Text>
                     <Text style={styles.allocationValue}>{formatMoney(cashValueRC, rc)}</Text>
                   </View>
-                </View>
-                <View style={styles.allocationTrack}>
-                  <View style={[styles.allocationFill, { width: `${Math.min(cashAllocationPct, 100)}%`, backgroundColor: CASH_COLOR }]} />
                 </View>
               </View>
             ) : null}
@@ -583,18 +577,6 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: typography.micro,
     marginTop: 1,
-  },
-  allocationTrack: {
-    marginBottom: spacing.xs,
-    height: 4,
-    width: "100%",
-    overflow: "hidden",
-    borderRadius: radii.pill,
-    backgroundColor: colors.surface,
-  },
-  allocationFill: {
-    height: "100%",
-    borderRadius: radii.pill,
   },
   allocationFooter: {
     flexDirection: "row",

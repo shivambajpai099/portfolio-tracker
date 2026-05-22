@@ -433,10 +433,6 @@ export default function HoldingsScreen() {
                     </View>
                   </View>
 
-                  {/* Allocation bar */}
-                  <View style={styles.allocTrack}>
-                    <View style={[styles.allocFill, { width: `${Math.min(group.allocationPct, 100)}%` }]} />
-                  </View>
 
                   {/* Metrics row */}
                   <View style={styles.metricRow}>
@@ -751,19 +747,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
     color: colors.muted,
     fontSize: typography.micro,
-  },
-  allocTrack: {
-    marginBottom: spacing.md,
-    height: 4,
-    width: "100%",
-    overflow: "hidden",
-    borderRadius: radii.pill,
-    backgroundColor: colors.bg,
-  },
-  allocFill: {
-    height: "100%",
-    backgroundColor: colors.accent,
-    borderRadius: radii.pill,
   },
   metricRow: {
     flexDirection: "row",
