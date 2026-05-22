@@ -13,6 +13,8 @@ const SYMBOL_PATTERN = /^[A-Z0-9.\-^=]+$/;
 const EDGE_CACHE_STALE = "public, s-maxage=1200, stale-while-revalidate=600";
 const EDGE_CACHE_MISS = "public, s-maxage=30, stale-while-revalidate=120";
 const RETRYABLE_UPSTREAM_STATUSES = new Set([401, 429, 500, 502, 503, 504]);
+const FINNHUB_API_KEY = String(process.env.FINNHUB_API_KEY ?? "").trim();
+const FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote";
 
 const CACHE = new Map<string, CacheEntry>();
 
@@ -20,6 +22,19 @@ const YAHOO_QUOTE_BASE_URLS = [
   "https://query2.finance.yahoo.com",
   "https://query1.finance.yahoo.com",
 ];
+
+type YahooCompatiblePayload = {
+  quoteResponse: {
+    result: Array<{
+      symbol: string;
+      regularMarketPrice: number;
+      regularMarketTime: number;
+      currency: string;
+      exchange: string;
+      fullExchangeName: string;
+    }>;
+  };
+};
 
 const toStringQuery = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -73,6 +88,65 @@ const putCache = (key: string, payload: unknown): void => {
 
 const delay = async (ms: number): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+const inferCurrency = (symbol: string): string => {
+  if (symbol.endsWith(".NS") || symbol.endsWith(".BO")) {
+    return "INR";
+  }
+  return "USD";
+};
+
+const fetchFinnhubQuotes = async (normalized: string, signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  if (!FINNHUB_API_KEY) {
+    return null;
+  }
+
+  const symbols = normalized.split(",").filter(Boolean);
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const endpoint = `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(FINNHUB_API_KEY)}`;
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+        signal,
+      });
+
+      if (!response.ok) {
+        if (RETRYABLE_UPSTREAM_STATUSES.has(response.status) || response.status === 403) {
+          return null;
+        }
+        return null;
+      }
+
+      const payload = (await response.json()) as { c?: number; t?: number };
+      if (typeof payload.c !== "number") {
+        return null;
+      }
+
+      return {
+        symbol,
+        regularMarketPrice: payload.c,
+        regularMarketTime: typeof payload.t === "number" ? payload.t : Math.floor(Date.now() / 1000),
+        currency: inferCurrency(symbol),
+        exchange: "Unknown",
+        fullExchangeName: "Unknown",
+      };
+    })
+  );
+
+  const filtered = results.filter(
+    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
+  );
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  return {
+    quoteResponse: {
+      result: filtered,
+    },
+  };
 };
 
 const fetchQuoteWithFailover = async (normalized: string, signal: AbortSignal): Promise<Response> => {
@@ -159,25 +233,43 @@ export default async function handler(req: any, res: any) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
-    const upstream = await fetchQuoteWithFailover(normalized, controller.signal).finally(() => {
-      clearTimeout(timeout);
-    });
-
-    res.setHeader("X-Upstream-Status", String(upstream.status));
-
-    if (!upstream.ok) {
-      if (cached) {
-        res.setHeader("Cache-Control", EDGE_CACHE_STALE);
-        res.setHeader("X-Cache", "STALE");
-        res.status(200).json(cached.payload);
-        return;
+    let payload: unknown | null = null;
+    try {
+      try {
+        payload = await fetchFinnhubQuotes(normalized, controller.signal);
+        if (payload) {
+          res.setHeader("X-Upstream-Provider", "FINNHUB");
+          res.setHeader("X-Upstream-Status", "200");
+        }
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
       }
 
-      res.status(upstream.status === 404 ? 404 : 502).json({ error: "Quote upstream request failed" });
-      return;
+      if (!payload) {
+        const upstream = await fetchQuoteWithFailover(normalized, controller.signal);
+        res.setHeader("X-Upstream-Provider", "YAHOO");
+        res.setHeader("X-Upstream-Status", String(upstream.status));
+
+        if (!upstream.ok) {
+          if (cached) {
+            res.setHeader("Cache-Control", EDGE_CACHE_STALE);
+            res.setHeader("X-Cache", "STALE");
+            res.status(200).json(cached.payload);
+            return;
+          }
+
+          res.status(upstream.status === 404 ? 404 : 502).json({ error: "Quote upstream request failed" });
+          return;
+        }
+
+        payload = await upstream.json();
+      }
+    } finally {
+      clearTimeout(timeout);
     }
 
-    const payload = await upstream.json();
     putCache(normalized, payload);
 
     res.setHeader("Cache-Control", EDGE_CACHE_MISS);

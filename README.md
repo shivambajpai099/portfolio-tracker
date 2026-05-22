@@ -71,6 +71,7 @@ Create a `.env` file in the project root:
 EXPO_PUBLIC_SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co"
 EXPO_PUBLIC_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
 EXPO_PUBLIC_API_BASE_URL="https://YOUR_VERCEL_DOMAIN"
+FINNHUB_API_KEY="YOUR_FINNHUB_SERVER_KEY"
 ```
 
 Auth currently supports:
@@ -84,6 +85,7 @@ Notes:
 
 - `EXPO_PUBLIC_*` variables are required for Expo runtime access.
 - Web uses relative `/api/*` routes automatically; set `EXPO_PUBLIC_API_BASE_URL` for native builds so mobile can call the same Vercel serverless proxy endpoints.
+- `FINNHUB_API_KEY` is optional but recommended for more reliable `/api/quote` responses; it is server-side only and should be configured in your Vercel project environment variables.
 
 ## Cloud Sync (Snapshot-based)
 
