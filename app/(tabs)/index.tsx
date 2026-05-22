@@ -70,6 +70,21 @@ export default function DashboardScreen() {
     () => calcSymbolAllocations(filteredHoldings, filteredCashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash),
     [filteredHoldings, filteredCashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash]
   );
+  const rankedAllocations = useMemo(() => {
+    return [...allocations].sort((a, b) => {
+      if (b.allocationPct !== a.allocationPct) {
+        return b.allocationPct - a.allocationPct;
+      }
+
+      const aBasisValue = settings.allocationBasis === "INVESTED_VALUE" ? a.investedValue : a.currentValue;
+      const bBasisValue = settings.allocationBasis === "INVESTED_VALUE" ? b.investedValue : b.currentValue;
+      if (bBasisValue !== aBasisValue) {
+        return bBasisValue - aBasisValue;
+      }
+
+      return a.symbol.localeCompare(b.symbol);
+    });
+  }, [allocations, settings.allocationBasis]);
   const geoSplit = useMemo(() => calcGeographicSplit(holdings, fxRates, rc), [holdings, fxRates, rc]);
   const concentration = useMemo(() => calcConcentrationRisk(allocations), [allocations]);
 
@@ -82,12 +97,12 @@ export default function DashboardScreen() {
   // The remainder is the cash slice.
   const cashAllocationPct = useMemo(() => {
     if (!settings.allocationIncludeCash || cashValueRC === 0) return 0;
-    const symbolsTotal = allocations.reduce((sum, a) => sum + a.allocationPct, 0);
+    const symbolsTotal = rankedAllocations.reduce((sum, a) => sum + a.allocationPct, 0);
     return Math.max(0, 100 - symbolsTotal);
-  }, [allocations, settings.allocationIncludeCash, cashValueRC]);
+  }, [rankedAllocations, settings.allocationIncludeCash, cashValueRC]);
 
   const allocationDonutSlices = useMemo(() => {
-    const slices = allocations.map((a, i) => ({
+    const slices = rankedAllocations.map((a, i) => ({
       value: a.allocationPct,
       color: DONUT_PALETTE[i % DONUT_PALETTE.length],
     }));
@@ -95,12 +110,12 @@ export default function DashboardScreen() {
       slices.push({ value: cashAllocationPct, color: CASH_COLOR });
     }
     return slices;
-  }, [allocations, cashAllocationPct]);
+  }, [rankedAllocations, cashAllocationPct]);
 
   // Hero donut — same slices (no cash, just position overview)
   const donutSlices = useMemo(
-    () => allocations.map((a, i) => ({ value: a.allocationPct, color: DONUT_PALETTE[i % DONUT_PALETTE.length] })),
-    [allocations]
+    () => rankedAllocations.map((a, i) => ({ value: a.allocationPct, color: DONUT_PALETTE[i % DONUT_PALETTE.length] })),
+    [rankedAllocations]
   );
 
   const allocationContextLabel = [
@@ -235,14 +250,14 @@ export default function DashboardScreen() {
           <View style={styles.allocDonutWrap}>
             <DonutChart slices={allocationDonutSlices} size={160} strokeWidth={22} />
             <View style={styles.allocDonutCenter}>
-              <Text style={styles.allocDonutCenterValue}>{allocations.length}</Text>
+              <Text style={styles.allocDonutCenterValue}>{rankedAllocations.length}</Text>
               <Text style={styles.allocDonutCenterLabel}>positions</Text>
             </View>
           </View>
 
           {/* Ranked list */}
           <View style={styles.allocList}>
-            {allocations.map((item, i) => {
+            {rankedAllocations.map((item, i) => {
               const barColor = DONUT_PALETTE[i % DONUT_PALETTE.length];
               const displayValue = settings.allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue;
               const secondaryLabel = settings.allocationBasis === "INVESTED_VALUE" ? "Current" : "Invested";
@@ -284,7 +299,7 @@ export default function DashboardScreen() {
               <View style={styles.allocationItem}>
                 <View style={styles.allocationHeader}>
                   <View style={styles.allocationTitleWrap}>
-                    <Text style={styles.allocationRank}>{allocations.length + 1}</Text>
+                    <Text style={styles.allocationRank}>{rankedAllocations.length + 1}</Text>
                     <View style={[styles.allocationDot, { backgroundColor: CASH_COLOR }]} />
                     <View>
                       <Text style={styles.allocationSymbol}>CASH</Text>
@@ -299,7 +314,7 @@ export default function DashboardScreen() {
               </View>
             ) : null}
 
-            {allocations.length === 0 && cashAllocationPct === 0 ? (
+            {rankedAllocations.length === 0 && cashAllocationPct === 0 ? (
               <Text style={styles.emptyText}>Add holdings to see your allocation.</Text>
             ) : null}
           </View>
