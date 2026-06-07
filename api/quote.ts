@@ -143,6 +143,19 @@ const stripIndiaSuffix = (symbol: string): string => symbol.trim().toUpperCase()
 
 const indiaExchangeForSymbol = (symbol: string): "NSE" | "BOM" => (symbol.endsWith(".BO") ? "BOM" : "NSE");
 const indiaExchangeForTwelveData = (symbol: string): "NSE" | "BSE" => (symbol.endsWith(".BO") ? "BSE" : "NSE");
+const twelveDataCandidatesForIndiaSymbol = (symbol: string): string[] => {
+  const base = stripIndiaSuffix(symbol);
+  const exchange = indiaExchangeForTwelveData(symbol);
+  const candidates = [
+    `${base}:${exchange}`,
+    `${exchange}:${base}`,
+    `${base}.${exchange}`,
+    symbol,
+    base,
+  ];
+
+  return [...new Set(candidates)];
+};
 
 const partitionSymbols = (symbols: string[]): { india: string[]; other: string[] } => {
   const india: string[] = [];
@@ -440,67 +453,83 @@ const fetchTwelveDataIndiaQuotes = async (symbols: string[], signal: AbortSignal
     return null;
   }
 
+  const debugParts: string[] = [];
+
   const results = await Promise.all(
     symbols.map(async (symbol) => {
-      const base = stripIndiaSuffix(symbol);
       const exchange = indiaExchangeForTwelveData(symbol);
-      const tdSymbol = `${base}:${exchange}`;
-      const endpoint = `${TWELVEDATA_QUOTE_URL}?symbol=${encodeURIComponent(tdSymbol)}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
+      const candidates = twelveDataCandidatesForIndiaSymbol(symbol);
 
-      try {
-        const response = await fetch(endpoint, {
-          headers: {
-            Accept: "application/json",
-            "User-Agent":
-              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          },
-          signal,
-        });
+      for (const tdSymbol of candidates) {
+        const endpoint = `${TWELVEDATA_QUOTE_URL}?symbol=${encodeURIComponent(tdSymbol)}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
 
-        if (!response.ok) {
-          return null;
+        try {
+          const response = await fetch(endpoint, {
+            headers: {
+              Accept: "application/json",
+              "User-Agent":
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            },
+            signal,
+          });
+
+          if (!response.ok) {
+            debugParts.push(`${symbol}:${tdSymbol}:http${response.status}`);
+            continue;
+          }
+
+          const payload = (await response.json()) as {
+            price?: string;
+            close?: string;
+            previous_close?: string;
+            currency?: string;
+            exchange?: string;
+            timestamp?: number;
+            code?: number;
+            message?: string;
+            status?: string;
+          };
+
+          if (payload.status === "error" || payload.code) {
+            debugParts.push(`${symbol}:${tdSymbol}:${payload.code ?? "err"}`);
+            continue;
+          }
+
+          const priceCandidate = payload.price ?? payload.close ?? payload.previous_close;
+          const price = Number(String(priceCandidate ?? "").replace(/[^0-9.\-]/g, ""));
+          if (!Number.isFinite(price) || price <= 0) {
+            debugParts.push(`${symbol}:${tdSymbol}:noprice`);
+            continue;
+          }
+
+          debugParts.push(`${symbol}:${tdSymbol}:ok`);
+          return {
+            symbol,
+            regularMarketPrice: price,
+            regularMarketTime:
+              typeof payload.timestamp === "number" && Number.isFinite(payload.timestamp)
+                ? payload.timestamp
+                : Math.floor(Date.now() / 1000),
+            currency: payload.currency ?? "INR",
+            exchange: payload.exchange ?? exchange,
+            fullExchangeName: payload.exchange ?? exchange,
+          };
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") {
+            throw error;
+          }
+          debugParts.push(`${symbol}:${tdSymbol}:network`);
         }
-
-        const payload = (await response.json()) as {
-          close?: string;
-          previous_close?: string;
-          currency?: string;
-          exchange?: string;
-          timestamp?: number;
-          code?: number;
-          message?: string;
-          status?: string;
-        };
-
-        if (payload.status === "error" || payload.code) {
-          return null;
-        }
-
-        const priceCandidate = payload.close ?? payload.previous_close;
-        const price = Number(String(priceCandidate ?? "").replace(/[^0-9.\-]/g, ""));
-        if (!Number.isFinite(price) || price <= 0) {
-          return null;
-        }
-
-        return {
-          symbol,
-          regularMarketPrice: price,
-          regularMarketTime:
-            typeof payload.timestamp === "number" && Number.isFinite(payload.timestamp)
-              ? payload.timestamp
-              : Math.floor(Date.now() / 1000),
-          currency: payload.currency ?? "INR",
-          exchange: payload.exchange ?? exchange,
-          fullExchangeName: payload.exchange ?? exchange,
-        };
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          throw error;
-        }
-        return null;
       }
+
+      return null;
     })
   );
+
+  if (debugParts.length > 0) {
+    // Keep this bounded so headers stay under typical limits.
+    (fetchTwelveDataIndiaQuotes as unknown as { _debug?: string })._debug = debugParts.slice(0, 20).join("|");
+  }
 
   const filtered = results.filter(
     (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
@@ -701,7 +730,7 @@ const applyCorsHeaders = (res: any): void => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader(
     "Access-Control-Expose-Headers",
-    "X-Request-Id, X-Cache, X-Upstream-Provider, X-Upstream-Status, X-Upstream-Provider-India, X-India-Symbols, X-India-Status, X-India-Provider-Counts"
+    "X-Request-Id, X-Cache, X-Upstream-Provider, X-Upstream-Status, X-Upstream-Provider-India, X-India-Symbols, X-India-Status, X-India-Provider-Counts, X-India-TD-Debug"
   );
   res.setHeader("Vary", "Origin");
 };
@@ -801,6 +830,10 @@ export default async function handler(req: any, res: any) {
                   `NSE:${(nse?.quoteResponse.result ?? []).length}`,
                 ].join(",")
               );
+              const tdDebug = (fetchTwelveDataIndiaQuotes as unknown as { _debug?: string })._debug;
+              if (tdDebug) {
+                res.setHeader("X-India-TD-Debug", tdDebug);
+              }
 
               if (unique.length > 0) {
                 const providerParts = [];
