@@ -1,5 +1,6 @@
 import type {
   Account,
+  AllocationSnapshot,
   CashHolding,
   FxRates,
   Holding,
@@ -10,6 +11,7 @@ export interface PortfolioSnapshotData {
   accounts: Account[];
   holdings: Holding[];
   cashHoldings: CashHolding[];
+  allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
   fxRates: FxRates;
   snapshotUpdatedAt: string;
@@ -55,6 +57,26 @@ export const parseSnapshotPayload = (input: unknown): PortfolioSnapshotData | nu
     accounts: p.accounts,
     holdings: p.holdings,
     cashHoldings: p.cashHoldings,
+    allocationSnapshots: Array.isArray((p as Partial<PortfolioSnapshotData>).allocationSnapshots)
+      ? ((p as Partial<PortfolioSnapshotData>).allocationSnapshots as AllocationSnapshot[]).map((snapshot) => ({
+          ...snapshot,
+          topHoldings: Array.isArray(snapshot.topHoldings)
+            ? snapshot.topHoldings.map((holding) => ({
+                ...holding,
+                currentValue: typeof holding.currentValue === "number" ? holding.currentValue : 0,
+                investedValue: typeof holding.investedValue === "number" ? holding.investedValue : 0,
+                gainLossPct: typeof holding.gainLossPct === "number" ? holding.gainLossPct : 0,
+              }))
+            : [],
+          investedValue:
+            typeof snapshot.investedValue === "number" ? snapshot.investedValue : snapshot.totalPortfolioValue,
+          gainLoss:
+            typeof snapshot.gainLoss === "number"
+              ? snapshot.gainLoss
+              : snapshot.totalPortfolioValue -
+                (typeof snapshot.investedValue === "number" ? snapshot.investedValue : snapshot.totalPortfolioValue),
+        }))
+      : [],
     settings: p.settings,
     fxRates: p.fxRates,
     snapshotUpdatedAt: p.snapshotUpdatedAt,

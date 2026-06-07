@@ -45,6 +45,34 @@ export interface CashHolding {
 
 export type AllocationBasis = "CURRENT_VALUE" | "INVESTED_VALUE";
 
+/** User-defined target allocation across three buckets (must sum to 100). */
+export interface TargetAllocation {
+  indiaPct: number;
+  usPct: number;
+  cashPct: number;
+}
+
+export interface AllocationHoldingSnapshot {
+  symbol: string;
+  allocationPct: number;
+  currentValue: number;
+  investedValue: number;
+  gainLossPct: number;
+}
+
+export interface AllocationSnapshot {
+  date: TimestampISO;
+  totalPortfolioValue: number;
+  investedValue: number;
+  gainLoss: number;
+  indiaAllocationPct: number;
+  usAllocationPct: number;
+  cashAllocationPct: number;
+  topHoldings: AllocationHoldingSnapshot[];
+}
+
+export type TimelineRetention = "6M" | "1Y" | "2Y" | "ALL";
+
 export interface PortfolioSettings {
   reportingCurrency: Currency;
   includeFamilyAccounts: boolean;
@@ -54,6 +82,10 @@ export interface PortfolioSettings {
   allocationIncludeCash: boolean;
   /** True after the onboarding tips modal has been shown once. */
   onboardingTipsSeen: boolean;
+  /** User-defined target allocation for rebalancing suggestions. */
+  targetAllocation?: TargetAllocation | null;
+  /** How long to retain historical allocation/timeline snapshots. */
+  timelineRetention?: TimelineRetention;
   lastViewedAt?: TimestampISO;
   updatedAt?: TimestampISO;
 }

@@ -1,4 +1,4 @@
-import type { AllocationBasis, CashHolding, Currency, FxRates, Holding, LivePriceCache } from "../../types/portfolio";
+import type { AllocationBasis, CashHolding, Currency, FxRates, Holding, LivePriceCache, TargetAllocation } from "../../types/portfolio";
 
 // ---------------------------------------------------------------------------
 // FX helpers
@@ -281,6 +281,129 @@ export const calcPortfolioSnapshot = (
     geographicSplit: calcGeographicSplit(holdings, rates, reportingCurrency, priceCache),
     concentration: calcConcentrationRisk(allocations),
   };
+};
+
+// ---------------------------------------------------------------------------
+// Rebalancing suggestions
+// ---------------------------------------------------------------------------
+
+export interface RebalancingSuggestion {
+  region: "INDIA" | "US" | "CASH";
+  label: string;
+  targetPct: number;
+  currentPct: number;
+  /** positive = overweight, negative = underweight (in percentage points) */
+  diffPct: number;
+  /** Amount to move in reporting currency; positive = reduce, negative = buy more */
+  diffValue: number;
+  direction: "OVERWEIGHT" | "UNDERWEIGHT" | "ON_TARGET";
+}
+
+export interface RebalancingResult {
+  suggestions: RebalancingSuggestion[];
+  totalValue: number;
+  currency: Currency;
+  /** Whether the target percentages sum to 100 (within ±0.5). */
+  targetsValid: boolean;
+}
+
+/** Differences smaller than this (in pct points) are treated as "on target". */
+const REBALANCE_THRESHOLD = 1;
+
+export const calcRebalancingSuggestions = (
+  indiaValue: number,
+  usValue: number,
+  cashValue: number,
+  target: TargetAllocation,
+  reportingCurrency: Currency,
+): RebalancingResult => {
+  const totalValue = indiaValue + usValue + cashValue;
+  const targetSum = target.indiaPct + target.usPct + target.cashPct;
+  const targetsValid = Math.abs(targetSum - 100) < 0.5;
+
+  if (totalValue === 0) {
+    return { suggestions: [], totalValue: 0, currency: reportingCurrency, targetsValid };
+  }
+
+  const build = (
+    region: "INDIA" | "US" | "CASH",
+    label: string,
+    currentValue: number,
+    targetPct: number,
+  ): RebalancingSuggestion => {
+    const currentPct = (currentValue / totalValue) * 100;
+    const diffPct = currentPct - targetPct;
+    const diffValue = (diffPct / 100) * totalValue;
+    const direction: RebalancingSuggestion["direction"] =
+      Math.abs(diffPct) < REBALANCE_THRESHOLD
+        ? "ON_TARGET"
+        : diffPct > 0
+        ? "OVERWEIGHT"
+        : "UNDERWEIGHT";
+    return { region, label, targetPct, currentPct, diffPct, diffValue, direction };
+  };
+
+  return {
+    suggestions: [
+      build("INDIA", "Indian equities", indiaValue, target.indiaPct),
+      build("US", "US equities", usValue, target.usPct),
+      build("CASH", "Cash", cashValue, target.cashPct),
+    ],
+    totalValue,
+    currency: reportingCurrency,
+    targetsValid,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Deploy cash
+// ---------------------------------------------------------------------------
+
+export interface DeployCashSlice {
+  region: "INDIA" | "US" | "CASH";
+  label: string;
+  /** Normalised percentage share of the deploy amount (sums to 100). */
+  pct: number;
+  amount: number;
+}
+
+export interface DeployCashResult {
+  deployAmount: number;
+  slices: DeployCashSlice[];
+  currency: Currency;
+}
+
+/**
+ * Splits `deployAmount` across India equities, US equities, and cash-reserve
+ * proportionally to the user's target allocation.
+ *
+ * The target percentages are normalised before use so the function is safe
+ * even when targets don't sum to exactly 100.
+ */
+export const calcDeployCash = (
+  deployAmount: number,
+  target: TargetAllocation,
+  reportingCurrency: Currency,
+): DeployCashResult => {
+  const targetTotal = target.indiaPct + target.usPct + target.cashPct;
+
+  if (targetTotal === 0 || deployAmount <= 0) {
+    return { deployAmount, slices: [], currency: reportingCurrency };
+  }
+
+  const norm = (v: number) => (v / targetTotal) * 100;
+
+  const raw: Array<{ region: DeployCashSlice["region"]; label: string; pct: number }> = [
+    { region: "INDIA", label: "India equities",  pct: norm(target.indiaPct) },
+    { region: "US",    label: "US equities",     pct: norm(target.usPct)    },
+    { region: "CASH",  label: "Keep as cash",    pct: norm(target.cashPct)  },
+  ];
+
+  const slices: DeployCashSlice[] = raw
+    .filter((r) => r.pct > 0)
+    .map((r) => ({ ...r, amount: (r.pct / 100) * deployAmount }));
+
+  return { deployAmount, slices, currency: reportingCurrency };
 };
 
 

@@ -50,6 +50,27 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="xray"
+        options={{
+          title: "X-Ray",
+          tabBarIcon: ({ color, size }) => <Ionicons name="analytics-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="drift"
+        options={{
+          title: "Drift",
+          tabBarIcon: ({ color, size }) => <Ionicons name="trending-up-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="timeline"
+        options={{
+          title: "Timeline",
+          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="accounts"
         options={{
           title: "Accounts",

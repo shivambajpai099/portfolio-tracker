@@ -8,7 +8,7 @@ import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
-import type { AllocationBasis, Currency } from "../../src/types/portfolio";
+import type { AllocationBasis, Currency, TimelineRetention } from "../../src/types/portfolio";
 
 interface PortfolioExport {
   exportedAt: string;
@@ -274,6 +274,27 @@ export default function SettingsScreen() {
           })}
         </View>
 
+        <SectionLabel>History Retention</SectionLabel>
+        <View style={styles.currencyRowWrap}>
+          {([
+            ["6M", "6 Months"],
+            ["1Y", "1 Year"],
+            ["2Y", "2 Years"],
+            ["ALL", "All"],
+          ] as const).map(([value, label]) => {
+            const active = (settings.timelineRetention ?? "1Y") === value;
+            return (
+              <Pressable
+                key={value}
+                onPress={() => updateSettings({ timelineRetention: value as TimelineRetention })}
+                style={[styles.currencyPill, active && styles.currencyPillActive]}
+              >
+                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         {/* ── Data ─────────────────────────────────────────────────── */}
         <SectionLabel>Help</SectionLabel>
         <View style={styles.cardList}>
@@ -437,6 +458,12 @@ const styles = StyleSheet.create({
   currencyRow: {
     marginBottom: spacing.xxl,
     flexDirection: "row",
+    gap: spacing.sm,
+  },
+  currencyRowWrap: {
+    marginBottom: spacing.xxl,
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: spacing.sm,
   },
   currencyPill: {

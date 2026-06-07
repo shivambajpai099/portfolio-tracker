@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
+import { DonutChart } from "../../src/components/DonutChart";
+import { PortfolioHealthCard } from "../../src/components/PortfolioHealthCard";
+import { RebalancingCard } from "../../src/components/RebalancingCard";
+import { DeployCashCard } from "../../src/components/DeployCashCard";
 import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
-import { ScreenContainer } from "../../src/components/ScreenContainer";
 import {
   calcConcentrationRisk,
   calcGeographicSplit,
   calcPortfolioTotals,
+  calcRebalancingSuggestions,
   calcSymbolAllocations,
   convert,
 } from "../../src/features/portfolio/calculations";
@@ -105,10 +109,30 @@ export default function DashboardScreen() {
   const geoSplit = useMemo(() => calcGeographicSplit(holdings, fxRates, rc), [holdings, fxRates, rc]);
   const concentration = useMemo(() => calcConcentrationRisk(allocations), [allocations]);
 
+  // Top holding by allocation pct (rankedAllocations is already sorted desc)
+  const topHolding = rankedAllocations[0] ?? null;
+
   const cashValueRC = useMemo(
     () => filteredCashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
     [filteredCashHoldings, rc, fxRates]
   );
+
+  // For rebalancing we always use the full unfiltered portfolio (ignore geo filter)
+  const totalCashForRebalancing = useMemo(
+    () => cashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
+    [cashHoldings, rc, fxRates]
+  );
+
+  const rebalancingResult = useMemo(() => {
+    if (!settings.targetAllocation) return null;
+    return calcRebalancingSuggestions(
+      geoSplit.indiaCurrentValue,
+      geoSplit.usCurrentValue,
+      totalCashForRebalancing,
+      settings.targetAllocation,
+      rc
+    );
+  }, [settings.targetAllocation, geoSplit.indiaCurrentValue, geoSplit.usCurrentValue, totalCashForRebalancing, rc]);
 
   // The sum of symbol allocationPcts may be < 100 when cash is included in the denominator.
   // The remainder is the cash slice.
@@ -168,6 +192,14 @@ export default function DashboardScreen() {
           <Text style={styles.guideCtaTitle}>New here? Open Portfolio Guide</Text>
           <Text style={styles.guideCtaSubtitle}>See how metrics work and how to enter holdings correctly.</Text>
         </Pressable>
+
+        <PortfolioHealthCard
+          concentration={concentration}
+          topHolding={topHolding}
+          cashAllocationPct={cashAllocationPct}
+          geoSplit={geoSplit}
+          allocationIncludeCash={settings.allocationIncludeCash}
+        />
 
         <View style={styles.heroRow}>
           <View style={styles.heroLeft}>
@@ -230,6 +262,18 @@ export default function DashboardScreen() {
             </View>
           </View>
         ) : null}
+
+        <RebalancingCard
+          targetAllocation={settings.targetAllocation}
+          result={rebalancingResult}
+          onSave={(target) => updateSettings({ targetAllocation: target })}
+        />
+
+        <DeployCashCard
+          totalCashRC={totalCashForRebalancing}
+          targetAllocation={settings.targetAllocation}
+          reportingCurrency={rc}
+        />
 
         <View style={styles.sectionGap}>
           <Text style={styles.sectionLabel}>Allocations</Text>

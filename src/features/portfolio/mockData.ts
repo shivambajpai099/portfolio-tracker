@@ -95,5 +95,6 @@ export const seedSettings: PortfolioSettings = {
   allocationBasis: "CURRENT_VALUE",
   allocationIncludeCash: true,
   onboardingTipsSeen: false,
+  timelineRetention: "1Y",
 };
 

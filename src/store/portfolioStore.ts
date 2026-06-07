@@ -2,15 +2,19 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { PortfolioSnapshotData } from "../features/portfolio/cloudSnapshot";
+import { calcSymbolAllocations, convert, holdingCost } from "../features/portfolio/calculations";
 import { exposureBySymbol, holdingMarketValue, toINR, toUSD } from "../features/portfolio/selectors";
 import { seedAccounts, seedCashHoldings, seedFxRates, seedHoldings, seedSettings } from "../features/portfolio/mockData";
 import type {
   Account,
+  AllocationSnapshot,
   CashHolding,
+  Currency,
   ExposureBySymbol,
   FxRates,
   Holding,
   PortfolioSettings,
+  TimelineRetention,
 } from "../types/portfolio";
 
 const normalizeSettings = (settings: Partial<PortfolioSettings> | undefined): PortfolioSettings => ({
@@ -19,10 +23,139 @@ const normalizeSettings = (settings: Partial<PortfolioSettings> | undefined): Po
   onboardingTipsSeen: Boolean(settings?.onboardingTipsSeen),
 });
 
+const DRIFT_SNAPSHOT_LIMIT = 500;
+
+const isIndiaHolding = (holding: Holding): boolean => {
+  const symbol = holding.symbol.toUpperCase();
+  return holding.currency === "INR" || symbol.endsWith(".NS") || symbol.endsWith(".BO");
+};
+
+const buildAllocationSnapshot = (
+  holdings: Holding[],
+  cashHoldings: CashHolding[],
+  fxRates: FxRates,
+  reportingCurrency: Currency,
+  date: string
+): AllocationSnapshot => {
+  let indiaValue = 0;
+  let usValue = 0;
+
+  let investedEquityValue = 0;
+
+  for (const holding of holdings) {
+    const value = convert(holdingMarketValue(holding), holding.currency, reportingCurrency, fxRates);
+    const invested = convert(holdingCost(holding), holding.currency, reportingCurrency, fxRates);
+    investedEquityValue += invested;
+    if (isIndiaHolding(holding)) {
+      indiaValue += value;
+    } else {
+      usValue += value;
+    }
+  }
+
+  const cashValue = cashHoldings.reduce(
+    (sum, item) => sum + convert(item.balance, item.currency, reportingCurrency, fxRates),
+    0
+  );
+
+  const investedValue = investedEquityValue + cashValue;
+  const totalPortfolioValue = indiaValue + usValue + cashValue;
+
+  const topHoldings = calcSymbolAllocations(
+    holdings,
+    cashHoldings,
+    fxRates,
+    reportingCurrency,
+    "CURRENT_VALUE",
+    true
+  )
+    .sort((a, b) => b.allocationPct - a.allocationPct)
+    .slice(0, 10)
+    .map((item) => ({
+      symbol: item.symbol,
+      allocationPct: item.allocationPct,
+      currentValue: item.currentValue,
+      investedValue: item.investedValue,
+      gainLossPct: item.gainLossPct,
+    }));
+
+  return {
+    date,
+    totalPortfolioValue,
+    investedValue,
+    gainLoss: totalPortfolioValue - investedValue,
+    indiaAllocationPct: totalPortfolioValue > 0 ? (indiaValue / totalPortfolioValue) * 100 : 0,
+    usAllocationPct: totalPortfolioValue > 0 ? (usValue / totalPortfolioValue) * 100 : 0,
+    cashAllocationPct: totalPortfolioValue > 0 ? (cashValue / totalPortfolioValue) * 100 : 0,
+    topHoldings,
+  };
+};
+
+const retentionToMonths = (retention: TimelineRetention | undefined): number | null => {
+  if (retention === "6M") return 6;
+  if (retention === "1Y") return 12;
+  if (retention === "2Y") return 24;
+  return null;
+};
+
+const pruneSnapshotsByRetention = (
+  snapshots: AllocationSnapshot[],
+  retention: TimelineRetention | undefined,
+  nowIso: string
+): AllocationSnapshot[] => {
+  const months = retentionToMonths(retention);
+  let filtered = snapshots;
+
+  if (months !== null) {
+    const cutoff = new Date(nowIso);
+    cutoff.setMonth(cutoff.getMonth() - months);
+    const cutoffTs = cutoff.getTime();
+    filtered = snapshots.filter((snapshot) => {
+      const ts = new Date(snapshot.date).getTime();
+      return Number.isFinite(ts) && ts >= cutoffTs;
+    });
+  }
+
+  if (filtered.length > DRIFT_SNAPSHOT_LIMIT) {
+    return filtered.slice(filtered.length - DRIFT_SNAPSHOT_LIMIT);
+  }
+
+  return filtered;
+};
+
+const normalizeAllocationSnapshots = (snapshots: AllocationSnapshot[]): AllocationSnapshot[] =>
+  snapshots.map((snapshot) => ({
+    ...snapshot,
+    investedValue:
+      typeof snapshot.investedValue === "number" ? snapshot.investedValue : snapshot.totalPortfolioValue,
+    gainLoss:
+      typeof snapshot.gainLoss === "number"
+        ? snapshot.gainLoss
+        : snapshot.totalPortfolioValue -
+          (typeof snapshot.investedValue === "number" ? snapshot.investedValue : snapshot.totalPortfolioValue),
+    topHoldings: Array.isArray(snapshot.topHoldings)
+      ? snapshot.topHoldings.map((holding) => ({
+          ...holding,
+          currentValue: typeof holding.currentValue === "number" ? holding.currentValue : 0,
+          investedValue: typeof holding.investedValue === "number" ? holding.investedValue : 0,
+          gainLossPct: typeof holding.gainLossPct === "number" ? holding.gainLossPct : 0,
+        }))
+      : [],
+  }));
+
+const appendAllocationSnapshot = (
+  snapshots: AllocationSnapshot[],
+  nextSnapshot: AllocationSnapshot,
+  retention: TimelineRetention | undefined
+): AllocationSnapshot[] => {
+  return pruneSnapshotsByRetention([...snapshots, nextSnapshot], retention, nextSnapshot.date);
+};
+
 interface PortfolioState {
   accounts: Account[];
   holdings: Holding[];
   cashHoldings: CashHolding[];
+  allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
   fxRates: FxRates;
   snapshotUpdatedAt: string;
@@ -58,17 +191,27 @@ export const usePortfolioStore = create<PortfolioState>()(
       accounts: seedAccounts,
       holdings: seedHoldings,
       cashHoldings: seedCashHoldings,
+      allocationSnapshots: [
+        buildAllocationSnapshot(
+          seedHoldings,
+          seedCashHoldings,
+          seedFxRates,
+          seedSettings.reportingCurrency,
+          new Date().toISOString()
+        ),
+      ],
       settings: seedSettings,
       fxRates: seedFxRates,
       snapshotUpdatedAt: new Date().toISOString(),
       hydrated: false,
       setHydrated: (value: boolean) => set({ hydrated: value }),
       getSnapshot: () => {
-        const { accounts, holdings, cashHoldings, settings, fxRates, snapshotUpdatedAt } = get();
+        const { accounts, holdings, cashHoldings, allocationSnapshots, settings, fxRates, snapshotUpdatedAt } = get();
         return {
           accounts,
           holdings,
           cashHoldings,
+          allocationSnapshots,
           settings,
           fxRates,
           snapshotUpdatedAt,
@@ -79,6 +222,23 @@ export const usePortfolioStore = create<PortfolioState>()(
           accounts: snapshot.accounts,
           holdings: snapshot.holdings,
           cashHoldings: snapshot.cashHoldings,
+          allocationSnapshots: pruneSnapshotsByRetention(
+            normalizeAllocationSnapshots(
+              snapshot.allocationSnapshots?.length
+                ? snapshot.allocationSnapshots
+                : [
+                    buildAllocationSnapshot(
+                      snapshot.holdings,
+                      snapshot.cashHoldings,
+                      snapshot.fxRates,
+                      snapshot.settings.reportingCurrency,
+                      snapshot.snapshotUpdatedAt
+                    ),
+                  ]
+            ),
+            snapshot.settings.timelineRetention,
+            snapshot.snapshotUpdatedAt
+          ),
           settings: normalizeSettings(snapshot.settings),
           fxRates: snapshot.fxRates,
           snapshotUpdatedAt: snapshot.snapshotUpdatedAt,
@@ -97,60 +257,135 @@ export const usePortfolioStore = create<PortfolioState>()(
           snapshotUpdatedAt: new Date().toISOString(),
         })),
       removeAccount: (accountId: string) =>
-        set((state) => ({
-          accounts: state.accounts.filter((account) => account.id !== accountId),
-          holdings: state.holdings.filter((holding) => holding.accountId !== accountId),
-          cashHoldings: state.cashHoldings.filter((cashHolding) => cashHolding.accountId !== accountId),
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const holdings = state.holdings.filter((holding) => holding.accountId !== accountId);
+          const cashHoldings = state.cashHoldings.filter((cashHolding) => cashHolding.accountId !== accountId);
+          return {
+            accounts: state.accounts.filter((account) => account.id !== accountId),
+            holdings,
+            cashHoldings,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
 
       addHolding: (holding: Holding) =>
-        set((state) => ({
-          holdings: [...state.holdings, holding],
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const holdings = [...state.holdings, holding];
+          return {
+            holdings,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(holdings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
       updateHolding: (holdingId: string, updates: Partial<Holding>) =>
-        set((state) => ({
-          holdings: state.holdings.map((holding) =>
+        set((state) => {
+          const now = new Date().toISOString();
+          const holdings = state.holdings.map((holding) =>
             holding.id === holdingId ? { ...holding, ...updates } : holding
-          ),
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+          );
+          return {
+            holdings,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(holdings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
       removeHolding: (holdingId: string) =>
-        set((state) => ({
-          holdings: state.holdings.filter((holding) => holding.id !== holdingId),
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const holdings = state.holdings.filter((holding) => holding.id !== holdingId);
+          return {
+            holdings,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(holdings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
 
       addCashHolding: (cashHolding: CashHolding) =>
-        set((state) => ({
-          cashHoldings: [...state.cashHoldings, cashHolding],
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const cashHoldings = [...state.cashHoldings, cashHolding];
+          return {
+            cashHoldings,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(state.holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
       updateCashHolding: (cashHoldingId: string, updates: Partial<CashHolding>) =>
-        set((state) => ({
-          cashHoldings: state.cashHoldings.map((cashHolding) =>
+        set((state) => {
+          const now = new Date().toISOString();
+          const cashHoldings = state.cashHoldings.map((cashHolding) =>
             cashHolding.id === cashHoldingId ? { ...cashHolding, ...updates } : cashHolding
-          ),
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+          );
+          return {
+            cashHoldings,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(state.holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
       removeCashHolding: (cashHoldingId: string) =>
-        set((state) => ({
-          cashHoldings: state.cashHoldings.filter((cashHolding) => cashHolding.id !== cashHoldingId),
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const cashHoldings = state.cashHoldings.filter((cashHolding) => cashHolding.id !== cashHoldingId);
+          return {
+            cashHoldings,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(state.holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
 
       updateSettings: (updates: Partial<PortfolioSettings>) =>
-        set((state) => ({
-          settings: { ...state.settings, ...updates },
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const settings = { ...state.settings, ...updates };
+          const retentionChanged =
+            typeof updates.timelineRetention !== "undefined" &&
+            updates.timelineRetention !== state.settings.timelineRetention;
+          return {
+            settings,
+            allocationSnapshots: retentionChanged
+              ? pruneSnapshotsByRetention(state.allocationSnapshots, settings.timelineRetention, now)
+              : state.allocationSnapshots,
+            snapshotUpdatedAt: now,
+          };
+        }),
       updateFxRates: (rates: FxRates) => set({ fxRates: rates, snapshotUpdatedAt: new Date().toISOString() }),
       clearAllData: () =>
         set({
           accounts: [],
           holdings: [],
           cashHoldings: [],
+          allocationSnapshots: [],
           settings: seedSettings,
           fxRates: seedFxRates,
           snapshotUpdatedAt: new Date().toISOString(),
@@ -188,6 +423,7 @@ export const usePortfolioStore = create<PortfolioState>()(
         accounts: state.accounts,
         holdings: state.holdings,
         cashHoldings: state.cashHoldings,
+        allocationSnapshots: state.allocationSnapshots,
         settings: state.settings,
         fxRates: state.fxRates,
         snapshotUpdatedAt: state.snapshotUpdatedAt,
@@ -198,11 +434,56 @@ export const usePortfolioStore = create<PortfolioState>()(
             accounts: state.accounts,
             holdings: state.holdings,
             cashHoldings: state.cashHoldings,
+            allocationSnapshots: state.allocationSnapshots,
             settings: normalizeSettings(state.settings),
             fxRates: state.fxRates,
             snapshotUpdatedAt: new Date().toISOString(),
           });
-        } else if (state && typeof state.settings?.onboardingTipsSeen !== "boolean") {
+        } else if (
+          state &&
+          (!Array.isArray(state.allocationSnapshots) || state.allocationSnapshots.length === 0) &&
+          (state.holdings.length > 0 || state.cashHoldings.length > 0)
+        ) {
+          state.replaceFromSnapshot({
+            accounts: state.accounts,
+            holdings: state.holdings,
+            cashHoldings: state.cashHoldings,
+            allocationSnapshots: [
+              buildAllocationSnapshot(
+                state.holdings,
+                state.cashHoldings,
+                state.fxRates,
+                state.settings.reportingCurrency,
+                new Date().toISOString()
+              ),
+            ],
+            settings: normalizeSettings(state.settings),
+            fxRates: state.fxRates,
+            snapshotUpdatedAt: state.snapshotUpdatedAt || new Date().toISOString(),
+          });
+        } else if (
+          state &&
+          Array.isArray(state.allocationSnapshots) &&
+          state.allocationSnapshots.some(
+            (snapshot) =>
+              typeof snapshot.investedValue !== "number" ||
+              typeof snapshot.gainLoss !== "number" ||
+              (snapshot.topHoldings ?? []).some((holding) => typeof holding.gainLossPct !== "number")
+          )
+        ) {
+          state.replaceFromSnapshot({
+            accounts: state.accounts,
+            holdings: state.holdings,
+            cashHoldings: state.cashHoldings,
+            allocationSnapshots: normalizeAllocationSnapshots(state.allocationSnapshots),
+            settings: normalizeSettings(state.settings),
+            fxRates: state.fxRates,
+            snapshotUpdatedAt: state.snapshotUpdatedAt || new Date().toISOString(),
+          });
+        } else if (
+          state &&
+          (typeof state.settings?.onboardingTipsSeen !== "boolean" || !state.settings?.timelineRetention)
+        ) {
           state.updateSettings(normalizeSettings(state.settings));
         }
         state?.setHydrated(true);
