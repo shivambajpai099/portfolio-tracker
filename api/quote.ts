@@ -143,20 +143,6 @@ const stripIndiaSuffix = (symbol: string): string => symbol.trim().toUpperCase()
 
 const indiaExchangeForSymbol = (symbol: string): "NSE" | "BOM" => (symbol.endsWith(".BO") ? "BOM" : "NSE");
 const indiaExchangeForTwelveData = (symbol: string): "NSE" | "BSE" => (symbol.endsWith(".BO") ? "BSE" : "NSE");
-const twelveDataCandidatesForIndiaSymbol = (symbol: string): string[] => {
-  const base = stripIndiaSuffix(symbol);
-  const exchange = indiaExchangeForTwelveData(symbol);
-  const candidates = [
-    `${base}:${exchange}`,
-    `${exchange}:${base}`,
-    `${base}.${exchange}`,
-    symbol,
-    base,
-  ];
-
-  return [...new Set(candidates)];
-};
-
 const partitionSymbols = (symbols: string[]): { india: string[]; other: string[] } => {
   const india: string[] = [];
   const other: string[] = [];
@@ -455,75 +441,119 @@ const fetchTwelveDataIndiaQuotes = async (symbols: string[], signal: AbortSignal
 
   const debugParts: string[] = [];
 
-  const results = await Promise.all(
-    symbols.map(async (symbol) => {
-      const exchange = indiaExchangeForTwelveData(symbol);
-      const candidates = twelveDataCandidatesForIndiaSymbol(symbol);
+  const symbolToInput = new Map<string, string>();
+  const fmt1List = symbols.map((symbol) => {
+    const base = stripIndiaSuffix(symbol);
+    const exchange = indiaExchangeForTwelveData(symbol);
+    const candidate = `${base}:${exchange}`;
+    symbolToInput.set(candidate, symbol);
+    return candidate;
+  });
+  const fmt2List = symbols.map((symbol) => {
+    const base = stripIndiaSuffix(symbol);
+    const exchange = indiaExchangeForTwelveData(symbol);
+    const candidate = `${exchange}:${base}`;
+    symbolToInput.set(candidate, symbol);
+    return candidate;
+  });
 
-      for (const tdSymbol of candidates) {
-        const endpoint = `${TWELVEDATA_QUOTE_URL}?symbol=${encodeURIComponent(tdSymbol)}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
+  const parseBatch = (
+    payload: unknown,
+    requestedSymbols: string[],
+  ): Array<YahooCompatiblePayload["quoteResponse"]["result"][number]> => {
+    const items: Array<YahooCompatiblePayload["quoteResponse"]["result"][number]> = [];
 
-        try {
-          const response = await fetch(endpoint, {
-            headers: {
-              Accept: "application/json",
-              "User-Agent":
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            },
-            signal,
-          });
+    const normalizeItem = (requested: string, quote: any): void => {
+      if (!quote || typeof quote !== "object") {
+        return;
+      }
 
-          if (!response.ok) {
-            debugParts.push(`${symbol}:${tdSymbol}:http${response.status}`);
-            continue;
-          }
+      if (quote.status === "error" || quote.code) {
+        return;
+      }
 
-          const payload = (await response.json()) as {
-            price?: string;
-            close?: string;
-            previous_close?: string;
-            currency?: string;
-            exchange?: string;
-            timestamp?: number;
-            code?: number;
-            message?: string;
-            status?: string;
-          };
+      const priceCandidate = quote.price ?? quote.close ?? quote.previous_close;
+      const price = Number(String(priceCandidate ?? "").replace(/[^0-9.\-]/g, ""));
+      if (!Number.isFinite(price) || price <= 0) {
+        return;
+      }
 
-          if (payload.status === "error" || payload.code) {
-            debugParts.push(`${symbol}:${tdSymbol}:${payload.code ?? "err"}`);
-            continue;
-          }
+      const originalSymbol = symbolToInput.get(requested) ?? requested;
+      items.push({
+        symbol: originalSymbol,
+        regularMarketPrice: price,
+        regularMarketTime:
+          typeof quote.timestamp === "number" && Number.isFinite(quote.timestamp)
+            ? quote.timestamp
+            : Math.floor(Date.now() / 1000),
+        currency: quote.currency ?? "INR",
+        exchange: quote.exchange ?? indiaExchangeForTwelveData(originalSymbol),
+        fullExchangeName: quote.exchange ?? indiaExchangeForTwelveData(originalSymbol),
+      });
+    };
 
-          const priceCandidate = payload.price ?? payload.close ?? payload.previous_close;
-          const price = Number(String(priceCandidate ?? "").replace(/[^0-9.\-]/g, ""));
-          if (!Number.isFinite(price) || price <= 0) {
-            debugParts.push(`${symbol}:${tdSymbol}:noprice`);
-            continue;
-          }
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      const obj = payload as Record<string, unknown>;
 
-          debugParts.push(`${symbol}:${tdSymbol}:ok`);
-          return {
-            symbol,
-            regularMarketPrice: price,
-            regularMarketTime:
-              typeof payload.timestamp === "number" && Number.isFinite(payload.timestamp)
-                ? payload.timestamp
-                : Math.floor(Date.now() / 1000),
-            currency: payload.currency ?? "INR",
-            exchange: payload.exchange ?? exchange,
-            fullExchangeName: payload.exchange ?? exchange,
-          };
-        } catch (error) {
-          if (error instanceof Error && error.name === "AbortError") {
-            throw error;
-          }
-          debugParts.push(`${symbol}:${tdSymbol}:network`);
+      // Multi-symbol response shape: { "SYM1": {...}, "SYM2": {...} }
+      let matchedMapShape = false;
+      for (const requested of requestedSymbols) {
+        if (obj[requested] !== undefined) {
+          matchedMapShape = true;
+          normalizeItem(requested, obj[requested]);
         }
       }
 
-      return null;
-    })
+      // Single-symbol response shape
+      if (!matchedMapShape && requestedSymbols.length === 1) {
+        normalizeItem(requestedSymbols[0], obj);
+      }
+    }
+
+    return items;
+  };
+
+  const fetchBatch = async (
+    tag: string,
+    requestedSymbols: string[],
+  ): Promise<Array<YahooCompatiblePayload["quoteResponse"]["result"][number]>> => {
+    const endpoint = `${TWELVEDATA_QUOTE_URL}?symbol=${encodeURIComponent(requestedSymbols.join(","))}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
+
+    try {
+      const response = await fetch(endpoint, {
+        headers: {
+          Accept: "application/json",
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        },
+        signal,
+      });
+
+      if (!response.ok) {
+        debugParts.push(`${tag}:http${response.status}`);
+        return [];
+      }
+
+      const payload = (await response.json()) as unknown;
+      const parsed = parseBatch(payload, requestedSymbols);
+      debugParts.push(`${tag}:ok:${parsed.length}`);
+      return parsed;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw error;
+      }
+      debugParts.push(`${tag}:network`);
+      return [];
+    }
+  };
+
+  const [fmt1, fmt2] = await Promise.all([
+    fetchBatch("fmt1", fmt1List),
+    fetchBatch("fmt2", fmt2List),
+  ]);
+
+  const filtered = [...fmt1, ...fmt2].filter(
+    (item, index, arr) => arr.findIndex((x) => x.symbol === item.symbol) === index
   );
 
   if (debugParts.length > 0) {
@@ -531,9 +561,6 @@ const fetchTwelveDataIndiaQuotes = async (symbols: string[], signal: AbortSignal
     (fetchTwelveDataIndiaQuotes as unknown as { _debug?: string })._debug = debugParts.slice(0, 20).join("|");
   }
 
-  const filtered = results.filter(
-    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
-  );
 
   if (filtered.length === 0) {
     return null;
