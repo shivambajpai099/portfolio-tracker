@@ -373,6 +373,12 @@ export interface DeployCashResult {
   currency: Currency;
 }
 
+export interface DeployCashAllocationContext {
+  indiaCurrentValue: number;
+  usCurrentValue: number;
+  cashCurrentValue: number;
+}
+
 /**
  * Splits `deployAmount` across India equities, US equities, and cash-reserve
  * proportionally to the user's target allocation.
@@ -384,11 +390,93 @@ export const calcDeployCash = (
   deployAmount: number,
   target: TargetAllocation,
   reportingCurrency: Currency,
+  currentAllocation?: DeployCashAllocationContext,
 ): DeployCashResult => {
   const targetTotal = target.indiaPct + target.usPct + target.cashPct;
 
   if (targetTotal === 0 || deployAmount <= 0) {
     return { deployAmount, slices: [], currency: reportingCurrency };
+  }
+
+  // When current allocation is available, allocate new cash toward the
+  // underweight buckets after accounting for the portfolio's existing mix.
+  if (currentAllocation) {
+    const currentTotal =
+      currentAllocation.indiaCurrentValue + currentAllocation.usCurrentValue + currentAllocation.cashCurrentValue;
+
+    if (currentTotal > 0) {
+      const totalAfterDeploy = currentTotal + deployAmount;
+      const raw: Array<{
+        region: DeployCashSlice["region"];
+        label: string;
+        targetPct: number;
+        currentValue: number;
+      }> = [
+        {
+          region: "INDIA",
+          label: "India equities",
+          targetPct: target.indiaPct,
+          currentValue: currentAllocation.indiaCurrentValue,
+        },
+        {
+          region: "US",
+          label: "US equities",
+          targetPct: target.usPct,
+          currentValue: currentAllocation.usCurrentValue,
+        },
+        {
+          region: "CASH",
+          label: "Keep as cash",
+          targetPct: target.cashPct,
+          currentValue: currentAllocation.cashCurrentValue,
+        },
+      ];
+
+      const needs = raw.map((item) => {
+        const targetValue = (item.targetPct / targetTotal) * totalAfterDeploy;
+        return {
+          ...item,
+          need: Math.max(0, targetValue - item.currentValue),
+        };
+      });
+
+      const totalNeed = needs.reduce((sum, item) => sum + item.need, 0);
+
+      if (totalNeed > 0) {
+        const allocated =
+          totalNeed <= deployAmount
+            ? needs.map((item) => ({ ...item, amount: item.need }))
+            : needs.map((item) => ({ ...item, amount: (item.need / totalNeed) * deployAmount }));
+
+        if (totalNeed < deployAmount) {
+          const remaining = deployAmount - totalNeed;
+          const cashEntry = allocated.find((item) => item.region === "CASH");
+          if (cashEntry) {
+            cashEntry.amount += remaining;
+          } else {
+            allocated.push({
+              region: "CASH",
+              label: "Keep as cash",
+              targetPct: target.cashPct,
+              currentValue: currentAllocation.cashCurrentValue,
+              need: remaining,
+              amount: remaining,
+            });
+          }
+        }
+
+        const slices: DeployCashSlice[] = allocated
+          .filter((item) => item.amount > 0)
+          .map((item) => ({
+            region: item.region,
+            label: item.label,
+            pct: deployAmount > 0 ? (item.amount / deployAmount) * 100 : 0,
+            amount: item.amount,
+          }));
+
+        return { deployAmount, slices, currency: reportingCurrency };
+      }
+    }
   }
 
   const norm = (v: number) => (v / targetTotal) * 100;

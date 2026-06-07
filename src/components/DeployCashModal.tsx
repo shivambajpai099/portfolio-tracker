@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { calcDeployCash } from "../features/portfolio/calculations";
-import type { DeployCashSlice } from "../features/portfolio/calculations";
+import { calcDeployCash, type DeployCashAllocationContext, type DeployCashSlice } from "../features/portfolio/calculations";
 import type { Currency, TargetAllocation } from "../types/portfolio";
 import { colors, radii, spacing, typography } from "../theme";
 import { formatMoney } from "../utils/format";
@@ -21,6 +20,7 @@ export interface DeployCashModalProps {
   totalCashRC: number;
   targetAllocation: TargetAllocation | null | undefined;
   reportingCurrency: Currency;
+  currentAllocation?: DeployCashAllocationContext | null;
   onClose: () => void;
 }
 
@@ -31,6 +31,7 @@ export function DeployCashModal({
   totalCashRC,
   targetAllocation,
   reportingCurrency,
+  currentAllocation,
   onClose,
 }: DeployCashModalProps) {
   const [amountStr, setAmountStr] = useState(() => Math.round(totalCashRC).toString());
@@ -49,8 +50,8 @@ export function DeployCashModal({
 
   const result = useMemo(() => {
     if (!targetAllocation) return null;
-    return calcDeployCash(deployAmount, targetAllocation, reportingCurrency);
-  }, [deployAmount, targetAllocation, reportingCurrency]);
+    return calcDeployCash(deployAmount, targetAllocation, reportingCurrency, currentAllocation ?? undefined);
+  }, [deployAmount, targetAllocation, reportingCurrency, currentAllocation]);
 
   const currencyPrefix = reportingCurrency === "INR" ? "₹" : "$";
 

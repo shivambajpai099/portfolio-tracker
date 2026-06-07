@@ -122,6 +122,15 @@ export default function DashboardScreen() {
     [filteredCashHoldings, rc, fxRates]
   );
 
+  const deployCashAllocationContext = useMemo(
+    () => ({
+      indiaCurrentValue: geoSplit.indiaCurrentValue,
+      usCurrentValue: geoSplit.usCurrentValue,
+      cashCurrentValue: totalCashForRebalancing,
+    }),
+    [geoSplit.indiaCurrentValue, geoSplit.usCurrentValue, totalCashForRebalancing]
+  );
+
   // For rebalancing we always use the full unfiltered portfolio (ignore geo filter)
   const totalCashForRebalancing = useMemo(
     () => cashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
@@ -316,6 +325,7 @@ export default function DashboardScreen() {
           totalCashRC={totalCashForRebalancing}
           targetAllocation={settings.targetAllocation}
           reportingCurrency={rc}
+          currentAllocation={deployCashAllocationContext}
           onPlanDeployment={() => setShowDeployCashModal(true)}
         />
 
@@ -442,6 +452,7 @@ export default function DashboardScreen() {
         totalCashRC={totalCashForRebalancing}
         targetAllocation={settings.targetAllocation}
         reportingCurrency={rc}
+        currentAllocation={deployCashAllocationContext}
         onClose={() => setShowDeployCashModal(false)}
       />
       <PortfolioGuideModal visible={showGuide} onClose={closeGuide} />

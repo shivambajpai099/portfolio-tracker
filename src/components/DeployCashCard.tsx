@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { calcDeployCash } from "../features/portfolio/calculations";
+import { calcDeployCash, type DeployCashAllocationContext } from "../features/portfolio/calculations";
 import type { Currency, TargetAllocation } from "../types/portfolio";
 import { colors, radii, spacing, typography } from "../theme";
 import { formatMoney } from "../utils/format";
@@ -20,6 +20,7 @@ export interface DeployCashCardProps {
   totalCashRC: number;
   targetAllocation: TargetAllocation | null | undefined;
   reportingCurrency: Currency;
+  currentAllocation?: DeployCashAllocationContext | null;
   onPlanDeployment: () => void;
 }
 
@@ -29,6 +30,7 @@ export function DeployCashCard({
   totalCashRC,
   targetAllocation,
   reportingCurrency,
+  currentAllocation,
   onPlanDeployment,
 }: DeployCashCardProps) {
   const currencyPrefix = reportingCurrency === "INR" ? "₹" : "$";
@@ -36,8 +38,8 @@ export function DeployCashCard({
   // Show suggested allocation for the full available cash at a glance
   const suggestedAllocation = useMemo(() => {
     if (!targetAllocation || totalCashRC <= 0) return null;
-    return calcDeployCash(totalCashRC, targetAllocation, reportingCurrency);
-  }, [targetAllocation, totalCashRC, reportingCurrency]);
+    return calcDeployCash(totalCashRC, targetAllocation, reportingCurrency, currentAllocation ?? undefined);
+  }, [targetAllocation, totalCashRC, reportingCurrency, currentAllocation]);
 
   return (
     <View style={styles.card}>
