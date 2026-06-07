@@ -1,14 +1,13 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useMemo } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { calcDeployCash } from "../features/portfolio/calculations";
-import type { DeployCashSlice } from "../features/portfolio/calculations";
 import type { Currency, TargetAllocation } from "../types/portfolio";
 import { colors, radii, spacing, typography } from "../theme";
 import { formatMoney } from "../utils/format";
 
 // ─── Region colours ───────────────────────────────────────────────────────────
 
-const REGION_COLOR: Record<DeployCashSlice["region"], string> = {
+const REGION_COLOR: Record<string, string> = {
   INDIA: "#F59E0B",   // amber  — matches geo split
   US:    "#6366F1",   // indigo — matches geo split
   CASH:  "#374151",   // muted grey
@@ -17,10 +16,11 @@ const REGION_COLOR: Record<DeployCashSlice["region"], string> = {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface DeployCashCardProps {
-  /** Total cash available in reporting currency (used as the default amount). */
+  /** Total cash available in reporting currency. */
   totalCashRC: number;
   targetAllocation: TargetAllocation | null | undefined;
   reportingCurrency: Currency;
+  onPlanDeployment: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -29,108 +29,75 @@ export function DeployCashCard({
   totalCashRC,
   targetAllocation,
   reportingCurrency,
+  onPlanDeployment,
 }: DeployCashCardProps) {
-  const [amountStr, setAmountStr] = useState(() => Math.round(totalCashRC).toString());
-
-  // Keep in sync when external cash changes (e.g. after adding a cash holding)
-  useEffect(() => {
-    setAmountStr(Math.round(totalCashRC).toString());
-  }, [totalCashRC]);
-
-  const deployAmount = useMemo(
-    () => parseFloat(amountStr.replace(/[^0-9.]/g, "")) || 0,
-    [amountStr],
-  );
-
-  const result = useMemo(() => {
-    if (!targetAllocation) return null;
-    return calcDeployCash(deployAmount, targetAllocation, reportingCurrency);
-  }, [deployAmount, targetAllocation, reportingCurrency]);
-
   const currencyPrefix = reportingCurrency === "INR" ? "₹" : "$";
+
+  // Show suggested allocation for the full available cash at a glance
+  const suggestedAllocation = useMemo(() => {
+    if (!targetAllocation || totalCashRC <= 0) return null;
+    return calcDeployCash(totalCashRC, targetAllocation, reportingCurrency);
+  }, [targetAllocation, totalCashRC, reportingCurrency]);
 
   return (
     <View style={styles.card}>
-      <Text style={styles.title}>Deploy Cash</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Deploy Cash</Text>
+        {targetAllocation && (
+          <Pressable onPress={onPlanDeployment} style={styles.actionBtn}>
+            <Text style={styles.actionBtnText}>Plan Deployment</Text>
+          </Pressable>
+        )}
+      </View>
 
       {/* ── No target set ── */}
       {!targetAllocation && (
         <Text style={styles.emptyText}>
-          Set a target allocation in Rebalancing Suggestions to see deployment guidance.
+          Set your target allocation in the Rebalancing Suggestions card to plan how to split your cash across India equities, US equities, and reserves.
         </Text>
       )}
 
-      {/* ── Main UI ── */}
+      {/* ── Available cash summary ── */}
       {targetAllocation && (
         <>
-          {/* Amount input */}
-          <View style={styles.inputBlock}>
-            <Text style={styles.inputLabel}>Cash to deploy</Text>
-            <View style={styles.inputWrap}>
-              <Text style={styles.currencyPrefix}>{currencyPrefix}</Text>
-              <TextInput
-                style={styles.input}
-                value={amountStr}
-                onChangeText={setAmountStr}
-                keyboardType="numeric"
-                selectTextOnFocus
-                placeholderTextColor={colors.muted}
-                placeholder="0"
-              />
-            </View>
+          <View style={styles.cashSummary}>
+            <Text style={styles.cashLabel}>Available Cash</Text>
+            <Text style={styles.cashValue}>
+              {currencyPrefix}{formatMoney(totalCashRC, reportingCurrency).replace(/^[₹$]/, "")}
+            </Text>
           </View>
 
-          {/* Allocation rows */}
-          {result && result.slices.length > 0 && deployAmount > 0 && (
-            <View style={styles.allocationBlock}>
-              <Text style={styles.sectionLabel}>Suggested allocation</Text>
-
-              {result.slices.map((slice) => {
-                const barColor = REGION_COLOR[slice.region];
-                return (
-                  <View key={slice.region} style={styles.sliceRow}>
-                    {/* Label row */}
-                    <View style={styles.sliceMeta}>
-                      <View style={styles.sliceLabelLeft}>
+          {/* Suggested allocation summary */}
+          {suggestedAllocation && suggestedAllocation.slices.length > 0 && (
+            <View style={styles.allocationSummary}>
+              <Text style={styles.summaryLabel}>Suggested allocation summary</Text>
+              <View style={styles.summaryGrid}>
+                {suggestedAllocation.slices.map((slice) => {
+                  const barColor = REGION_COLOR[slice.region];
+                  return (
+                    <View key={slice.region} style={styles.summaryItem}>
+                      <View style={styles.summaryHeader}>
                         <View style={[styles.dot, { backgroundColor: barColor }]} />
-                        <Text style={styles.sliceLabel}>{slice.label}</Text>
+                        <Text style={styles.summaryItemLabel}>{slice.label}</Text>
                       </View>
-                      <View style={styles.sliceAmountGroup}>
-                        <Text style={styles.slicePct}>{slice.pct.toFixed(0)}%</Text>
-                        <Text style={styles.sliceAmount}>
+                      <View style={styles.summaryValues}>
+                        <Text style={styles.summaryPct}>{slice.pct.toFixed(0)}%</Text>
+                        <Text style={styles.summaryAmount}>
                           {formatMoney(slice.amount, reportingCurrency)}
                         </Text>
                       </View>
                     </View>
-
-                    {/* Progress bar */}
-                    <View style={styles.barTrack}>
-                      <View
-                        style={[
-                          styles.barFill,
-                          {
-                            width: `${slice.pct}%` as unknown as number,
-                            backgroundColor: barColor,
-                          },
-                        ]}
-                      />
-                    </View>
-                  </View>
-                );
-              })}
+                  );
+                })}
+              </View>
             </View>
-          )}
-
-          {deployAmount === 0 && (
-            <Text style={styles.emptyText}>
-              Enter an amount above to see suggested allocation.
-            </Text>
           )}
         </>
       )}
     </View>
   );
 }
+
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
@@ -142,114 +109,100 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
   },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.lg,
+  },
   title: {
     color: colors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
-    marginBottom: spacing.md,
+    flex: 1,
+  },
+  actionBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.sm,
+    backgroundColor: colors.accent,
+  },
+  actionBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   emptyText: {
     color: colors.muted,
     fontSize: typography.caption,
     lineHeight: 18,
   },
-  // ── Input
-  inputBlock: {
-    gap: spacing.xs,
-    marginBottom: spacing.xl,
+  // ── Cash summary
+  cashSummary: {
+    marginBottom: spacing.lg,
   },
-  inputLabel: {
+  cashLabel: {
     color: colors.muted,
     fontSize: typography.micro,
     fontWeight: typography.weightMedium,
     textTransform: "uppercase",
     letterSpacing: 0.5,
+    marginBottom: spacing.xs,
   },
-  inputWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.bg,
-    borderRadius: radii.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    gap: spacing.xs,
-  },
-  currencyPrefix: {
-    color: colors.muted,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
-  },
-  input: {
-    flex: 1,
+  cashValue: {
     color: colors.text,
-    fontSize: typography.subheading,
+    fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
-    padding: 0,
   },
-  // ── Allocation list
-  allocationBlock: {
-    gap: spacing.lg,
+  // ── Allocation summary
+  allocationSummary: {
+    gap: spacing.md,
   },
-  sectionLabel: {
+  summaryLabel: {
     color: colors.muted,
     fontSize: typography.micro,
     fontWeight: typography.weightMedium,
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    marginBottom: -spacing.xs,
   },
-  sliceRow: {
-    gap: spacing.xs,
+  summaryGrid: {
+    gap: spacing.md,
   },
-  sliceMeta: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  summaryItem: {
+    gap: spacing.sm,
   },
-  sliceLabelLeft: {
+  summaryHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    flex: 1,
   },
   dot: {
     width: 8,
     height: 8,
     borderRadius: 4,
   },
-  sliceLabel: {
+  summaryItemLabel: {
     color: colors.text,
     fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
-  sliceAmountGroup: {
+  summaryValues: {
     flexDirection: "row",
-    alignItems: "baseline",
-    gap: spacing.sm,
+    justifyContent: "space-between",
+    paddingLeft: spacing.xl,
   },
-  slicePct: {
+  summaryPct: {
     color: colors.muted,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
-    width: 32,
-    textAlign: "right",
+    minWidth: 40,
   },
-  sliceAmount: {
+  summaryAmount: {
     color: colors.text,
     fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
     minWidth: 90,
     textAlign: "right",
-  },
-  // ── Progress bar
-  barTrack: {
-    height: 4,
-    width: "100%",
-    borderRadius: radii.pill,
-    backgroundColor: colors.bg,
-    overflow: "hidden",
-  },
-  barFill: {
-    height: "100%" as unknown as number,
   },
 });
 

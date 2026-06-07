@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
-import { DonutChart } from "../../src/components/DonutChart";
+import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { PortfolioHealthCard } from "../../src/components/PortfolioHealthCard";
 import { RebalancingCard } from "../../src/components/RebalancingCard";
 import { DeployCashCard } from "../../src/components/DeployCashCard";
+import { DeployCashModal } from "../../src/components/DeployCashModal";
 import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
 import {
   calcConcentrationRisk,
@@ -39,8 +41,10 @@ const GEO_INDIA_COLOR = "#F59E0B";
 const GEO_US_COLOR = "#6366F1";
 
 export default function DashboardScreen() {
+  const router = useRouter();
   const holdings = usePortfolioStore((s) => s.holdings);
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
+  const accounts = usePortfolioStore((s) => s.accounts);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
   const hydrated = usePortfolioStore((s) => s.hydrated);
@@ -48,6 +52,7 @@ export default function DashboardScreen() {
 
   const [geoFilter, setGeoFilter] = useState<GeoFilter>("ALL");
   const [showGuide, setShowGuide] = useState(false);
+  const [showDeployCashModal, setShowDeployCashModal] = useState(false);
 
   useEffect(() => {
     if (!hydrated || settings.onboardingTipsSeen) {
@@ -199,16 +204,54 @@ export default function DashboardScreen() {
           cashAllocationPct={cashAllocationPct}
           geoSplit={geoSplit}
           allocationIncludeCash={settings.allocationIncludeCash}
+          onAddHoldingPress={() => router.push("/(tabs)/holdings" as never)}
         />
+
+        {accounts.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>No accounts yet</Text>
+            <Text style={styles.emptyBody}>There is nothing to track because you have not added an account yet.</Text>
+            <Text style={styles.emptyBody}>Create an account first, then add holdings to see your dashboard come alive.</Text>
+            <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/accounts" as never)}>
+              <Text style={styles.emptyPrimaryBtnText}>Add Account</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         <View style={styles.heroRow}>
           <View style={styles.heroLeft}>
-            <Text style={styles.heroLabel}>Total value</Text>
+            <Text style={styles.heroLabel}>Total Portfolio Value</Text>
             <Text style={styles.heroValue}>{formatMoney(totals.currentValue, rc)}</Text>
+
             <View style={styles.heroStatsWrap}>
+              {/* Invested */}
               <View style={styles.heroStatRow}>
                 <Text style={styles.heroStatKey}>Invested</Text>
                 <Text style={styles.heroStatValue}>{formatMoney(totals.investedValue, rc)}</Text>
+              </View>
+
+              {/* Gain / Loss */}
+              <View style={styles.heroStatRow}>
+                <Text style={styles.heroStatKey}>Gain/Loss</Text>
+                <Text style={[
+                  styles.heroStatGain,
+                  totals.gainLoss >= 0 ? styles.positiveText : styles.negativeText,
+                ]}>
+                  {totals.gainLoss >= 0 ? "+" : ""}
+                  {formatMoney(totals.gainLoss, rc)}
+                </Text>
+                <View style={[
+                  styles.gainBadge,
+                  totals.gainLoss >= 0 ? styles.gainBadgePositive : styles.gainBadgeNegative,
+                ]}>
+                  <Text style={[
+                    styles.gainBadgeText,
+                    totals.gainLoss >= 0 ? styles.positiveText : styles.negativeText,
+                  ]}>
+                    {totals.gainLossPct >= 0 ? "+" : ""}
+                    {totals.gainLossPct.toFixed(2)}%
+                  </Text>
+                </View>
               </View>
             </View>
           </View>
@@ -273,6 +316,7 @@ export default function DashboardScreen() {
           totalCashRC={totalCashForRebalancing}
           targetAllocation={settings.targetAllocation}
           reportingCurrency={rc}
+          onPlanDeployment={() => setShowDeployCashModal(true)}
         />
 
         <View style={styles.sectionGap}>
@@ -381,11 +425,25 @@ export default function DashboardScreen() {
             ) : null}
 
             {rankedAllocations.length === 0 && cashAllocationPct === 0 ? (
-              <Text style={styles.emptyText}>Add holdings to see your allocation.</Text>
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyTitle}>No holdings yet</Text>
+                <Text style={styles.emptyBody}>Your allocation is empty because no investments have been added.</Text>
+                <Text style={styles.emptyBody}>Add your first holding to see allocation breakdown and risk insights.</Text>
+                <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+                  <Text style={styles.emptyPrimaryBtnText}>Add Holding</Text>
+                </Pressable>
+              </View>
             ) : null}
           </View>
         </View>
       </ScrollView>
+      <DeployCashModal
+        visible={showDeployCashModal}
+        totalCashRC={totalCashForRebalancing}
+        targetAllocation={settings.targetAllocation}
+        reportingCurrency={rc}
+        onClose={() => setShowDeployCashModal(false)}
+      />
       <PortfolioGuideModal visible={showGuide} onClose={closeGuide} />
     </ScreenContainer>
   );
@@ -476,7 +534,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   heroStatKey: {
-    width: 64,
+    width: 76,
     color: colors.muted,
     fontSize: typography.caption,
   },
@@ -486,12 +544,23 @@ const styles = StyleSheet.create({
   },
   heroStatGain: {
     fontSize: typography.body,
-    fontWeight: typography.weightMedium,
+    fontWeight: typography.weightSemibold,
   },
-  heroGainPercent: {
-    fontWeight: typography.weightRegular,
-    opacity: 0.7,
-    color: colors.text,
+  gainBadge: {
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 1,
+    marginLeft: spacing.xs,
+  },
+  gainBadgePositive: {
+    backgroundColor: `${colors.positive}22`,
+  },
+  gainBadgeNegative: {
+    backgroundColor: `${colors.negative}22`,
+  },
+  gainBadgeText: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
   donutWrap: {
     position: "relative",
@@ -699,6 +768,36 @@ const styles = StyleSheet.create({
   emptyText: {
     color: colors.muted,
     fontSize: typography.body,
+  },
+  emptyCard: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  emptyTitle: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  emptyBody: {
+    marginTop: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  emptyPrimaryBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  emptyPrimaryBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
 });
 

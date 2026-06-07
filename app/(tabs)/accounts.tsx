@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { convert } from "../../src/features/portfolio/calculations";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
 import type { Account, AccountType, CashHolding, Currency } from "../../src/types/portfolio";
@@ -30,6 +31,7 @@ export default function AccountsScreen() {
   const holdings = usePortfolioStore((state) => state.holdings);
   const cashHoldings = usePortfolioStore((state) => state.cashHoldings);
   const accounts = usePortfolioStore((state) => state.accounts);
+  const fxRates = usePortfolioStore((state) => state.fxRates);
   const addAccount = usePortfolioStore((state) => state.addAccount);
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
   const removeAccount = usePortfolioStore((state) => state.removeAccount);
@@ -60,9 +62,11 @@ export default function AccountsScreen() {
 
   const accountMetrics = useMemo(() => {
     const map = new Map<string, { currentValue: number; investedValue: number }>();
+    const accountCurrency = new Map<string, Currency>();
 
     for (const account of accounts) {
       map.set(account.id, { currentValue: 0, investedValue: 0 });
+      accountCurrency.set(account.id, account.baseCurrency);
     }
 
     for (const holding of holdings) {
@@ -70,9 +74,13 @@ export default function AccountsScreen() {
       if (!metric) {
         continue;
       }
+      const toCurrency = accountCurrency.get(holding.accountId);
+      if (!toCurrency) {
+        continue;
+      }
 
-      metric.currentValue += holding.quantity * holding.marketPrice;
-      metric.investedValue += holding.quantity * holding.averagePrice;
+      metric.currentValue += convert(holding.quantity * holding.marketPrice, holding.currency, toCurrency, fxRates);
+      metric.investedValue += convert(holding.quantity * holding.averagePrice, holding.currency, toCurrency, fxRates);
     }
 
     for (const cashHolding of cashHoldings) {
@@ -80,13 +88,18 @@ export default function AccountsScreen() {
       if (!metric) {
         continue;
       }
+      const toCurrency = accountCurrency.get(cashHolding.accountId);
+      if (!toCurrency) {
+        continue;
+      }
 
-      metric.currentValue += cashHolding.balance;
-      metric.investedValue += cashHolding.balance;
+      const convertedCash = convert(cashHolding.balance, cashHolding.currency, toCurrency, fxRates);
+      metric.currentValue += convertedCash;
+      metric.investedValue += convertedCash;
     }
 
     return map;
-  }, [accounts, holdings, cashHoldings]);
+  }, [accounts, holdings, cashHoldings, fxRates]);
 
   const startEditCash = (cash: CashHolding) => {
     setCashEditValues((prev) => ({ ...prev, [cash.id]: String(cash.balance) }));
@@ -202,6 +215,17 @@ export default function AccountsScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.listWrap}>
+          {accounts.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>No accounts yet</Text>
+              <Text style={styles.emptyBody}>Your portfolio is empty because there is no account to place holdings or cash in.</Text>
+              <Text style={styles.emptyBody}>Add your first account to get started.</Text>
+              <Pressable style={styles.emptyPrimaryBtn} onPress={openAddModal}>
+                <Text style={styles.emptyPrimaryBtnText}>Add Account</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           {accounts.map((account) => {
             const metrics = accountMetrics.get(account.id);
             const cash = cashByAccount.get(account.id) ?? [];
@@ -212,7 +236,10 @@ export default function AccountsScreen() {
                 <View style={styles.cardHeader}>
                   <View style={styles.cardHeaderLeft}>
                     <Text style={styles.accountName}>{account.name}</Text>
-                    <Text style={styles.accountMeta}>{account.broker} · {account.owner}</Text>
+                    <Text style={styles.accountMeta}>
+                      {account.broker ? `${account.broker} · ` : ""}
+                      {account.owner}
+                    </Text>
                   </View>
                   <View style={styles.cardHeaderRight}>
                     <Text style={styles.metricSmallLabel}>Current</Text>
@@ -422,6 +449,35 @@ const styles = StyleSheet.create({
   listWrap: {
     gap: spacing.lg,
     paddingBottom: spacing.xxxl,
+  },
+  emptyCard: {
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+  },
+  emptyTitle: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  emptyBody: {
+    marginTop: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  emptyPrimaryBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  emptyPrimaryBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   card: {
     borderRadius: radii.lg,

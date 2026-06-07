@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { calcSymbolAllocations, convert, holdingMarketValue } from "../../src/features/portfolio/calculations";
@@ -65,6 +66,7 @@ const riskColor = (level: RiskLevel): string => {
 };
 
 export default function PortfolioXRayScreen() {
+  const router = useRouter();
   const holdings = usePortfolioStore((s) => s.holdings);
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
   const fxRates = usePortfolioStore((s) => s.fxRates);
@@ -193,6 +195,20 @@ export default function PortfolioXRayScreen() {
         <Text style={styles.title}>Portfolio X-Ray</Text>
         <Text style={styles.subtitle}>Risk snapshot across concentration, geography, sector mix, and cash.</Text>
 
+        {holdings.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>No holdings to analyze yet</Text>
+            <Text style={styles.emptyText}>X-Ray insights are missing because there are no holdings in your portfolio.</Text>
+            <Text style={styles.emptyText}>Add your first holding to see concentration, geography, and sector analysis.</Text>
+            <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+              <Text style={styles.emptyPrimaryBtnText}>Add Holding</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {holdings.length === 0 ? null : (
+          <>
+
         <View style={styles.riskBanner}>
           <View style={[styles.riskDot, { backgroundColor: riskColor(topRisk) }]} />
           <View>
@@ -250,6 +266,8 @@ export default function PortfolioXRayScreen() {
             ))}
           </View>
         </View>
+          </>
+        )}
       </ScrollView>
     </ScreenContainer>
   );
@@ -306,6 +324,37 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xxl,
     color: colors.muted,
     fontSize: typography.caption,
+  },
+  emptyCard: {
+    marginBottom: spacing.xxxl,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  emptyTitle: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  emptyText: {
+    marginTop: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  emptyPrimaryBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  emptyPrimaryBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   riskBanner: {
     marginBottom: spacing.xxl,

@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { ConcentrationRisk, GeographicSplit, SymbolAllocation } from "../features/portfolio/calculations";
 import { colors, radii, spacing, typography } from "../theme";
 
@@ -112,6 +112,7 @@ export interface PortfolioHealthCardProps {
   cashAllocationPct: number;
   geoSplit: GeographicSplit;
   allocationIncludeCash: boolean;
+  onAddHoldingPress?: () => void;
 }
 
 export function PortfolioHealthCard({
@@ -120,8 +121,22 @@ export function PortfolioHealthCard({
   cashAllocationPct,
   geoSplit,
   allocationIncludeCash,
+  onAddHoldingPress,
 }: PortfolioHealthCardProps) {
-  if (concentration.symbolCount === 0) return null;
+  if (concentration.symbolCount === 0) {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.title}>Portfolio Health</Text>
+        <Text style={styles.emptyText}>We cannot score portfolio health yet because there are no holdings to analyze.</Text>
+        <Text style={styles.emptyText}>Add your first holding to unlock diversification and risk insights.</Text>
+        {onAddHoldingPress ? (
+          <Pressable style={styles.primaryBtn} onPress={onAddHoldingPress}>
+            <Text style={styles.primaryBtnText}>Add First Holding</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
 
   const insights = buildInsights(
     concentration,
@@ -216,6 +231,25 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: typography.caption,
     lineHeight: 18,
+  },
+  emptyText: {
+    marginTop: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  primaryBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  primaryBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
 });
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { Pressable, ScrollView, StyleSheet, Text, View, Platform } from "react-native";
@@ -56,6 +57,7 @@ const toSeries = (
 ): TimeSeriesPoint[] => snapshots.map((snapshot) => ({ label: compactDate(snapshot.date), value: selector(snapshot) }));
 
 export default function PortfolioTimelineScreen() {
+  const router = useRouter();
   const snapshots = usePortfolioStore((s) => s.allocationSnapshots);
   const rc = usePortfolioStore((s) => s.settings.reportingCurrency);
   const [range, setRange] = useState<RangeFilter>("6M");
@@ -208,71 +210,84 @@ export default function PortfolioTimelineScreen() {
           })}
         </View>
 
-        <View style={styles.chartSection}>
-          <Text style={styles.sectionLabel}>Monthly Portfolio Review</Text>
-
-          <View style={styles.monthRow}>
-            {monthlyOptions.slice(0, 12).map((item) => {
-              const active = activeMonthKey === item.key;
-              return (
-                <Pressable
-                  key={item.key}
-                  onPress={() => setSelectedMonthKey(item.key)}
-                  style={[styles.monthPill, active && styles.monthPillActive]}
-                >
-                  <Text style={[styles.monthText, active && styles.monthTextActive]}>{item.label.split(" ")[0]}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {activeMonthlyReview ? (
-            <View ref={setReviewCardNode} collapsable={false} style={styles.reviewCard}>
-              <Text style={styles.reviewTitle}>{activeMonthlyReview.month.label}</Text>
-
-              <View style={styles.reviewGrid}>
-                <ReviewMetric label="Value Change" value={signedMoney(activeMonthlyReview.valueChange, rc)} positive={activeMonthlyReview.valueChange >= 0} />
-                <ReviewMetric label="Net Capital" value={signedMoney(activeMonthlyReview.netCapitalAdded, rc)} positive={activeMonthlyReview.netCapitalAdded >= 0} />
-                <ReviewMetric label="Generated P/L" value={signedMoney(activeMonthlyReview.gainLossGenerated, rc)} positive={activeMonthlyReview.gainLossGenerated >= 0} />
-                <ReviewMetric label="Largest Holding" value={activeMonthlyReview.largest ? `${activeMonthlyReview.largest.symbol} ${activeMonthlyReview.largest.allocationPct.toFixed(1)}%` : "-"} positive />
-                <ReviewMetric label="Cash Allocation" value={`${activeMonthlyReview.end.cashAllocationPct.toFixed(1)}%`} positive />
-                <ReviewMetric label="India / US" value={`${activeMonthlyReview.end.indiaAllocationPct.toFixed(1)}% / ${activeMonthlyReview.end.usAllocationPct.toFixed(1)}%`} positive />
-                <ReviewMetric label="Best Position" value={activeMonthlyReview.best ? `${activeMonthlyReview.best.symbol} ${activeMonthlyReview.best.gainLossPct >= 0 ? "+" : ""}${activeMonthlyReview.best.gainLossPct.toFixed(1)}%` : "-"} positive />
-                <ReviewMetric label="Worst Position" value={activeMonthlyReview.worst ? `${activeMonthlyReview.worst.symbol} ${activeMonthlyReview.worst.gainLossPct >= 0 ? "+" : ""}${activeMonthlyReview.worst.gainLossPct.toFixed(1)}%` : "-"} positive={false} />
-              </View>
-
-              <View style={styles.summaryBlock}>
-                <Text style={styles.summaryLabel}>Narrative Summary</Text>
-                {activeMonthlyReview.sentences.map((sentence) => (
-                  <View key={sentence} style={styles.summaryRow}>
-                    <View style={styles.summaryDot} />
-                    <Text style={styles.summaryText}>{sentence}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          ) : (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>No monthly data yet</Text>
-              <Text style={styles.emptyText}>Once snapshots exist across a month, your monthly review appears here.</Text>
-            </View>
-          )}
-
-          <View style={styles.reviewActionRow}>
-            <Pressable onPress={exportReviewAsImage} style={styles.exportBtn} disabled={!activeMonthlyReview}>
-              <Text style={styles.exportBtnText}>Export as Image</Text>
-            </Pressable>
-            {reviewExportMsg ? <Text style={styles.exportStatus}>{reviewExportMsg}</Text> : null}
-          </View>
-        </View>
-
         {!latest ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>No timeline data yet</Text>
-            <Text style={styles.emptyText}>Add or update holdings to start building your portfolio history.</Text>
+            <Text style={styles.emptyTitle}>No portfolio history yet</Text>
+            <Text style={styles.emptyText}>
+              Charts and monthly summaries build up here as you add and update holdings over time. Every price update or new holding you record becomes a data point on your timeline.
+            </Text>
+            <Text style={styles.emptyText}>
+              Add your first holding to start building your portfolio's story.
+            </Text>
+            <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+              <Text style={styles.emptyBtnText}>Go to Holdings</Text>
+            </Pressable>
           </View>
         ) : (
           <>
+            <View style={styles.chartSection}>
+              <Text style={styles.sectionLabel}>Monthly Portfolio Review</Text>
+
+              <View style={styles.monthRow}>
+                {monthlyOptions.slice(0, 12).map((item) => {
+                  const active = activeMonthKey === item.key;
+                  return (
+                    <Pressable
+                      key={item.key}
+                      onPress={() => setSelectedMonthKey(item.key)}
+                      style={[styles.monthPill, active && styles.monthPillActive]}
+                    >
+                      <Text style={[styles.monthText, active && styles.monthTextActive]}>{item.label.split(" ")[0]}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {activeMonthlyReview ? (
+                <View ref={setReviewCardNode} collapsable={false} style={styles.reviewCard}>
+                  <Text style={styles.reviewTitle}>{activeMonthlyReview.month.label}</Text>
+
+                  <View style={styles.reviewGrid}>
+                    <ReviewMetric label="Value Change" value={signedMoney(activeMonthlyReview.valueChange, rc)} positive={activeMonthlyReview.valueChange >= 0} />
+                    <ReviewMetric label="Net Capital" value={signedMoney(activeMonthlyReview.netCapitalAdded, rc)} positive={activeMonthlyReview.netCapitalAdded >= 0} />
+                    <ReviewMetric label="Generated P/L" value={signedMoney(activeMonthlyReview.gainLossGenerated, rc)} positive={activeMonthlyReview.gainLossGenerated >= 0} />
+                    <ReviewMetric label="Largest Holding" value={activeMonthlyReview.largest ? `${activeMonthlyReview.largest.symbol} ${activeMonthlyReview.largest.allocationPct.toFixed(1)}%` : "-"} positive />
+                    <ReviewMetric label="Cash Allocation" value={`${activeMonthlyReview.end.cashAllocationPct.toFixed(1)}%`} positive />
+                    <ReviewMetric label="India / US" value={`${activeMonthlyReview.end.indiaAllocationPct.toFixed(1)}% / ${activeMonthlyReview.end.usAllocationPct.toFixed(1)}%`} positive />
+                    <ReviewMetric label="Best Position" value={activeMonthlyReview.best ? `${activeMonthlyReview.best.symbol} ${activeMonthlyReview.best.gainLossPct >= 0 ? "+" : ""}${activeMonthlyReview.best.gainLossPct.toFixed(1)}%` : "-"} positive />
+                    <ReviewMetric label="Worst Position" value={activeMonthlyReview.worst ? `${activeMonthlyReview.worst.symbol} ${activeMonthlyReview.worst.gainLossPct >= 0 ? "+" : ""}${activeMonthlyReview.worst.gainLossPct.toFixed(1)}%` : "-"} positive={false} />
+                  </View>
+
+                  <View style={styles.summaryBlock}>
+                    <Text style={styles.summaryLabel}>Narrative Summary</Text>
+                    {activeMonthlyReview.sentences.map((sentence) => (
+                      <View key={sentence} style={styles.summaryRow}>
+                        <View style={styles.summaryDot} />
+                        <Text style={styles.summaryText}>{sentence}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyTitle}>No monthly summary yet</Text>
+                  <Text style={styles.emptyText}>
+                    Monthly summaries appear once you have activity that spans at least a full calendar month. Keep your holdings and prices up to date to unlock best/worst performer breakdowns and a narrative summary.
+                  </Text>
+                  <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+                    <Text style={styles.emptyBtnText}>Update Holdings</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              <View style={styles.reviewActionRow}>
+                <Pressable onPress={exportReviewAsImage} style={styles.exportBtn} disabled={!activeMonthlyReview}>
+                  <Text style={styles.exportBtnText}>Export as Image</Text>
+                </Pressable>
+                {reviewExportMsg ? <Text style={styles.exportStatus}>{reviewExportMsg}</Text> : null}
+              </View>
+            </View>
+
             <View style={styles.summaryCard}>
               <MetricRow label="Total Value" value={formatMoney(latest.totalPortfolioValue, rc)} delta={change?.total} rc={rc} />
               <MetricRow label="Invested Value" value={formatMoney(latest.investedValue, rc)} delta={change?.invested} rc={rc} />
@@ -396,6 +411,20 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     color: colors.muted,
     fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  emptyBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  emptyBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   summaryCard: {
     marginBottom: spacing.xxl,

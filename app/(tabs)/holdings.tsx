@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
@@ -7,7 +8,7 @@ import { fetchLivePrices } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
-import type { Currency, Holding } from "../../src/types/portfolio";
+import { accountSupportsHoldings, type Currency, type Holding } from "../../src/types/portfolio";
 import { formatMoney } from "../../src/utils/format";
 
 type SortKey = "allocation_desc" | "gain_desc" | "alpha_asc" | "value_desc";
@@ -51,6 +52,7 @@ const isIndiaHolding = (holding: Holding): boolean => {
 };
 
 export default function HoldingsScreen() {
+  const router = useRouter();
   const settings = usePortfolioStore((state) => state.settings);
   const updateSettings = usePortfolioStore((state) => state.updateSettings);
   const accounts = usePortfolioStore((state) => state.accounts);
@@ -72,12 +74,17 @@ export default function HoldingsScreen() {
   const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<Holding | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Holding | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({
+    const [editDraft, setEditDraft] = useState<EditDraft>({
     accountId: "",
     quantity: "",
     averagePrice: "",
     marketPrice: "",
-  });
+    });
+
+    const brokerAccounts = useMemo(
+    () => accounts.filter((account) => accountSupportsHoldings(account.type)),
+    [accounts]
+    );
 
   const accountById = useMemo(() => {
     const map = new Map<string, (typeof accounts)[0]>();
@@ -270,15 +277,16 @@ export default function HoldingsScreen() {
     });
   };
 
-  const submitEdit = () => {
+    const submitEdit = () => {
     if (!editTarget) return;
     const quantity = parseNumber(editDraft.quantity);
     const averagePrice = parseNumber(editDraft.averagePrice);
     const marketPrice = parseNumber(editDraft.marketPrice);
-    if (!editDraft.accountId || quantity <= 0 || averagePrice <= 0 || marketPrice <= 0) return;
+    const validAccount = brokerAccounts.some((account) => account.id === editDraft.accountId);
+    if (!validAccount || quantity <= 0 || averagePrice <= 0 || marketPrice <= 0) return;
     updateHolding(editTarget.id, { accountId: editDraft.accountId, quantity, averagePrice, marketPrice, updatedAt: nowIso() });
     setEditTarget(null);
-  };
+    };
 
   const confirmDelete = () => {
     if (!deleteTarget) return;
@@ -288,6 +296,13 @@ export default function HoldingsScreen() {
 
   const toggleGroup = (id: string) =>
     setExpandedGroups((prev) => ({ ...prev, [id]: !prev[id] }));
+
+  const clearFilters = () => {
+    setSearchText("");
+    setCurrencyFilter("ALL");
+    setPerfFilter("ALL");
+    setSortKey("value_desc");
+  };
 
   return (
     <ScreenContainer>
@@ -411,7 +426,30 @@ export default function HoldingsScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.listWrap}>
-          {visibleGroups.map((group) => {
+          {holdings.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>{brokerAccounts.length === 0 ? "No broker account yet" : "No holdings yet"}</Text>
+              {brokerAccounts.length === 0 ? (
+                <>
+                  <Text style={styles.emptyText}>Holdings are missing because you do not have a broker account linked yet.</Text>
+                  <Text style={styles.emptyText}>Create a broker account first, then come back here to add your first holding.</Text>
+                  <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/accounts" as never)}>
+                    <Text style={styles.emptyPrimaryBtnText}>Add Broker Account</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.emptyText}>Your holdings list is empty because no investments have been added yet.</Text>
+                  <Text style={styles.emptyText}>Add your first holding to start tracking performance and allocation.</Text>
+                  <Pressable style={styles.emptyPrimaryBtn} onPress={() => setIsAddVisible(true)}>
+                    <Text style={styles.emptyPrimaryBtnText}>Add Holding</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
+          ) : null}
+
+          {holdings.length > 0 ? visibleGroups.map((group) => {
             const isExpanded = Boolean(expandedGroups[group.id]);
             const gainPositive = group.gainLoss >= 0;
 
@@ -508,11 +546,16 @@ export default function HoldingsScreen() {
                 ) : null}
               </View>
             );
-          })}
+          }) : null}
 
-          {visibleGroups.length === 0 ? (
+          {holdings.length > 0 && visibleGroups.length === 0 ? (
             <View style={styles.emptyWrap}>
-              <Text style={styles.emptyText}>No holdings match current filters.</Text>
+              <Text style={styles.emptyTitle}>No results for these filters</Text>
+              <Text style={styles.emptyText}>Your holdings are still there, but current filters hide them.</Text>
+              <Text style={styles.emptyText}>Clear filters to view everything again.</Text>
+              <Pressable style={styles.emptyPrimaryBtn} onPress={clearFilters}>
+                <Text style={styles.emptyPrimaryBtnText}>Clear Filters</Text>
+              </Pressable>
             </View>
           ) : null}
         </View>
@@ -520,7 +563,7 @@ export default function HoldingsScreen() {
 
       <AddHoldingModal
         visible={isAddVisible}
-        accounts={accounts}
+        accounts={brokerAccounts}
         onClose={() => setIsAddVisible(false)}
         onCreate={(input) => {
           addHolding({
@@ -546,7 +589,7 @@ export default function HoldingsScreen() {
 
             <Text style={styles.modalLabel}>Account</Text>
             <View style={styles.modalPillRow}>
-              {accounts.map((account) => {
+              {brokerAccounts.map((account) => {
                 const active = editDraft.accountId === account.id;
                 return (
                   <Pressable
@@ -843,9 +886,34 @@ const styles = StyleSheet.create({
     marginTop: spacing.xxxl,
     alignItems: "center",
   },
-  emptyText: {
-    color: colors.muted,
+  emptyCard: {
+    borderRadius: radii.xl,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+  },
+  emptyTitle: {
+    color: colors.text,
     fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  emptyText: {
+    marginTop: spacing.xs,
+    color: colors.muted,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  emptyPrimaryBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  emptyPrimaryBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   positiveText: {
     color: colors.positive,

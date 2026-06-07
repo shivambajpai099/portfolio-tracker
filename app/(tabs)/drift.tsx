@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
@@ -106,6 +107,7 @@ const buildHoldingChanges = (latest: AllocationSnapshot, baseline: AllocationSna
 };
 
 export default function PortfolioDriftScreen() {
+  const router = useRouter();
   const snapshots = usePortfolioStore((s) => s.allocationSnapshots);
   const rc = usePortfolioStore((s) => s.settings.reportingCurrency);
 
@@ -149,8 +151,16 @@ export default function PortfolioDriftScreen() {
 
         {!latest ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>No snapshots yet</Text>
-            <Text style={styles.emptyText}>Update holdings once to start recording portfolio drift snapshots.</Text>
+            <Text style={styles.emptyTitle}>Nothing to compare yet</Text>
+            <Text style={styles.emptyText}>
+              Drift shows how your portfolio allocation has shifted over time — how much is in India equities vs US equities vs cash, and which individual positions have grown or shrunk.
+            </Text>
+            <Text style={styles.emptyText}>
+              Add a holding or update a price to record your first data point. Every change you make automatically builds up your history.
+            </Text>
+            <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+              <Text style={styles.emptyBtnText}>Go to Holdings</Text>
+            </Pressable>
           </View>
         ) : (
           <>
@@ -259,6 +269,20 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     color: colors.muted,
     fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  emptyBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    borderRadius: radii.lg,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  emptyBtnText: {
+    color: colors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   latestCard: {
     marginBottom: spacing.xxl,

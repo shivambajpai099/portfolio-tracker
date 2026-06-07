@@ -4,7 +4,7 @@ import { PortfolioGuideModal } from "./PortfolioGuideModal";
 import { fetchLivePrices, searchTickerSuggestions } from "../services/yahooFinanceService";
 import { colors, radii, spacing, typography } from "../theme";
 import type { TickerSuggestion } from "../types/marketData";
-import type { Account, Currency } from "../types/portfolio";
+import { accountSupportsHoldings, type Account, type Currency } from "../types/portfolio";
 
 interface AddHoldingInput {
   accountId: string;
@@ -44,13 +44,23 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   const [suggestions, setSuggestions] = useState<SelectedTicker[]>([]);
   const [showGuide, setShowGuide] = useState(false);
 
+  const holdingAccounts = useMemo(
+    () => accounts.filter((account) => accountSupportsHoldings(account.type)),
+    [accounts]
+  );
+
   useEffect(() => {
     if (!visible) {
       return;
     }
 
-    setAccountId((prev) => prev || accounts[0]?.id || "");
-  }, [visible, accounts]);
+    setAccountId((prev) => {
+      if (prev && holdingAccounts.some((account) => account.id === prev)) {
+        return prev;
+      }
+      return holdingAccounts[0]?.id || "";
+    });
+  }, [visible, holdingAccounts]);
 
   useEffect(() => {
     if (!visible) {
@@ -121,8 +131,9 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   const canSubmit = useMemo(() => {
     const qty = parseNumber(quantity);
     const avg = parseNumber(averagePrice);
-    return Boolean(selected && accountId && qty > 0 && avg > 0);
-  }, [selected, accountId, quantity, averagePrice]);
+    const hasValidAccount = holdingAccounts.some((account) => account.id === accountId);
+    return Boolean(selected && hasValidAccount && qty > 0 && avg > 0);
+  }, [selected, accountId, quantity, averagePrice, holdingAccounts]);
 
   const resetState = () => {
     setQuery("");
@@ -155,7 +166,8 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
     const qty = parseNumber(quantity);
     const avg = parseNumber(averagePrice);
-    if (!accountId || qty <= 0 || avg <= 0) {
+    const hasValidAccount = holdingAccounts.some((account) => account.id === accountId);
+    if (!hasValidAccount || qty <= 0 || avg <= 0) {
       return;
     }
 
@@ -249,20 +261,24 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
           ) : null}
 
           <Text style={styles.label}>Account</Text>
-          <View style={styles.pillRow}>
-            {accounts.map((account) => {
-              const active = accountId === account.id;
-              return (
-                <Pressable
-                  key={account.id}
-                  style={[styles.pill, active && styles.pillActive]}
-                  onPress={() => setAccountId(account.id)}
-                >
-                  <Text style={[styles.pillText, active && styles.pillTextActive]}>{account.name}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          {holdingAccounts.length === 0 ? (
+            <Text style={styles.errorText}>Create a BROKER account before adding holdings.</Text>
+          ) : (
+            <View style={styles.pillRow}>
+              {holdingAccounts.map((account) => {
+                const active = accountId === account.id;
+                return (
+                  <Pressable
+                    key={account.id}
+                    style={[styles.pill, active && styles.pillActive]}
+                    onPress={() => setAccountId(account.id)}
+                  >
+                    <Text style={[styles.pillText, active && styles.pillTextActive]}>{account.name}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
 
           <TextInput
             value={quantity}
