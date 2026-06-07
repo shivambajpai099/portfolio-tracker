@@ -372,6 +372,61 @@ const fetchYahooQuotePayload = async (symbols: string[], signal: AbortSignal): P
   return (await upstream.json()) as YahooCompatiblePayload;
 };
 
+const fetchFinnhubIndiaQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  if (!FINNHUB_API_KEY) {
+    return null;
+  }
+
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const base = stripIndiaSuffix(symbol);
+      const exchangePrefix = symbol.endsWith(".BO") ? "BSE" : "NSE";
+      const finnhubSymbol = `${exchangePrefix}:${base}`;
+      const endpoint = `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(finnhubSymbol)}&token=${encodeURIComponent(FINNHUB_API_KEY)}`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: { Accept: "application/json" },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as { c?: number; t?: number };
+        if (typeof payload.c !== "number" || payload.c <= 0) {
+          return null;
+        }
+
+        return {
+          symbol,
+          regularMarketPrice: payload.c,
+          regularMarketTime: typeof payload.t === "number" ? payload.t : Math.floor(Date.now() / 1000),
+          currency: "INR",
+          exchange: exchangePrefix,
+          fullExchangeName: exchangePrefix,
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  const filtered = results.filter(
+    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
+  );
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  return { quoteResponse: { result: filtered } };
+};
+
 const fetchFinnhubQuotes = async (normalized: string, signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
   if (!FINNHUB_API_KEY) {
     return null;
@@ -548,12 +603,14 @@ export default async function handler(req: any, res: any) {
       const [indiaPayload, otherPayload] = await Promise.all([
         india.length > 0
           ? Promise.all([
+              fetchFinnhubIndiaQuotes(india, controller.signal),
               fetchYahooChartQuotes(india, controller.signal),
               fetchYahooQuotePayload(india, controller.signal),
               fetchGoogleFinanceQuotes(india, controller.signal),
               fetchNseQuotes(india, controller.signal),
-            ]).then(([chart, yahooQuote, google, nse]) => {
+            ]).then(([finnhubIndia, chart, yahooQuote, google, nse]) => {
               const merged = [
+                ...(finnhubIndia?.quoteResponse.result ?? []),
                 ...(chart?.quoteResponse.result ?? []),
                 ...(yahooQuote?.quoteResponse.result ?? []),
                 ...(google?.quoteResponse.result ?? []),
@@ -562,6 +619,7 @@ export default async function handler(req: any, res: any) {
               const unique = [...new Map(merged.map((item) => [item.symbol, item])).values()];
               if (unique.length > 0) {
                 const providerParts = [];
+                if ((finnhubIndia?.quoteResponse.result ?? []).length > 0) providerParts.push("FINNHUB_INDIA");
                 if ((chart?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_CHART");
                 if ((yahooQuote?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_QUOTE");
                 if ((google?.quoteResponse.result ?? []).length > 0) providerParts.push("GOOGLE_FINANCE");
