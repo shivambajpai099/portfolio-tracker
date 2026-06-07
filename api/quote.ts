@@ -62,6 +62,11 @@ const toStringQuery = (value: unknown): string => {
   return String(value ?? "");
 };
 
+const isTruthyQueryFlag = (value: unknown): boolean => {
+  const normalized = toStringQuery(value).trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+};
+
 const isFresh = (entry: CacheEntry): boolean => Date.now() - entry.fetchedAtMs <= CACHE_TTL_MS;
 
 const normalizeSymbols = (raw: string): string => {
@@ -488,6 +493,8 @@ export default async function handler(req: any, res: any) {
 
   const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   res.setHeader("X-Request-Id", requestId);
+  const noCache = isTruthyQueryFlag(req.query?.nocache);
+  res.setHeader("X-Debug-NoCache", noCache ? "1" : "0");
 
   const ticker = toStringQuery(req.query?.ticker).trim();
   const symbolsRaw = toStringQuery(req.query?.symbols).trim();
@@ -495,13 +502,13 @@ export default async function handler(req: any, res: any) {
   const normalized = normalizeSymbols(requested);
 
   if (!normalized) {
-    res.setHeader("Cache-Control", EDGE_CACHE_STALE);
+    res.setHeader("Cache-Control", noCache ? "no-store" : EDGE_CACHE_STALE);
     res.status(200).json({ quoteResponse: { result: [] } });
     return;
   }
 
-  const cached = CACHE.get(normalized);
-  if (cached && isFresh(cached)) {
+  const cached = noCache ? undefined : CACHE.get(normalized);
+  if (!noCache && cached && isFresh(cached)) {
     // Cached payload may come from an earlier run; make that explicit.
     res.setHeader("X-Upstream-Provider-India", "CACHE");
     res.setHeader("X-India-Status", "CACHE_HIT");
@@ -595,9 +602,11 @@ export default async function handler(req: any, res: any) {
       clearTimeout(timeout);
     }
 
-    putCache(normalized, payload);
+    if (!noCache) {
+      putCache(normalized, payload);
+    }
 
-    res.setHeader("Cache-Control", EDGE_CACHE_MISS);
+    res.setHeader("Cache-Control", noCache ? "no-store" : EDGE_CACHE_MISS);
     res.setHeader("X-Cache", "MISS");
     res.status(200).json(payload);
   } catch (error) {
