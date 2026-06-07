@@ -29,12 +29,21 @@ export interface RebalancingCardProps {
   /** Pass null when targets aren't set yet or portfolio is empty. */
   result: RebalancingResult | null;
   onSave: (target: TargetAllocation) => void;
+  isExpanded?: boolean;
+  onToggleExpanded?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function RebalancingCard({ targetAllocation, result, onSave }: RebalancingCardProps) {
+export function RebalancingCard({
+  targetAllocation,
+  result,
+  onSave,
+  isExpanded,
+  onToggleExpanded,
+}: RebalancingCardProps) {
   const hasTarget = !!targetAllocation;
+  const expanded = isExpanded ?? true;
   const [editing, setEditing] = useState(!hasTarget);
   const [draft, setDraft] = useState<Draft>(() => draftFromTarget(targetAllocation));
 
@@ -68,15 +77,32 @@ export function RebalancingCard({ targetAllocation, result, onSave }: Rebalancin
       {/* ── Header ── */}
       <View style={styles.header}>
         <Text style={styles.title}>Rebalancing Suggestions</Text>
-        {hasTarget && !editing && (
-          <Pressable onPress={handleEdit} hitSlop={8}>
-            <Text style={styles.editBtn}>Edit targets</Text>
-          </Pressable>
-        )}
+        <View style={styles.headerActions}>
+          {hasTarget && !editing && expanded && (
+            <Pressable onPress={handleEdit} hitSlop={8}>
+              <Text style={styles.editBtn}>Edit targets</Text>
+            </Pressable>
+          )}
+          {onToggleExpanded && (
+            <Pressable onPress={onToggleExpanded} hitSlop={8}>
+              <Text style={styles.toggleBtn}>{expanded ? "Hide" : "Show"}</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
+      {!expanded && (
+        <Text style={styles.collapsedText}>
+          {!hasTarget
+            ? "Set your target allocation to see rebalancing suggestions."
+            : result && result.suggestions.every((s) => s.direction === "ON_TARGET")
+            ? "Portfolio is on target across all regions."
+            : "Portfolio has target drift. Expand to review the region breakdown and edit targets."}
+        </Text>
+      )}
+
       {/* ── Edit form ── */}
-      {editing && (
+      {expanded && editing && (
         <View style={styles.editSection}>
           <Text style={styles.editHint}>
             Set your target allocation — the three buckets must sum to 100%.
@@ -127,7 +153,7 @@ export function RebalancingCard({ targetAllocation, result, onSave }: Rebalancin
       )}
 
       {/* ── Comparison + recommendations ── */}
-      {!editing && result && result.suggestions.length > 0 && (
+      {expanded && !editing && result && result.suggestions.length > 0 && (
         <>
           {/* Column headers */}
           <View style={[styles.compRow, styles.compHeaderRow]}>
@@ -213,6 +239,11 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: spacing.md,
   },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+  },
   title: {
     color: colors.text,
     fontSize: typography.body,
@@ -222,6 +253,16 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
+  },
+  toggleBtn: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+  },
+  collapsedText: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    lineHeight: 18,
   },
   // ── Edit form
   editSection: {

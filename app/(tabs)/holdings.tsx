@@ -9,6 +9,7 @@ import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
 import { accountSupportsHoldings, type Currency, type Holding } from "../../src/types/portfolio";
+import type { LivePriceQuote } from "../../src/types/marketData";
 import { formatMoney } from "../../src/utils/format";
 
 type SortKey = "allocation_desc" | "gain_desc" | "alpha_asc" | "value_desc";
@@ -45,6 +46,8 @@ const parseNumber = (value: string): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : NaN;
 };
+
+const normalizeIndiaTicker = (symbol: string): string => symbol.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
 
 const isIndiaHolding = (holding: Holding): boolean => {
   const sym = holding.symbol.toUpperCase();
@@ -127,12 +130,30 @@ export default function HoldingsScreen() {
 
     setIsRefreshingPrices(true);
     try {
-      const uniqueSymbols = [...new Set(holdings.map((h) => h.symbol.toUpperCase()))];
+      const requestSymbols = new Set<string>();
+      for (const holding of holdings) {
+        const symbol = holding.symbol.trim().toUpperCase();
+        requestSymbols.add(symbol);
+
+        if (isIndiaHolding(holding) && !symbol.endsWith(".NS") && !symbol.endsWith(".BO")) {
+          requestSymbols.add(`${symbol}.NS`);
+        }
+      }
+
+      const uniqueSymbols = [...requestSymbols];
       const result = await fetchLivePrices(uniqueSymbols);
-      const quoteMap = new Map(result.ok && result.data ? result.data.map((quote) => [quote.symbol.toUpperCase(), quote]) : []);
+      const quoteMap = new Map<string, LivePriceQuote>();
+      if (result.ok && result.data) {
+        for (const quote of result.data) {
+          const exact = quote.symbol.toUpperCase();
+          quoteMap.set(exact, quote);
+          quoteMap.set(normalizeIndiaTicker(exact), quote);
+        }
+      }
 
       for (const holding of holdings) {
-        const quote = quoteMap.get(holding.symbol.toUpperCase());
+        const key = holding.symbol.toUpperCase();
+        const quote = quoteMap.get(key) ?? quoteMap.get(normalizeIndiaTicker(key));
         if (!quote) {
           continue;
         }

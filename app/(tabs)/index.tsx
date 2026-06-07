@@ -53,6 +53,8 @@ export default function DashboardScreen() {
   const [geoFilter, setGeoFilter] = useState<GeoFilter>("ALL");
   const [showGuide, setShowGuide] = useState(false);
   const [showDeployCashModal, setShowDeployCashModal] = useState(false);
+  const [showRebalancingDetails, setShowRebalancingDetails] = useState(false);
+  const [showDeployCashDetails, setShowDeployCashDetails] = useState(false);
 
   useEffect(() => {
     if (!hydrated || settings.onboardingTipsSeen) {
@@ -320,6 +322,8 @@ export default function DashboardScreen() {
           targetAllocation={settings.targetAllocation}
           result={rebalancingResult}
           onSave={(target) => updateSettings({ targetAllocation: target })}
+          isExpanded={showRebalancingDetails}
+          onToggleExpanded={() => setShowRebalancingDetails((prev) => !prev)}
         />
 
         <DeployCashCard
@@ -328,6 +332,8 @@ export default function DashboardScreen() {
           reportingCurrency={rc}
           currentAllocation={deployCashAllocationContext}
           onPlanDeployment={() => setShowDeployCashModal(true)}
+          isExpanded={showDeployCashDetails}
+          onToggleExpanded={() => setShowDeployCashDetails((prev) => !prev)}
         />
 
         <View style={styles.sectionGap}>

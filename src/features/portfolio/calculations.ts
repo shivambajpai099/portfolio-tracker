@@ -17,6 +17,8 @@ export const convert = (value: number, from: Currency, to: Currency, rates: FxRa
   return to === "INR" ? toINR(value, from, rates) : toUSD(value, from, rates);
 };
 
+const normalizeIndiaTicker = (symbol: string): string => symbol.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
+
 // ---------------------------------------------------------------------------
 // Live price resolution
 // ---------------------------------------------------------------------------
@@ -26,7 +28,8 @@ export const convert = (value: number, from: Currency, to: Currency, rates: FxRa
  * Uses the live price cache when available; falls back to the stored marketPrice.
  */
 export const resolveMarketPrice = (holding: Holding, priceCache?: LivePriceCache): number => {
-  const entry = priceCache?.bySymbol[holding.symbol.toUpperCase()];
+  const key = holding.symbol.toUpperCase();
+  const entry = priceCache?.bySymbol[key] ?? priceCache?.bySymbol[normalizeIndiaTicker(key)];
   return entry?.price ?? holding.marketPrice;
 };
 
@@ -380,8 +383,11 @@ export interface DeployCashAllocationContext {
 }
 
 /**
- * Splits `deployAmount` across India equities, US equities, and cash-reserve
- * proportionally to the user's target allocation.
+ * Splits `deployAmount` across India equities, US equities, and cash-reserve.
+ *
+ * When current portfolio allocation is provided, the planner sends deployable
+ * cash only to underweight equity buckets and keeps the remainder as cash so
+ * the target cash reserve is preserved as closely as possible without selling.
  *
  * The target percentages are normalised before use so the function is safe
  * even when targets don't sum to exactly 100.
@@ -398,84 +404,77 @@ export const calcDeployCash = (
     return { deployAmount, slices: [], currency: reportingCurrency };
   }
 
-  // When current allocation is available, allocate new cash toward the
-  // underweight buckets after accounting for the portfolio's existing mix.
+  // When current allocation is available, allocate deployable cash only to
+  // underweight equity buckets. Any remaining amount stays as cash so we do
+  // not buy overweight positions just to force the target mix.
   if (currentAllocation) {
     const currentTotal =
       currentAllocation.indiaCurrentValue + currentAllocation.usCurrentValue + currentAllocation.cashCurrentValue;
 
     if (currentTotal > 0) {
-      const totalAfterDeploy = currentTotal + deployAmount;
       const raw: Array<{
         region: DeployCashSlice["region"];
         label: string;
-        targetPct: number;
         currentValue: number;
+        targetPct: number;
       }> = [
         {
           region: "INDIA",
           label: "India equities",
-          targetPct: target.indiaPct,
           currentValue: currentAllocation.indiaCurrentValue,
+          targetPct: target.indiaPct,
         },
         {
           region: "US",
           label: "US equities",
-          targetPct: target.usPct,
           currentValue: currentAllocation.usCurrentValue,
-        },
-        {
-          region: "CASH",
-          label: "Keep as cash",
-          targetPct: target.cashPct,
-          currentValue: currentAllocation.cashCurrentValue,
+          targetPct: target.usPct,
         },
       ];
 
-      const needs = raw.map((item) => {
-        const targetValue = (item.targetPct / targetTotal) * totalAfterDeploy;
-        return {
-          ...item,
-          need: Math.max(0, targetValue - item.currentValue),
-        };
-      });
+      const needs = raw
+        .map((item) => {
+          const targetValue = (item.targetPct / targetTotal) * currentTotal;
+          return {
+            ...item,
+            need: Math.max(0, targetValue - item.currentValue),
+          };
+        })
+        .filter((item) => item.need > 0);
 
       const totalNeed = needs.reduce((sum, item) => sum + item.need, 0);
 
-      if (totalNeed > 0) {
-        const allocated =
-          totalNeed <= deployAmount
-            ? needs.map((item) => ({ ...item, amount: item.need }))
-            : needs.map((item) => ({ ...item, amount: (item.need / totalNeed) * deployAmount }));
-
-        if (totalNeed < deployAmount) {
-          const remaining = deployAmount - totalNeed;
-          const cashEntry = allocated.find((item) => item.region === "CASH");
-          if (cashEntry) {
-            cashEntry.amount += remaining;
-          } else {
-            allocated.push({
-              region: "CASH",
-              label: "Keep as cash",
-              targetPct: target.cashPct,
-              currentValue: currentAllocation.cashCurrentValue,
-              need: remaining,
-              amount: remaining,
-            });
-          }
-        }
-
-        const slices: DeployCashSlice[] = allocated
-          .filter((item) => item.amount > 0)
-          .map((item) => ({
-            region: item.region,
-            label: item.label,
-            pct: deployAmount > 0 ? (item.amount / deployAmount) * 100 : 0,
-            amount: item.amount,
-          }));
-
-        return { deployAmount, slices, currency: reportingCurrency };
+      if (totalNeed === 0) {
+        return {
+          deployAmount,
+          slices: [{ region: "CASH", label: "Keep as cash", pct: 100, amount: deployAmount }],
+          currency: reportingCurrency,
+        };
       }
+
+      const equityDeploy = Math.min(deployAmount, totalNeed);
+      const equitySlices: DeployCashSlice[] = needs
+        .map((item) => ({
+          region: item.region,
+          label: item.label,
+          pct: (item.need / totalNeed) * (equityDeploy / deployAmount) * 100,
+          amount: (item.need / totalNeed) * equityDeploy,
+        }))
+        .filter((item) => item.amount > 0);
+
+      const cashAmount = deployAmount - equityDeploy;
+      const slices: DeployCashSlice[] = [...equitySlices];
+
+      if (cashAmount > 0) {
+        slices.push({
+          region: "CASH",
+          label: "Keep as cash",
+          pct: (cashAmount / deployAmount) * 100,
+          amount: cashAmount,
+        });
+      }
+
+      return { deployAmount, slices, currency: reportingCurrency };
     }
   }
 

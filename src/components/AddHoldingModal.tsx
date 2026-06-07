@@ -30,6 +30,18 @@ const parseNumber = (value: string): number => {
   return Number.isFinite(parsed) ? parsed : NaN;
 };
 
+const buildLivePriceCandidates = (symbol: string, currency: Currency): string[] => {
+  const normalized = symbol.trim().toUpperCase();
+  const candidates = new Set<string>([normalized]);
+
+  if (currency === "INR" && !normalized.endsWith(".NS") && !normalized.endsWith(".BO")) {
+    candidates.add(`${normalized}.NS`);
+    candidates.add(`${normalized}.BO`);
+  }
+
+  return [...candidates];
+};
+
 export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHoldingModalProps) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<SelectedTicker | null>(null);
@@ -110,7 +122,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
     const controller = new AbortController();
     setLivePriceLoading(true);
-    fetchLivePrices([selected.symbol], controller.signal)
+    fetchLivePrices(buildLivePriceCandidates(selected.symbol, selected.currency), controller.signal)
       .then((result) => {
         if (result.ok && result.data[0]?.price) {
           setLivePrice(result.data[0].price);
@@ -176,7 +188,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     let marketPrice = livePrice ?? avg;
     try {
       if (livePrice == null) {
-        const result = await fetchLivePrices([selected.symbol]);
+        const result = await fetchLivePrices(buildLivePriceCandidates(selected.symbol, selected.currency));
         if (result.ok && result.data[0]?.price) {
           marketPrice = result.data[0].price;
         }

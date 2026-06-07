@@ -22,6 +22,8 @@ export interface DeployCashCardProps {
   reportingCurrency: Currency;
   currentAllocation?: DeployCashAllocationContext | null;
   onPlanDeployment: () => void;
+  isExpanded?: boolean;
+  onToggleExpanded?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -32,7 +34,10 @@ export function DeployCashCard({
   reportingCurrency,
   currentAllocation,
   onPlanDeployment,
+  isExpanded,
+  onToggleExpanded,
 }: DeployCashCardProps) {
+  const expanded = isExpanded ?? true;
   const currencyPrefix = reportingCurrency === "INR" ? "₹" : "$";
 
   // Show suggested allocation for the full available cash at a glance
@@ -45,17 +50,24 @@ export function DeployCashCard({
     <View style={styles.card}>
       <View style={styles.header}>
         <Text style={styles.title}>Deploy Cash</Text>
-        {targetAllocation && (
-          <Pressable onPress={onPlanDeployment} style={styles.actionBtn}>
-            <Text style={styles.actionBtnText}>Plan Deployment</Text>
-          </Pressable>
-        )}
+        <View style={styles.headerActions}>
+          {onToggleExpanded && (
+            <Pressable onPress={onToggleExpanded} hitSlop={8}>
+              <Text style={styles.toggleBtn}>{expanded ? "Hide" : "Show"}</Text>
+            </Pressable>
+          )}
+          {targetAllocation && (
+            <Pressable onPress={onPlanDeployment} style={styles.actionBtn}>
+              <Text style={styles.actionBtnText}>Plan Deployment</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       {/* ── No target set ── */}
       {!targetAllocation && (
         <Text style={styles.emptyText}>
-          Set your target allocation in the Rebalancing Suggestions card to plan how to split your cash across India equities, US equities, and reserves.
+          Set your target allocation in the Rebalancing Suggestions card to plan how to deploy cash while keeping your target cash reserve intact.
         </Text>
       )}
 
@@ -64,15 +76,16 @@ export function DeployCashCard({
         <>
           <View style={styles.cashSummary}>
             <Text style={styles.cashLabel}>Available Cash</Text>
+            <Text style={styles.cashHint}>Based on current allocation</Text>
             <Text style={styles.cashValue}>
               {currencyPrefix}{formatMoney(totalCashRC, reportingCurrency).replace(/^[₹$]/, "")}
             </Text>
           </View>
 
           {/* Suggested allocation summary */}
-          {suggestedAllocation && suggestedAllocation.slices.length > 0 && (
+          {expanded && suggestedAllocation && suggestedAllocation.slices.length > 0 && (
             <View style={styles.allocationSummary}>
-              <Text style={styles.summaryLabel}>Suggested allocation summary</Text>
+              <Text style={styles.summaryLabel}>Suggested deployment</Text>
               <View style={styles.summaryGrid}>
                 {suggestedAllocation.slices.map((slice) => {
                   const barColor = REGION_COLOR[slice.region];
@@ -117,11 +130,21 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: spacing.lg,
   },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+  },
   title: {
     color: colors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
     flex: 1,
+  },
+  toggleBtn: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
   actionBtn: {
     paddingHorizontal: spacing.md,
@@ -149,6 +172,11 @@ const styles = StyleSheet.create({
     fontWeight: typography.weightMedium,
     textTransform: "uppercase",
     letterSpacing: 0.5,
+    marginBottom: spacing.xs,
+  },
+  cashHint: {
+    color: colors.muted,
+    fontSize: typography.caption,
     marginBottom: spacing.xs,
   },
   cashValue: {

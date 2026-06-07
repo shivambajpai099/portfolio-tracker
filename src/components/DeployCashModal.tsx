@@ -71,7 +71,7 @@ export function DeployCashModal({
             {/* ── No target set ── */}
             {!targetAllocation && (
               <Text style={styles.emptyText}>
-                This tool shows how to split a cash amount across India equities, US equities, and a cash reserve — proportional to your goals. Set your target allocation in the Rebalancing Suggestions card to unlock it.
+                This tool helps deploy cash while respecting your current allocation and target cash reserve. Set your target allocation in the Rebalancing Suggestions card to unlock it.
               </Text>
             )}
 
@@ -81,6 +81,7 @@ export function DeployCashModal({
                 {/* Amount input */}
                 <View style={styles.inputBlock}>
                   <Text style={styles.inputLabel}>Cash to deploy</Text>
+                  <Text style={styles.inputHint}>Remaining cash stays uninvested when the reserve target is already met.</Text>
                   <View style={styles.inputWrap}>
                     <Text style={styles.currencyPrefix}>{currencyPrefix}</Text>
                     <TextInput
@@ -98,7 +99,7 @@ export function DeployCashModal({
                 {/* Allocation rows */}
                 {result && result.slices.length > 0 && deployAmount > 0 && (
                   <View style={styles.allocationBlock}>
-                    <Text style={styles.sectionLabel}>Suggested allocation</Text>
+                    <Text style={styles.sectionLabel}>Suggested deployment</Text>
 
                     {result.slices.map((slice) => {
                       const barColor = REGION_COLOR[slice.region];
@@ -207,6 +208,11 @@ const styles = StyleSheet.create({
     fontWeight: typography.weightMedium,
     textTransform: "uppercase",
     letterSpacing: 0.5,
+  },
+  inputHint: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    lineHeight: 18,
   },
   inputWrap: {
     flexDirection: "row",
