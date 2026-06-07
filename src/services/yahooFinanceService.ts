@@ -42,6 +42,7 @@ const TTL_MS = 20 * 60 * 1000;
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
 const YAHOO_QUOTE_BASE_URLS = ["https://query2.finance.yahoo.com", "https://query1.finance.yahoo.com"];
+const YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const NSE_QUOTE_URL = "https://www.nseindia.com/api/quote-equity";
 const GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote";
 
@@ -165,6 +166,68 @@ const fetchDirectYahooQuotes = async (key: string, signal?: AbortSignal): Promis
   }
 
   throw new Error("Quote upstream request failed");
+};
+
+const fetchDirectYahooChartQuotes = async (symbols: string[], signal?: AbortSignal): Promise<LivePriceQuote[]> => {
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const endpoint = `${YAHOO_CHART_BASE_URL}/${encodeURIComponent(symbol)}?range=1d&interval=1d&includePrePost=false&events=div,splits`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://finance.yahoo.com/",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as {
+          chart?: {
+            result?: Array<{
+              meta?: {
+                symbol?: string;
+                regularMarketPrice?: number;
+                currency?: string;
+                exchangeName?: string;
+                fullExchangeName?: string;
+                regularMarketTime?: number;
+              };
+            }>;
+          };
+        };
+
+        const meta = payload.chart?.result?.[0]?.meta;
+        const price = meta?.regularMarketPrice;
+        const resolvedSymbol = normalizeSymbol(meta?.symbol ?? symbol);
+        if (!resolvedSymbol || typeof price !== "number") {
+          return null;
+        }
+
+        return {
+          symbol: resolvedSymbol,
+          price,
+          currency: inferCurrency(meta?.currency, resolvedSymbol),
+          exchange: meta?.fullExchangeName ?? meta?.exchangeName ?? "Yahoo Chart",
+          asOf: meta?.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : nowIso(),
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  return results.filter((quote): quote is LivePriceQuote => Boolean(quote));
 };
 
 const getNseCookieHeader = async (signal?: AbortSignal): Promise<string | null> => {
@@ -408,7 +471,8 @@ export const fetchLivePrices = async (
 
   try {
     if (!hasProxyBase) {
-      const [indiaGoogleQuotes, indiaNseQuotes, otherQuotes] = await Promise.all([
+      const [indiaChartQuotes, indiaGoogleQuotes, indiaNseQuotes, otherQuotes] = await Promise.all([
+        indiaSymbols.length > 0 ? fetchDirectYahooChartQuotes(indiaSymbols, signal) : Promise.resolve([]),
         indiaSymbols.length > 0 ? fetchDirectGoogleFinanceQuotes(indiaSymbols, signal) : Promise.resolve([]),
         indiaSymbols.length > 0 ? fetchDirectNseQuotes(indiaSymbols, signal) : Promise.resolve([]),
         otherSymbols.length > 0
@@ -419,7 +483,7 @@ export const fetchLivePrices = async (
           : Promise.resolve([]),
       ]);
 
-      const mergedIndiaQuotes = [...indiaGoogleQuotes, ...indiaNseQuotes];
+      const mergedIndiaQuotes = [...indiaChartQuotes, ...indiaGoogleQuotes, ...indiaNseQuotes];
       const quotes = [...otherQuotes, ...mergedIndiaQuotes]
         .reduce<LivePriceQuote[]>((acc, quote) => {
           if (!acc.some((item) => item.symbol === quote.symbol)) {

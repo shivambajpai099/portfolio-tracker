@@ -16,6 +16,7 @@ const EDGE_CACHE_MISS = "public, s-maxage=30, stale-while-revalidate=120";
 const RETRYABLE_UPSTREAM_STATUSES = new Set([401, 429, 500, 502, 503, 504]);
 const FINNHUB_API_KEY = String(process.env.FINNHUB_API_KEY ?? "").trim();
 const FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote";
+const YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const NSE_QUOTE_URL = "https://www.nseindia.com/api/quote-equity";
 const GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote";
 
@@ -35,6 +36,21 @@ type YahooCompatiblePayload = {
       currency: string;
       exchange: string;
       fullExchangeName: string;
+    }>;
+  };
+};
+
+type YahooChartResponse = {
+  chart?: {
+    result?: Array<{
+      meta?: {
+        symbol?: string;
+        regularMarketPrice?: number;
+        currency?: string;
+        exchangeName?: string;
+        fullExchangeName?: string;
+        regularMarketTime?: number;
+      };
     }>;
   };
 };
@@ -280,6 +296,64 @@ const fetchGoogleFinanceQuotes = async (symbols: string[], signal: AbortSignal):
   return { quoteResponse: { result: filtered } };
 };
 
+const fetchYahooChartQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const endpoint = `${YAHOO_CHART_URL}/${encodeURIComponent(symbol)}?range=1d&interval=1d&includePrePost=false&events=div,splits`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://finance.yahoo.com/",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as YahooChartResponse;
+        const meta = payload.chart?.result?.[0]?.meta;
+        const price = meta?.regularMarketPrice;
+        const resolvedSymbol = normalizeSymbols(symbol);
+
+        if (!resolvedSymbol || typeof price !== "number") {
+          return null;
+        }
+
+        return {
+          symbol: resolvedSymbol,
+          regularMarketPrice: price,
+          regularMarketTime: meta?.regularMarketTime ?? Math.floor(Date.now() / 1000),
+          currency: meta?.currency ?? inferCurrency(resolvedSymbol),
+          exchange: meta?.fullExchangeName ?? meta?.exchangeName ?? "Yahoo Chart",
+          fullExchangeName: meta?.fullExchangeName ?? meta?.exchangeName ?? "Yahoo Chart",
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  const filtered = results.filter(
+    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
+  );
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  return { quoteResponse: { result: filtered } };
+};
+
 const fetchFinnhubQuotes = async (normalized: string, signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
   if (!FINNHUB_API_KEY) {
     return null;
@@ -438,13 +512,19 @@ export default async function handler(req: any, res: any) {
       const [indiaPayload, otherPayload] = await Promise.all([
         india.length > 0
           ? Promise.all([
+              fetchYahooChartQuotes(india, controller.signal),
               fetchGoogleFinanceQuotes(india, controller.signal),
               fetchNseQuotes(india, controller.signal),
-            ]).then(([google, nse]) => {
-              const merged = [...(google?.quoteResponse.result ?? []), ...(nse?.quoteResponse.result ?? [])];
+            ]).then(([chart, google, nse]) => {
+              const merged = [
+                ...(chart?.quoteResponse.result ?? []),
+                ...(google?.quoteResponse.result ?? []),
+                ...(nse?.quoteResponse.result ?? []),
+              ];
               const unique = [...new Map(merged.map((item) => [item.symbol, item])).values()];
               if (unique.length > 0) {
                 const providerParts = [];
+                if ((chart?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_CHART");
                 if ((google?.quoteResponse.result ?? []).length > 0) providerParts.push("GOOGLE_FINANCE");
                 if ((nse?.quoteResponse.result ?? []).length > 0) providerParts.push("NSE");
                 res.setHeader("X-Upstream-Provider-India", providerParts.join("+") || "INDIA");
