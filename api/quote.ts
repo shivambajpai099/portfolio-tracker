@@ -16,6 +16,8 @@ const EDGE_CACHE_MISS = "public, s-maxage=30, stale-while-revalidate=120";
 const RETRYABLE_UPSTREAM_STATUSES = new Set([401, 429, 500, 502, 503, 504]);
 const FINNHUB_API_KEY = String(process.env.FINNHUB_API_KEY ?? "").trim();
 const FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote";
+const NSE_QUOTE_URL = "https://www.nseindia.com/api/quote-equity";
+const GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote";
 
 const CACHE = new Map<string, CacheEntry>();
 
@@ -96,6 +98,155 @@ const inferCurrency = (symbol: string): string => {
     return "INR";
   }
   return "USD";
+};
+
+const isIndiaSymbol = (symbol: string): boolean => /\.(NS|BO)$/i.test(symbol);
+
+const stripIndiaSuffix = (symbol: string): string => symbol.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
+
+const indiaExchangeForSymbol = (symbol: string): "NSE" | "BOM" => (symbol.endsWith(".BO") ? "BOM" : "NSE");
+
+const partitionSymbols = (symbols: string[]): { india: string[]; other: string[] } => {
+  const india: string[] = [];
+  const other: string[] = [];
+  const indiaBases = new Set<string>();
+
+  for (const symbol of symbols) {
+    if (isIndiaSymbol(symbol)) {
+      india.push(symbol);
+      indiaBases.add(stripIndiaSuffix(symbol));
+    } else {
+      other.push(symbol);
+    }
+  }
+
+  return {
+    india,
+    other: other.filter((symbol) => !indiaBases.has(symbol)),
+  };
+};
+
+const fetchNseQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const requestSymbol = stripIndiaSuffix(symbol);
+      const endpoint = `${NSE_QUOTE_URL}?symbol=${encodeURIComponent(requestSymbol)}`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://www.nseindia.com/",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as { priceInfo?: { lastPrice?: number }; info?: { symbol?: string } };
+        const price = payload.priceInfo?.lastPrice;
+        if (typeof price !== "number") {
+          return null;
+        }
+
+        return {
+          symbol,
+          regularMarketPrice: price,
+          regularMarketTime: Math.floor(Date.now() / 1000),
+          currency: "INR",
+          exchange: "NSE",
+          fullExchangeName: "NSE",
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  const filtered = results.filter(
+    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
+  );
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  return { quoteResponse: { result: filtered } };
+};
+
+const fetchGoogleFinanceQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const baseSymbol = stripIndiaSuffix(symbol);
+      const exchange = indiaExchangeForSymbol(symbol);
+      const endpoint = `${GOOGLE_FINANCE_URL}/${encodeURIComponent(baseSymbol)}:${exchange}?hl=en&gl=in`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://www.google.com/",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const html = await response.text();
+        const priceText =
+          html.match(/YMlKec fxKbKc[^>]*>([^<]+)</)?.[1] ??
+          html.match(/data-last-price="([^"]+)"/)?.[1] ??
+          html.match(/"currentPrice"\s*:\s*\{"raw"\s*:\s*([0-9.]+)/)?.[1] ??
+          null;
+
+        if (!priceText) {
+          return null;
+        }
+
+        const price = Number(priceText.replace(/[^0-9.\-]/g, ""));
+        if (!Number.isFinite(price)) {
+          return null;
+        }
+
+        return {
+          symbol,
+          regularMarketPrice: price,
+          regularMarketTime: Math.floor(Date.now() / 1000),
+          currency: "INR",
+          exchange: "Google Finance",
+          fullExchangeName: "Google Finance",
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  const filtered = results.filter(
+    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
+  );
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  return { quoteResponse: { result: filtered } };
 };
 
 const fetchFinnhubQuotes = async (normalized: string, signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
@@ -250,36 +401,61 @@ export default async function handler(req: any, res: any) {
 
     let payload: unknown | null = null;
     try {
-      try {
-        payload = await fetchFinnhubQuotes(normalized, controller.signal);
-        if (payload) {
-          res.setHeader("X-Upstream-Provider", "FINNHUB");
-          res.setHeader("X-Upstream-Status", "200");
-        }
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          throw error;
-        }
-      }
+      const symbols = normalized.split(",").filter(Boolean);
+      const { india, other } = partitionSymbols(symbols);
+
+      const [indiaPayload, otherPayload] = await Promise.all([
+        india.length > 0
+          ? Promise.all([
+              fetchGoogleFinanceQuotes(india, controller.signal),
+              fetchNseQuotes(india, controller.signal),
+            ]).then(([google, nse]) => {
+              const merged = [...(google?.quoteResponse.result ?? []), ...(nse?.quoteResponse.result ?? [])];
+              const unique = [...new Map(merged.map((item) => [item.symbol, item])).values()];
+              return unique.length > 0 ? { quoteResponse: { result: unique } } : null;
+            })
+          : Promise.resolve(null),
+        other.length > 0
+          ? (async () => {
+              try {
+                const finnhub = await fetchFinnhubQuotes(other.join(","), controller.signal);
+                if (finnhub) {
+                  res.setHeader("X-Upstream-Provider", "FINNHUB");
+                  res.setHeader("X-Upstream-Status", "200");
+                  return finnhub;
+                }
+              } catch (error) {
+                if (error instanceof Error && error.name === "AbortError") {
+                  throw error;
+                }
+              }
+
+              const upstream = await fetchQuoteWithFailover(other.join(","), controller.signal);
+              res.setHeader("X-Upstream-Provider", "YAHOO");
+              res.setHeader("X-Upstream-Status", String(upstream.status));
+
+              if (!upstream.ok) {
+                return null;
+              }
+
+              return (await upstream.json()) as YahooCompatiblePayload;
+            })()
+          : Promise.resolve(null),
+      ]);
+
+      const merged = [...(otherPayload?.quoteResponse?.result ?? []), ...(indiaPayload?.quoteResponse?.result ?? [])];
+      payload = merged.length > 0 ? { quoteResponse: { result: merged } } : null;
 
       if (!payload) {
-        const upstream = await fetchQuoteWithFailover(normalized, controller.signal);
-        res.setHeader("X-Upstream-Provider", "YAHOO");
-        res.setHeader("X-Upstream-Status", String(upstream.status));
-
-        if (!upstream.ok) {
-          if (cached) {
-            res.setHeader("Cache-Control", EDGE_CACHE_STALE);
-            res.setHeader("X-Cache", "STALE");
-            res.status(200).json(cached.payload);
-            return;
-          }
-
-          res.status(upstream.status === 404 ? 404 : 502).json({ error: "Quote upstream request failed" });
+        if (cached) {
+          res.setHeader("Cache-Control", EDGE_CACHE_STALE);
+          res.setHeader("X-Cache", "STALE");
+          res.status(200).json(cached.payload);
           return;
         }
 
-        payload = await upstream.json();
+        res.status(502).json({ error: "Quote upstream request failed" });
+        return;
       }
     } finally {
       clearTimeout(timeout);

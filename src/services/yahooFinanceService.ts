@@ -42,6 +42,8 @@ const TTL_MS = 20 * 60 * 1000;
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
 const YAHOO_QUOTE_BASE_URLS = ["https://query2.finance.yahoo.com", "https://query1.finance.yahoo.com"];
+const NSE_QUOTE_URL = "https://www.nseindia.com/api/quote-equity";
+const GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote";
 
 const nowIso = () => new Date().toISOString();
 
@@ -51,6 +53,9 @@ const isFresh = (entry: CacheEntry<unknown>): boolean => {
 };
 
 const normalizeSymbol = (symbol: string): string => symbol.trim().toUpperCase();
+const isIndiaQuoteSymbol = (symbol: string): boolean => /\.(NS|BO)$/i.test(symbol);
+const stripIndiaSuffix = (symbol: string): string => symbol.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
+const indiaExchangeForSymbol = (symbol: string): "NSE" | "BOM" => (symbol.endsWith(".BO") ? "BOM" : "NSE");
 
 const hasProxyBase = Platform.OS === "web" || API_BASE.length > 0;
 
@@ -162,6 +167,111 @@ const fetchDirectYahooQuotes = async (key: string, signal?: AbortSignal): Promis
   throw new Error("Quote upstream request failed");
 };
 
+const fetchDirectNseQuotes = async (symbols: string[], signal?: AbortSignal): Promise<LivePriceQuote[]> => {
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const requestSymbol = stripIndiaSuffix(symbol);
+      const endpoint = `${NSE_QUOTE_URL}?symbol=${encodeURIComponent(requestSymbol)}`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://www.nseindia.com/",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as { priceInfo?: { lastPrice?: number } };
+        const price = payload.priceInfo?.lastPrice;
+        if (typeof price !== "number") {
+          return null;
+        }
+
+        return {
+          symbol,
+          price,
+          currency: "INR" as Currency,
+          exchange: "NSE",
+          asOf: nowIso(),
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  return results.filter((quote): quote is LivePriceQuote => Boolean(quote));
+};
+
+const fetchDirectGoogleFinanceQuotes = async (symbols: string[], signal?: AbortSignal): Promise<LivePriceQuote[]> => {
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const baseSymbol = stripIndiaSuffix(symbol);
+      const exchange = indiaExchangeForSymbol(symbol);
+      const endpoint = `${GOOGLE_FINANCE_URL}/${encodeURIComponent(baseSymbol)}:${exchange}?hl=en&gl=in`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://www.google.com/",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const html = await response.text();
+        const priceText =
+          html.match(/YMlKec fxKbKc[^>]*>([^<]+)</)?.[1] ??
+          html.match(/data-last-price="([^"]+)"/)?.[1] ??
+          html.match(/"currentPrice"\s*:\s*\{"raw"\s*:\s*([0-9.]+)/)?.[1] ??
+          null;
+
+        if (!priceText) {
+          return null;
+        }
+
+        const price = Number(priceText.replace(/[^0-9.\-]/g, ""));
+        if (!Number.isFinite(price)) {
+          return null;
+        }
+
+        return {
+          symbol,
+          price,
+          currency: "INR" as Currency,
+          exchange: "Google Finance",
+          asOf: nowIso(),
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  return results.filter((quote): quote is LivePriceQuote => Boolean(quote));
+};
+
 export const searchTickerSuggestions = async (
   query: string,
   signal?: AbortSignal
@@ -256,10 +366,54 @@ export const fetchLivePrices = async (
     return { ok: true, data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   }
 
+  const indiaSymbols = normalized.filter(isIndiaQuoteSymbol);
+  const otherSymbols = normalized.filter((symbol) => !isIndiaQuoteSymbol(symbol));
+
   try {
-    const response = hasProxyBase
-      ? await fetch(resolveApiUrl(`/api/quote?symbols=${encodeURIComponent(key)}`), { signal })
-      : await fetchDirectYahooQuotes(key, signal);
+    if (!hasProxyBase) {
+      const [indiaGoogleQuotes, indiaNseQuotes, otherQuotes] = await Promise.all([
+        indiaSymbols.length > 0 ? fetchDirectGoogleFinanceQuotes(indiaSymbols, signal) : Promise.resolve([]),
+        indiaSymbols.length > 0 ? fetchDirectNseQuotes(indiaSymbols, signal) : Promise.resolve([]),
+        otherSymbols.length > 0
+          ? fetchDirectYahooQuotes(otherSymbols.join(","), signal).then((response) => {
+              if (!response.ok) return [] as LivePriceQuote[];
+              return response.json().then((payload) => mapQuoteResults(payload as YahooQuoteResponse));
+            })
+          : Promise.resolve([]),
+      ]);
+
+      const mergedIndiaQuotes = [...indiaGoogleQuotes, ...indiaNseQuotes];
+      const quotes = [...otherQuotes, ...mergedIndiaQuotes]
+        .reduce<LivePriceQuote[]>((acc, quote) => {
+          if (!acc.some((item) => item.symbol === quote.symbol)) {
+            acc.push(quote);
+          }
+          return acc;
+        }, []);
+      if (quotes.length > 0) {
+        const fetchedAt = nowIso();
+        PRICE_CACHE.set(key, { value: quotes, fetchedAt });
+        return { ok: true, data: quotes, fromCache: false, fetchedAt };
+      }
+
+      if (cached) {
+        return {
+          ok: false,
+          error: buildError("Price fetch failed. Using cached prices.", "NETWORK"),
+          data: cached.value,
+          fromCache: true,
+          fetchedAt: cached.fetchedAt,
+        };
+      }
+
+      return {
+        ok: false,
+        error: buildError("Price fetch failed. Please try again.", "NETWORK"),
+        fromCache: false,
+      };
+    }
+
+    const response = await fetch(resolveApiUrl(`/api/quote?symbols=${encodeURIComponent(key)}`), { signal });
 
     if (!response.ok) {
       if (cached) {
