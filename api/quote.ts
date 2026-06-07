@@ -200,9 +200,10 @@ const fetchNseQuotes = async (symbols: string[], signal: AbortSignal): Promise<Y
           return null;
         }
 
-        const payload = (await response.json()) as { priceInfo?: { lastPrice?: number }; info?: { symbol?: string } };
-        const price = payload.priceInfo?.lastPrice;
-        if (typeof price !== "number") {
+        const payload = (await response.json()) as { priceInfo?: { lastPrice?: number | string }; info?: { symbol?: string } };
+        const rawPrice = payload.priceInfo?.lastPrice;
+        const price = typeof rawPrice === "number" ? rawPrice : Number(String(rawPrice ?? "").replace(/[^0-9.\-]/g, ""));
+        if (!Number.isFinite(price)) {
           return null;
         }
 
@@ -427,6 +428,16 @@ const fetchFinnhubIndiaQuotes = async (symbols: string[], signal: AbortSignal): 
   return { quoteResponse: { result: filtered } };
 };
 
+const fetchFinnhubIndiaRawSuffixQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  if (!FINNHUB_API_KEY) {
+    return null;
+  }
+
+  // Reuse existing Finnhub logic with raw .NS/.BO symbols, which can work
+  // in environments where exchange-prefixed symbols are not available.
+  return fetchFinnhubQuotes(symbols.join(","), signal);
+};
+
 const fetchFinnhubQuotes = async (normalized: string, signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
   if (!FINNHUB_API_KEY) {
     return null;
@@ -537,7 +548,7 @@ const applyCorsHeaders = (res: any): void => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader(
     "Access-Control-Expose-Headers",
-    "X-Request-Id, X-Cache, X-Upstream-Provider, X-Upstream-Status, X-Upstream-Provider-India, X-India-Symbols, X-India-Status"
+    "X-Request-Id, X-Cache, X-Upstream-Provider, X-Upstream-Status, X-Upstream-Provider-India, X-India-Symbols, X-India-Status, X-India-Provider-Counts"
   );
   res.setHeader("Vary", "Origin");
 };
@@ -603,13 +614,15 @@ export default async function handler(req: any, res: any) {
       const [indiaPayload, otherPayload] = await Promise.all([
         india.length > 0
           ? Promise.all([
+              fetchFinnhubIndiaRawSuffixQuotes(india, controller.signal),
               fetchFinnhubIndiaQuotes(india, controller.signal),
               fetchYahooChartQuotes(india, controller.signal),
               fetchYahooQuotePayload(india, controller.signal),
               fetchGoogleFinanceQuotes(india, controller.signal),
               fetchNseQuotes(india, controller.signal),
-            ]).then(([finnhubIndia, chart, yahooQuote, google, nse]) => {
+            ]).then(([finnhubRaw, finnhubIndia, chart, yahooQuote, google, nse]) => {
               const merged = [
+                ...(finnhubRaw?.quoteResponse.result ?? []),
                 ...(finnhubIndia?.quoteResponse.result ?? []),
                 ...(chart?.quoteResponse.result ?? []),
                 ...(yahooQuote?.quoteResponse.result ?? []),
@@ -617,8 +630,22 @@ export default async function handler(req: any, res: any) {
                 ...(nse?.quoteResponse.result ?? []),
               ];
               const unique = [...new Map(merged.map((item) => [item.symbol, item])).values()];
+
+              res.setHeader(
+                "X-India-Provider-Counts",
+                [
+                  `FINNHUB_RAW:${(finnhubRaw?.quoteResponse.result ?? []).length}`,
+                  `FINNHUB_INDIA:${(finnhubIndia?.quoteResponse.result ?? []).length}`,
+                  `YAHOO_CHART:${(chart?.quoteResponse.result ?? []).length}`,
+                  `YAHOO_QUOTE:${(yahooQuote?.quoteResponse.result ?? []).length}`,
+                  `GOOGLE_FINANCE:${(google?.quoteResponse.result ?? []).length}`,
+                  `NSE:${(nse?.quoteResponse.result ?? []).length}`,
+                ].join(",")
+              );
+
               if (unique.length > 0) {
                 const providerParts = [];
+                if ((finnhubRaw?.quoteResponse.result ?? []).length > 0) providerParts.push("FINNHUB_RAW");
                 if ((finnhubIndia?.quoteResponse.result ?? []).length > 0) providerParts.push("FINNHUB_INDIA");
                 if ((chart?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_CHART");
                 if ((yahooQuote?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_QUOTE");
