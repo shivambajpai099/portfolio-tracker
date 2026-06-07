@@ -7,6 +7,8 @@ const CACHE_TTL_MS = 20 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 500;
 const UPSTREAM_TIMEOUT_MS = 8000;
 const UPSTREAM_RETRY_DELAY_MS = 200;
+const TWELVEDATA_BATCH_SIZE = 1;
+const TWELVEDATA_MAX_RETRIES = 1;
 const MAX_SYMBOL_COUNT = 50;
 const MAX_SYMBOL_LENGTH = 15;
 // Yahoo and Indian exchange tickers can include ampersands (e.g. M&M.NS, L&TFH.NS).
@@ -513,44 +515,103 @@ const fetchTwelveDataIndiaQuotes = async (symbols: string[], signal: AbortSignal
     return items;
   };
 
-  const fetchBatch = async (
+  const chunkArray = <T,>(items: T[], size: number): T[][] => {
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += size) {
+      chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
+  };
+
+  const getRetryDelayMs = (retryAfterHeader: string | null, attempt: number): number => {
+    const retryAfterSeconds = Number(retryAfterHeader ?? "");
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      return Math.max(200, Math.floor(retryAfterSeconds * 1000));
+    }
+    return 400 * attempt;
+  };
+
+  const fetchBatchChunk = async (
     tag: string,
     requestedSymbols: string[],
   ): Promise<Array<YahooCompatiblePayload["quoteResponse"]["result"][number]>> => {
-    const endpoint = `${TWELVEDATA_QUOTE_URL}?symbol=${encodeURIComponent(requestedSymbols.join(","))}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
+    const endpoint = `${TWELVEDATA_QUOTE_URL}?symbol=${encodeURIComponent(requestedSymbols.join(","))}&apikey=${encodeURIComponent(
+      TWELVEDATA_API_KEY
+    )}`;
 
-    try {
-      const response = await fetch(endpoint, {
-        headers: {
-          Accept: "application/json",
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        },
-        signal,
-      });
+    for (let attempt = 1; attempt <= TWELVEDATA_MAX_RETRIES; attempt += 1) {
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            Accept: "application/json",
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          },
+          signal,
+        });
 
-      if (!response.ok) {
-        debugParts.push(`${tag}:http${response.status}`);
+        if (!response.ok) {
+          if (response.status === 429 && attempt < TWELVEDATA_MAX_RETRIES) {
+            const waitMs = getRetryDelayMs(response.headers.get("retry-after"), attempt);
+            debugParts.push(`${tag}:http429:r${attempt}`);
+            await delay(waitMs);
+            continue;
+          }
+          debugParts.push(`${tag}:http${response.status}`);
+          return [];
+        }
+
+        const payload = (await response.json()) as unknown;
+        const parsed = parseBatch(payload, requestedSymbols);
+        debugParts.push(`${tag}:ok:${parsed.length}`);
+        return parsed;
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        if (attempt < TWELVEDATA_MAX_RETRIES) {
+          debugParts.push(`${tag}:network:r${attempt}`);
+          await delay(300 * attempt);
+          continue;
+        }
+        debugParts.push(`${tag}:network`);
         return [];
       }
-
-      const payload = (await response.json()) as unknown;
-      const parsed = parseBatch(payload, requestedSymbols);
-      debugParts.push(`${tag}:ok:${parsed.length}`);
-      return parsed;
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        throw error;
-      }
-      debugParts.push(`${tag}:network`);
-      return [];
     }
+
+    return [];
   };
 
-  const [fmt1, fmt2] = await Promise.all([
-    fetchBatch("fmt1", fmt1List),
-    fetchBatch("fmt2", fmt2List),
-  ]);
+  const fetchBatched = async (
+    tag: string,
+    requestedSymbols: string[],
+  ): Promise<Array<YahooCompatiblePayload["quoteResponse"]["result"][number]>> => {
+    const chunks = chunkArray(requestedSymbols, TWELVEDATA_BATCH_SIZE);
+    const out: Array<YahooCompatiblePayload["quoteResponse"]["result"][number]> = [];
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunkTag = `${tag}#${i + 1}`;
+      const parsed = await fetchBatchChunk(chunkTag, chunks[i]);
+      out.push(...parsed);
+
+      // Tiny pacing gap between chunks to reduce bursty rate-limit hits.
+      if (i < chunks.length - 1) {
+        await delay(150);
+      }
+    }
+
+    return out;
+  };
+
+  const fmt1 = await fetchBatched("fmt1", fmt1List);
+
+  // Only run alternate symbol format for unresolved symbols.
+  const resolvedSymbols = new Set(fmt1.map((item) => item.symbol));
+  const unresolvedFmt2List = fmt2List.filter((candidate) => {
+    const original = symbolToInput.get(candidate) ?? candidate;
+    return !resolvedSymbols.has(original);
+  });
+  const fmt2 = unresolvedFmt2List.length > 0 ? await fetchBatched("fmt2", unresolvedFmt2List) : [];
 
   const filtered = [...fmt1, ...fmt2].filter(
     (item, index, arr) => arr.findIndex((x) => x.symbol === item.symbol) === index
