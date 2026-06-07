@@ -462,11 +462,19 @@ const applyCorsHeaders = (res: any): void => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader(
+    "Access-Control-Expose-Headers",
+    "X-Request-Id, X-Cache, X-Upstream-Provider, X-Upstream-Status, X-Upstream-Provider-India, X-India-Symbols, X-India-Status"
+  );
   res.setHeader("Vary", "Origin");
 };
 
 export default async function handler(req: any, res: any) {
   applyCorsHeaders(res);
+  // Always expose baseline debug headers so clients can tell which code path ran.
+  res.setHeader("X-Upstream-Provider-India", "NOT_ATTEMPTED");
+  res.setHeader("X-India-Symbols", "0");
+  res.setHeader("X-India-Status", "SKIPPED");
 
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -494,6 +502,9 @@ export default async function handler(req: any, res: any) {
 
   const cached = CACHE.get(normalized);
   if (cached && isFresh(cached)) {
+    // Cached payload may come from an earlier run; make that explicit.
+    res.setHeader("X-Upstream-Provider-India", "CACHE");
+    res.setHeader("X-India-Status", "CACHE_HIT");
     res.setHeader("Cache-Control", EDGE_CACHE_STALE);
     res.setHeader("X-Cache", "HIT");
     res.status(200).json(cached.payload);
@@ -508,6 +519,11 @@ export default async function handler(req: any, res: any) {
     try {
       const symbols = normalized.split(",").filter(Boolean);
       const { india, other } = partitionSymbols(symbols);
+      res.setHeader("X-India-Symbols", String(india.length));
+      if (india.length > 0) {
+        res.setHeader("X-Upstream-Provider-India", "NO_DATA");
+        res.setHeader("X-India-Status", "ATTEMPTED");
+      }
 
       const [indiaPayload, otherPayload] = await Promise.all([
         india.length > 0
@@ -528,6 +544,7 @@ export default async function handler(req: any, res: any) {
                 if ((google?.quoteResponse.result ?? []).length > 0) providerParts.push("GOOGLE_FINANCE");
                 if ((nse?.quoteResponse.result ?? []).length > 0) providerParts.push("NSE");
                 res.setHeader("X-Upstream-Provider-India", providerParts.join("+") || "INDIA");
+                res.setHeader("X-India-Status", "OK");
               }
               return unique.length > 0 ? { quoteResponse: { result: unique } } : null;
             })
