@@ -167,7 +167,43 @@ const fetchDirectYahooQuotes = async (key: string, signal?: AbortSignal): Promis
   throw new Error("Quote upstream request failed");
 };
 
+const getNseCookieHeader = async (signal?: AbortSignal): Promise<string | null> => {
+  try {
+    const response = await fetch("https://www.nseindia.com", {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://www.nseindia.com/",
+      },
+      signal,
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const headerLike = response.headers as Headers & { getSetCookie?: () => string[] };
+    const setCookies = typeof headerLike.getSetCookie === "function" ? headerLike.getSetCookie() : [];
+    const rawCookies = setCookies.length > 0 ? setCookies : [response.headers.get("set-cookie") ?? ""];
+
+    const cookiePairs = rawCookies
+      .flatMap((cookie) => cookie.split(/,(?=\s*[^;=]+=[^;=]+)/g))
+      .map((cookie) => cookie.split(";")[0]?.trim())
+      .filter((cookie): cookie is string => Boolean(cookie) && cookie.includes("="));
+
+    return cookiePairs.length > 0 ? cookiePairs.join("; ") : null;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+    return null;
+  }
+};
+
 const fetchDirectNseQuotes = async (symbols: string[], signal?: AbortSignal): Promise<LivePriceQuote[]> => {
+  const cookieHeader = await getNseCookieHeader(signal);
   const results = await Promise.all(
     symbols.map(async (symbol) => {
       const requestSymbol = stripIndiaSuffix(symbol);
@@ -181,6 +217,7 @@ const fetchDirectNseQuotes = async (symbols: string[], signal?: AbortSignal): Pr
             Accept: "application/json",
             "Accept-Language": "en-US,en;q=0.9",
             Referer: "https://www.nseindia.com/",
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           },
           signal,
         });

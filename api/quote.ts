@@ -127,6 +127,36 @@ const partitionSymbols = (symbols: string[]): { india: string[]; other: string[]
 };
 
 const fetchNseQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  let cookieHeader: string | null = null;
+
+  try {
+    const homeResponse = await fetch("https://www.nseindia.com", {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://www.nseindia.com/",
+      },
+      signal,
+    });
+
+    if (homeResponse.ok) {
+      const headerLike = homeResponse.headers as Headers & { getSetCookie?: () => string[] };
+      const setCookies = typeof headerLike.getSetCookie === "function" ? headerLike.getSetCookie() : [];
+      const rawCookies = setCookies.length > 0 ? setCookies : [homeResponse.headers.get("set-cookie") ?? ""];
+      const cookiePairs = rawCookies
+        .flatMap((cookie) => cookie.split(/,(?=\s*[^;=]+=[^;=]+)/g))
+        .map((cookie) => cookie.split(";")[0]?.trim())
+        .filter((cookie): cookie is string => Boolean(cookie) && cookie.includes("="));
+      cookieHeader = cookiePairs.length > 0 ? cookiePairs.join("; ") : null;
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+  }
+
   const results = await Promise.all(
     symbols.map(async (symbol) => {
       const requestSymbol = stripIndiaSuffix(symbol);
@@ -140,6 +170,7 @@ const fetchNseQuotes = async (symbols: string[], signal: AbortSignal): Promise<Y
             Accept: "application/json",
             "Accept-Language": "en-US,en;q=0.9",
             Referer: "https://www.nseindia.com/",
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           },
           signal,
         });
@@ -412,6 +443,12 @@ export default async function handler(req: any, res: any) {
             ]).then(([google, nse]) => {
               const merged = [...(google?.quoteResponse.result ?? []), ...(nse?.quoteResponse.result ?? [])];
               const unique = [...new Map(merged.map((item) => [item.symbol, item])).values()];
+              if (unique.length > 0) {
+                const providerParts = [];
+                if ((google?.quoteResponse.result ?? []).length > 0) providerParts.push("GOOGLE_FINANCE");
+                if ((nse?.quoteResponse.result ?? []).length > 0) providerParts.push("NSE");
+                res.setHeader("X-Upstream-Provider-India", providerParts.join("+") || "INDIA");
+              }
               return unique.length > 0 ? { quoteResponse: { result: unique } } : null;
             })
           : Promise.resolve(null),
