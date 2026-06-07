@@ -122,6 +122,12 @@ export default function DashboardScreen() {
     [filteredCashHoldings, rc, fxRates]
   );
 
+  // For rebalancing we always use the full unfiltered portfolio (ignore geo filter)
+  const totalCashForRebalancing = useMemo(
+    () => cashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
+    [cashHoldings, rc, fxRates]
+  );
+
   const deployCashAllocationContext = useMemo(
     () => ({
       indiaCurrentValue: geoSplit.indiaCurrentValue,
@@ -131,11 +137,6 @@ export default function DashboardScreen() {
     [geoSplit.indiaCurrentValue, geoSplit.usCurrentValue, totalCashForRebalancing]
   );
 
-  // For rebalancing we always use the full unfiltered portfolio (ignore geo filter)
-  const totalCashForRebalancing = useMemo(
-    () => cashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
-    [cashHoldings, rc, fxRates]
-  );
 
   const rebalancingResult = useMemo(() => {
     if (!settings.targetAllocation) return null;
