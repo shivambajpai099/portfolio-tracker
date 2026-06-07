@@ -359,6 +359,19 @@ const fetchYahooChartQuotes = async (symbols: string[], signal: AbortSignal): Pr
   return { quoteResponse: { result: filtered } };
 };
 
+const fetchYahooQuotePayload = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  if (symbols.length === 0) {
+    return null;
+  }
+
+  const upstream = await fetchQuoteWithFailover(symbols.join(","), signal);
+  if (!upstream.ok) {
+    return null;
+  }
+
+  return (await upstream.json()) as YahooCompatiblePayload;
+};
+
 const fetchFinnhubQuotes = async (normalized: string, signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
   if (!FINNHUB_API_KEY) {
     return null;
@@ -536,11 +549,13 @@ export default async function handler(req: any, res: any) {
         india.length > 0
           ? Promise.all([
               fetchYahooChartQuotes(india, controller.signal),
+              fetchYahooQuotePayload(india, controller.signal),
               fetchGoogleFinanceQuotes(india, controller.signal),
               fetchNseQuotes(india, controller.signal),
-            ]).then(([chart, google, nse]) => {
+            ]).then(([chart, yahooQuote, google, nse]) => {
               const merged = [
                 ...(chart?.quoteResponse.result ?? []),
+                ...(yahooQuote?.quoteResponse.result ?? []),
                 ...(google?.quoteResponse.result ?? []),
                 ...(nse?.quoteResponse.result ?? []),
               ];
@@ -548,6 +563,7 @@ export default async function handler(req: any, res: any) {
               if (unique.length > 0) {
                 const providerParts = [];
                 if ((chart?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_CHART");
+                if ((yahooQuote?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_QUOTE");
                 if ((google?.quoteResponse.result ?? []).length > 0) providerParts.push("GOOGLE_FINANCE");
                 if ((nse?.quoteResponse.result ?? []).length > 0) providerParts.push("NSE");
                 res.setHeader("X-Upstream-Provider-India", providerParts.join("+") || "INDIA");
