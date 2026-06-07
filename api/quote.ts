@@ -16,7 +16,10 @@ const EDGE_CACHE_MISS = "public, s-maxage=30, stale-while-revalidate=120";
 const RETRYABLE_UPSTREAM_STATUSES = new Set([401, 429, 500, 502, 503, 504]);
 const FINNHUB_API_KEY = String(process.env.FINNHUB_API_KEY ?? "").trim();
 const FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote";
+const TWELVEDATA_API_KEY = String(process.env.TWELVEDATA_API_KEY ?? "").trim();
+const TWELVEDATA_QUOTE_URL = "https://api.twelvedata.com/quote";
 const YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
+const YAHOO_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary";
 const NSE_QUOTE_URL = "https://www.nseindia.com/api/quote-equity";
 const GOOGLE_FINANCE_URL = "https://www.google.com/finance/quote";
 
@@ -50,6 +53,19 @@ type YahooChartResponse = {
         exchangeName?: string;
         fullExchangeName?: string;
         regularMarketTime?: number;
+      };
+    }>;
+  };
+};
+
+type YahooSummaryResponse = {
+  quoteSummary?: {
+    result?: Array<{
+      price?: {
+        symbol?: string;
+        regularMarketPrice?: { raw?: number };
+        currency?: string;
+        exchangeName?: string;
       };
     }>;
   };
@@ -126,6 +142,7 @@ const isIndiaSymbol = (symbol: string): boolean => /\.(NS|BO)$/i.test(symbol);
 const stripIndiaSuffix = (symbol: string): string => symbol.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
 
 const indiaExchangeForSymbol = (symbol: string): "NSE" | "BOM" => (symbol.endsWith(".BO") ? "BOM" : "NSE");
+const indiaExchangeForTwelveData = (symbol: string): "NSE" | "BSE" => (symbol.endsWith(".BO") ? "BSE" : "NSE");
 
 const partitionSymbols = (symbols: string[]): { india: string[]; other: string[] } => {
   const india: string[] = [];
@@ -339,6 +356,142 @@ const fetchYahooChartQuotes = async (symbols: string[], signal: AbortSignal): Pr
           currency: meta?.currency ?? inferCurrency(resolvedSymbol),
           exchange: meta?.fullExchangeName ?? meta?.exchangeName ?? "Yahoo Chart",
           fullExchangeName: meta?.fullExchangeName ?? meta?.exchangeName ?? "Yahoo Chart",
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  const filtered = results.filter(
+    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
+  );
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  return { quoteResponse: { result: filtered } };
+};
+
+const fetchYahooSummaryQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const endpoint = `${YAHOO_SUMMARY_URL}/${encodeURIComponent(symbol)}?modules=price`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://finance.yahoo.com/",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as YahooSummaryResponse;
+        const priceBlock = payload.quoteSummary?.result?.[0]?.price;
+        const price = priceBlock?.regularMarketPrice?.raw;
+        const resolvedSymbol = (priceBlock?.symbol ?? symbol).toUpperCase();
+
+        if (!resolvedSymbol || typeof price !== "number") {
+          return null;
+        }
+
+        return {
+          symbol: resolvedSymbol,
+          regularMarketPrice: price,
+          regularMarketTime: Math.floor(Date.now() / 1000),
+          currency: priceBlock?.currency ?? inferCurrency(resolvedSymbol),
+          exchange: priceBlock?.exchangeName ?? "Yahoo Summary",
+          fullExchangeName: priceBlock?.exchangeName ?? "Yahoo Summary",
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return null;
+      }
+    })
+  );
+
+  const filtered = results.filter(
+    (item): item is YahooCompatiblePayload["quoteResponse"]["result"][number] => Boolean(item)
+  );
+
+  if (filtered.length === 0) {
+    return null;
+  }
+
+  return { quoteResponse: { result: filtered } };
+};
+
+const fetchTwelveDataIndiaQuotes = async (symbols: string[], signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
+  if (!TWELVEDATA_API_KEY) {
+    return null;
+  }
+
+  const results = await Promise.all(
+    symbols.map(async (symbol) => {
+      const base = stripIndiaSuffix(symbol);
+      const exchange = indiaExchangeForTwelveData(symbol);
+      const tdSymbol = `${base}:${exchange}`;
+      const endpoint = `${TWELVEDATA_QUOTE_URL}?symbol=${encodeURIComponent(tdSymbol)}&apikey=${encodeURIComponent(TWELVEDATA_API_KEY)}`;
+
+      try {
+        const response = await fetch(endpoint, {
+          headers: {
+            Accept: "application/json",
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          },
+          signal,
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = (await response.json()) as {
+          close?: string;
+          previous_close?: string;
+          currency?: string;
+          exchange?: string;
+          timestamp?: number;
+          code?: number;
+          message?: string;
+          status?: string;
+        };
+
+        if (payload.status === "error" || payload.code) {
+          return null;
+        }
+
+        const priceCandidate = payload.close ?? payload.previous_close;
+        const price = Number(String(priceCandidate ?? "").replace(/[^0-9.\-]/g, ""));
+        if (!Number.isFinite(price) || price <= 0) {
+          return null;
+        }
+
+        return {
+          symbol,
+          regularMarketPrice: price,
+          regularMarketTime:
+            typeof payload.timestamp === "number" && Number.isFinite(payload.timestamp)
+              ? payload.timestamp
+              : Math.floor(Date.now() / 1000),
+          currency: payload.currency ?? "INR",
+          exchange: payload.exchange ?? exchange,
+          fullExchangeName: payload.exchange ?? exchange,
         };
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
@@ -614,16 +767,20 @@ export default async function handler(req: any, res: any) {
       const [indiaPayload, otherPayload] = await Promise.all([
         india.length > 0
           ? Promise.all([
+              fetchTwelveDataIndiaQuotes(india, controller.signal),
               fetchFinnhubIndiaRawSuffixQuotes(india, controller.signal),
               fetchFinnhubIndiaQuotes(india, controller.signal),
+              fetchYahooSummaryQuotes(india, controller.signal),
               fetchYahooChartQuotes(india, controller.signal),
               fetchYahooQuotePayload(india, controller.signal),
               fetchGoogleFinanceQuotes(india, controller.signal),
               fetchNseQuotes(india, controller.signal),
-            ]).then(([finnhubRaw, finnhubIndia, chart, yahooQuote, google, nse]) => {
+            ]).then(([twelveData, finnhubRaw, finnhubIndia, yahooSummary, chart, yahooQuote, google, nse]) => {
               const merged = [
+                ...(twelveData?.quoteResponse.result ?? []),
                 ...(finnhubRaw?.quoteResponse.result ?? []),
                 ...(finnhubIndia?.quoteResponse.result ?? []),
+                ...(yahooSummary?.quoteResponse.result ?? []),
                 ...(chart?.quoteResponse.result ?? []),
                 ...(yahooQuote?.quoteResponse.result ?? []),
                 ...(google?.quoteResponse.result ?? []),
@@ -634,8 +791,10 @@ export default async function handler(req: any, res: any) {
               res.setHeader(
                 "X-India-Provider-Counts",
                 [
+                  `TWELVEDATA:${(twelveData?.quoteResponse.result ?? []).length}`,
                   `FINNHUB_RAW:${(finnhubRaw?.quoteResponse.result ?? []).length}`,
                   `FINNHUB_INDIA:${(finnhubIndia?.quoteResponse.result ?? []).length}`,
+                  `YAHOO_SUMMARY:${(yahooSummary?.quoteResponse.result ?? []).length}`,
                   `YAHOO_CHART:${(chart?.quoteResponse.result ?? []).length}`,
                   `YAHOO_QUOTE:${(yahooQuote?.quoteResponse.result ?? []).length}`,
                   `GOOGLE_FINANCE:${(google?.quoteResponse.result ?? []).length}`,
@@ -645,8 +804,10 @@ export default async function handler(req: any, res: any) {
 
               if (unique.length > 0) {
                 const providerParts = [];
+                if ((twelveData?.quoteResponse.result ?? []).length > 0) providerParts.push("TWELVEDATA");
                 if ((finnhubRaw?.quoteResponse.result ?? []).length > 0) providerParts.push("FINNHUB_RAW");
                 if ((finnhubIndia?.quoteResponse.result ?? []).length > 0) providerParts.push("FINNHUB_INDIA");
+                if ((yahooSummary?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_SUMMARY");
                 if ((chart?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_CHART");
                 if ((yahooQuote?.quoteResponse.result ?? []).length > 0) providerParts.push("YAHOO_QUOTE");
                 if ((google?.quoteResponse.result ?? []).length > 0) providerParts.push("GOOGLE_FINANCE");
