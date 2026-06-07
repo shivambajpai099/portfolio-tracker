@@ -17,7 +17,21 @@ const toStringQuery = (value: unknown): string => {
 
 const isFresh = (entry: CacheEntry): boolean => Date.now() - entry.fetchedAtMs <= CACHE_TTL_MS;
 
+const applyCorsHeaders = (res: any): void => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Vary", "Origin");
+};
+
 export default async function handler(req: any, res: any) {
+  applyCorsHeaders(res);
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;

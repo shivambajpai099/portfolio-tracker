@@ -41,6 +41,7 @@ const PRICE_CACHE = new Map<string, CacheEntry<LivePriceQuote[]>>();
 const TTL_MS = 20 * 60 * 1000;
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
+const YAHOO_QUOTE_BASE_URLS = ["https://query2.finance.yahoo.com", "https://query1.finance.yahoo.com"];
 
 const nowIso = () => new Date().toISOString();
 
@@ -108,6 +109,57 @@ const mapQuoteResults = (payload: YahooQuoteResponse): LivePriceQuote[] => {
       };
     })
     .filter((quote): quote is LivePriceQuote => Boolean(quote));
+};
+
+const fetchDirectYahooQuotes = async (key: string, signal?: AbortSignal): Promise<Response> => {
+  const path = `/v7/finance/quote?symbols=${encodeURIComponent(key)}`;
+  let lastResponse: Response | null = null;
+  let lastError: unknown = null;
+
+  for (let index = 0; index < YAHOO_QUOTE_BASE_URLS.length; index += 1) {
+    const endpoint = `${YAHOO_QUOTE_BASE_URLS[index]}${path}`;
+
+    try {
+      const response = await fetch(endpoint, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          Accept: "application/json",
+          "Accept-Language": "en-US,en;q=0.9",
+          Referer: "https://finance.yahoo.com/",
+        },
+        signal,
+      });
+
+      if (response.ok) {
+        return response;
+      }
+
+      lastResponse = response;
+      if (response.status !== 401 && response.status !== 429 && response.status !== 500 && response.status !== 502 && response.status !== 503 && response.status !== 504) {
+        return response;
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw error;
+      }
+      lastError = error;
+    }
+
+    if (index < YAHOO_QUOTE_BASE_URLS.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  if (lastResponse) {
+    return lastResponse;
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  throw new Error("Quote upstream request failed");
 };
 
 export const searchTickerSuggestions = async (
@@ -204,23 +256,19 @@ export const fetchLivePrices = async (
     return { ok: true, data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   }
 
-  if (!hasProxyBase) {
-    return {
-      ok: false,
-      error: buildError("Market-data proxy is not configured. Set EXPO_PUBLIC_API_BASE_URL for native builds.", "API"),
-      fromCache: false,
-    };
-  }
-
   try {
-    const endpoint = resolveApiUrl(`/api/quote?symbols=${encodeURIComponent(key)}`);
-    const response = await fetch(endpoint, { signal });
+    const response = hasProxyBase
+      ? await fetch(resolveApiUrl(`/api/quote?symbols=${encodeURIComponent(key)}`), { signal })
+      : await fetchDirectYahooQuotes(key, signal);
 
     if (!response.ok) {
       if (cached) {
         return {
           ok: false,
-          error: buildError("Price API returned an error. Using cached prices.", "API"),
+          error: buildError(
+            hasProxyBase ? "Price API returned an error. Using cached prices." : "Yahoo Finance returned an error. Using cached prices.",
+            "API"
+          ),
           data: cached.value,
           fromCache: true,
           fetchedAt: cached.fetchedAt,
@@ -229,7 +277,7 @@ export const fetchLivePrices = async (
 
       return {
         ok: false,
-        error: buildError("Price API returned an error.", "API"),
+        error: buildError(hasProxyBase ? "Price API returned an error." : "Yahoo Finance returned an error.", "API"),
         fromCache: false,
       };
     }
@@ -253,7 +301,10 @@ export const fetchLivePrices = async (
     if (cached) {
       return {
         ok: false,
-        error: buildError("Price fetch failed. Using cached prices.", "NETWORK"),
+        error: buildError(
+          hasProxyBase ? "Price fetch failed. Using cached prices." : "Yahoo Finance fetch failed. Using cached prices.",
+          "NETWORK"
+        ),
         data: cached.value,
         fromCache: true,
         fetchedAt: cached.fetchedAt,
@@ -262,7 +313,10 @@ export const fetchLivePrices = async (
 
     return {
       ok: false,
-      error: buildError("Price fetch failed. Please try again.", "NETWORK"),
+      error: buildError(
+        hasProxyBase ? "Price fetch failed. Please try again." : "Yahoo Finance fetch failed. Please try again.",
+        "NETWORK"
+      ),
       fromCache: false,
     };
   }

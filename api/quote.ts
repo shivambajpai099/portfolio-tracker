@@ -9,7 +9,8 @@ const UPSTREAM_TIMEOUT_MS = 8000;
 const UPSTREAM_RETRY_DELAY_MS = 200;
 const MAX_SYMBOL_COUNT = 50;
 const MAX_SYMBOL_LENGTH = 15;
-const SYMBOL_PATTERN = /^[A-Z0-9.\-^=]+$/;
+// Yahoo and Indian exchange tickers can include ampersands (e.g. M&M.NS, L&TFH.NS).
+const SYMBOL_PATTERN = /^[A-Z0-9.&\-^=]+$/;
 const EDGE_CACHE_STALE = "public, s-maxage=1200, stale-while-revalidate=600";
 const EDGE_CACHE_MISS = "public, s-maxage=30, stale-while-revalidate=120";
 const RETRYABLE_UPSTREAM_STATUSES = new Set([401, 429, 500, 502, 503, 504]);
@@ -201,7 +202,21 @@ const fetchQuoteWithFailover = async (normalized: string, signal: AbortSignal): 
   throw new Error("Quote upstream request failed");
 };
 
+const applyCorsHeaders = (res: any): void => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Vary", "Origin");
+};
+
 export default async function handler(req: any, res: any) {
+  applyCorsHeaders(res);
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
