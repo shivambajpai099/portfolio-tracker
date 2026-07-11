@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
+import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { fetchLivePrices } from "../../src/services/yahooFinanceService";
@@ -74,6 +75,7 @@ export default function HoldingsScreen() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [showFilters, setShowFilters] = useState(false);
   const [isAddVisible, setIsAddVisible] = useState(false);
+  const [isImportVisible, setIsImportVisible] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<Holding | null>(null);
@@ -335,6 +337,9 @@ export default function HoldingsScreen() {
           <Pressable style={[styles.refreshBtn, isRefreshingPrices && styles.refreshBtnDisabled]} onPress={refreshAllMarketPrices} disabled={isRefreshingPrices || holdings.length === 0}>
             <Text style={styles.refreshBtnText}>{isRefreshingPrices ? "Refreshing..." : "Refresh"}</Text>
           </Pressable>
+          <Pressable style={styles.importBtn} onPress={() => setIsImportVisible(true)}>
+            <Text style={styles.importBtnText}>Import</Text>
+          </Pressable>
           <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
             <Text style={styles.addBtnText}>Add</Text>
           </Pressable>
@@ -530,6 +535,18 @@ export default function HoldingsScreen() {
             updatedAt: nowIso(),
           });
         }}
+      />
+
+      <ImportHoldingsModal
+        visible={isImportVisible}
+        accounts={brokerAccounts}
+        existingHoldings={holdings}
+        onClose={() => setIsImportVisible(false)}
+        onComplete={(result) => {
+          console.log(`Imported ${result.addedCount} new, ${result.updatedCount} updated to ${result.accountName}`);
+        }}
+        addHolding={addHolding}
+        updateHolding={updateHolding}
       />
 
       <Modal visible={Boolean(editTarget)} transparent animationType="fade" onRequestClose={() => setEditTarget(null)}>
@@ -783,6 +800,17 @@ const styles = StyleSheet.create({
     color: colors.bg,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
+  },
+  importBtn: {
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+  },
+  importBtnText: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
   },
   searchInput: {
     marginBottom: spacing.lg,

@@ -6,5 +6,7 @@ export const colors = {
   accent: "#67E8F9",
   positive: "#22C55E",
   negative: "#EF4444",
+  warning: "#F59E0B",
+  border: "#2D3139",
 } as const;
 

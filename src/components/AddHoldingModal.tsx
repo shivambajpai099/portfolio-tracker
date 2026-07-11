@@ -56,6 +56,12 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   const [suggestions, setSuggestions] = useState<SelectedTicker[]>([]);
   const [showGuide, setShowGuide] = useState(false);
 
+  // Custom symbol mode - allows entering tickers not found in search
+  const [customMode, setCustomMode] = useState(false);
+  const [customSymbol, setCustomSymbol] = useState("");
+  const [customCompanyName, setCustomCompanyName] = useState("");
+  const [customCurrency, setCustomCurrency] = useState<Currency>("USD");
+
   const holdingAccounts = useMemo(
     () => accounts.filter((account) => accountSupportsHoldings(account.type)),
     [accounts]
@@ -75,7 +81,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   }, [visible, holdingAccounts]);
 
   useEffect(() => {
-    if (!visible) {
+    if (!visible || customMode) {
       return;
     }
 
@@ -111,7 +117,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
       clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [query, selected, visible]);
+  }, [query, selected, visible, customMode]);
 
   useEffect(() => {
     if (!visible || !selected) {
@@ -140,12 +146,25 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     return () => controller.abort();
   }, [selected, visible]);
 
-  const canSubmit = useMemo(() => {
+  // canSubmit for search mode
+  const canSubmitSearch = useMemo(() => {
     const qty = parseNumber(quantity);
     const avg = parseNumber(averagePrice);
     const hasValidAccount = holdingAccounts.some((account) => account.id === accountId);
     return Boolean(selected && hasValidAccount && qty > 0 && avg > 0);
   }, [selected, accountId, quantity, averagePrice, holdingAccounts]);
+
+  // canSubmit for custom mode
+  const canSubmitCustom = useMemo(() => {
+    const qty = parseNumber(quantity);
+    const avg = parseNumber(averagePrice);
+    const hasValidAccount = holdingAccounts.some((account) => account.id === accountId);
+    const hasSymbol = customSymbol.trim().length > 0;
+    const hasCompanyName = customCompanyName.trim().length > 0;
+    return Boolean(hasValidAccount && hasSymbol && hasCompanyName && qty > 0 && avg > 0);
+  }, [accountId, quantity, averagePrice, holdingAccounts, customSymbol, customCompanyName]);
+
+  const canSubmit = customMode ? canSubmitCustom : canSubmitSearch;
 
   const resetState = () => {
     setQuery("");
@@ -156,6 +175,10 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     setIsLoading(false);
     setIsSaving(false);
     setErrorText("");
+    setCustomMode(false);
+    setCustomSymbol("");
+    setCustomCompanyName("");
+    setCustomCurrency("USD");
   };
 
   const handleClose = () => {
@@ -171,161 +194,275 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
     setErrorText("");
   };
 
-  const handleCreate = async () => {
-    if (!selected) {
-      return;
-    }
+  const handleSwitchToCustomMode = () => {
+    setCustomMode(true);
+    setCustomSymbol(query.trim().toUpperCase());
+    setSelected(null);
+    setSuggestions([]);
+  };
 
+  const handleSwitchToSearchMode = () => {
+    setCustomMode(false);
+    setQuery(customSymbol);
+    setCustomSymbol("");
+    setCustomCompanyName("");
+  };
+
+  const handleCreate = async () => {
     const qty = parseNumber(quantity);
     const avg = parseNumber(averagePrice);
     const hasValidAccount = holdingAccounts.some((account) => account.id === accountId);
+    
     if (!hasValidAccount || qty <= 0 || avg <= 0) {
       return;
     }
 
-    setIsSaving(true);
+    if (customMode) {
+      // Custom mode: use manually entered values
+      const symbol = customSymbol.trim().toUpperCase();
+      const companyName = customCompanyName.trim();
+      
+      if (!symbol || !companyName) {
+        return;
+      }
 
-    let marketPrice = livePrice ?? avg;
-    try {
-      if (livePrice == null) {
-        const result = await fetchLivePrices(buildLivePriceCandidates(selected.symbol, selected.currency));
+      setIsSaving(true);
+
+      let marketPrice = avg;
+      try {
+        const result = await fetchLivePrices(buildLivePriceCandidates(symbol, customCurrency));
         if (result.ok && result.data[0]?.price) {
           marketPrice = result.data[0].price;
         }
+      } catch {
+        // Keep avg price as market price fallback
       }
-    } catch {
-      // Keep marketPrice fallback to the average buy price so add flow remains offline-safe.
+
+      onCreate({
+        accountId,
+        symbol,
+        companyName,
+        currency: customCurrency,
+        quantity: qty,
+        averagePrice: avg,
+        marketPrice,
+      });
+
+      handleClose();
+    } else {
+      // Search mode: use selected ticker
+      if (!selected) {
+        return;
+      }
+
+      setIsSaving(true);
+
+      let marketPrice = livePrice ?? avg;
+      try {
+        if (livePrice == null) {
+          const result = await fetchLivePrices(buildLivePriceCandidates(selected.symbol, selected.currency));
+          if (result.ok && result.data[0]?.price) {
+            marketPrice = result.data[0].price;
+          }
+        }
+      } catch {
+        // Keep marketPrice fallback to the average buy price so add flow remains offline-safe.
+      }
+
+      onCreate({
+        accountId,
+        symbol: selected.symbol,
+        companyName: selected.companyName,
+        currency: selected.currency,
+        quantity: qty,
+        averagePrice: avg,
+        marketPrice,
+      });
+
+      handleClose();
     }
-
-    onCreate({
-      accountId,
-      symbol: selected.symbol,
-      companyName: selected.companyName,
-      currency: selected.currency,
-      quantity: qty,
-      averagePrice: avg,
-      marketPrice,
-    });
-
-    handleClose();
   };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
       <View style={styles.overlay}>
-        <View style={styles.modalCard}>
-          <View style={styles.titleRow}>
-            <Text style={styles.title}>Add Holding</Text>
-            <Pressable style={styles.helpBtn} onPress={() => setShowGuide(true)}>
-              <Text style={styles.helpBtnText}>How to fill</Text>
-            </Pressable>
-          </View>
-
-          <Text style={styles.label}>Search Ticker</Text>
-          <TextInput
-            value={query}
-            onChangeText={(value) => {
-              setQuery(value);
-              setSelected(null);
-            }}
-            placeholder="e.g. AAPL, RELIANCE.NS"
-            placeholderTextColor={colors.muted}
-            autoCapitalize="characters"
-            style={styles.input}
-          />
-
-          {isLoading ? (
-            <View style={styles.loadingRow}>
-              <ActivityIndicator color={colors.accent} />
-              <Text style={styles.mutedText}>Searching...</Text>
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.modalCard}>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>Add Holding</Text>
+              <Pressable style={styles.helpBtn} onPress={() => setShowGuide(true)}>
+                <Text style={styles.helpBtnText}>How to fill</Text>
+              </Pressable>
             </View>
-          ) : null}
 
-          {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
+            {!customMode ? (
+              <>
+                <Text style={styles.label}>Search Ticker</Text>
+                <TextInput
+                  value={query}
+                  onChangeText={(value) => {
+                    setQuery(value);
+                    setSelected(null);
+                  }}
+                  placeholder="e.g. AAPL, RELIANCE.NS"
+                  placeholderTextColor={colors.muted}
+                  autoCapitalize="characters"
+                  style={styles.input}
+                />
 
-          {suggestions.length > 0 ? (
-            <View style={styles.suggestionsWrap}>
-              <ScrollView keyboardShouldPersistTaps="handled">
-                {suggestions.map((item) => (
-                  <Pressable
-                    key={`${item.symbol}-${item.exchange}`}
-                    style={styles.suggestionItem}
-                    onPress={() => handleSelectTicker(item)}
-                  >
-                    <Text style={styles.suggestionSymbol}>{item.symbol}</Text>
-                    <Text style={styles.suggestionMeta}>{item.companyName}</Text>
-                    <Text style={styles.suggestionMeta}>{item.exchange} - {item.currency}</Text>
+                {isLoading ? (
+                  <View style={styles.loadingRow}>
+                    <ActivityIndicator color={colors.accent} />
+                    <Text style={styles.mutedText}>Searching...</Text>
+                  </View>
+                ) : null}
+
+                {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
+
+                {suggestions.length > 0 ? (
+                  <View style={styles.suggestionsWrap}>
+                    <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+                      {suggestions.map((item) => (
+                        <Pressable
+                          key={`${item.symbol}-${item.exchange}`}
+                          style={styles.suggestionItem}
+                          onPress={() => handleSelectTicker(item)}
+                        >
+                          <Text style={styles.suggestionSymbol}>{item.symbol}</Text>
+                          <Text style={styles.suggestionMeta}>{item.companyName}</Text>
+                          <Text style={styles.suggestionMeta}>{item.exchange} - {item.currency}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </View>
+                ) : null}
+
+                {/* Show "Can't find ticker?" link when search returns no results and query has content */}
+                {!isLoading && suggestions.length === 0 && query.trim().length >= 2 && !selected ? (
+                  <Pressable style={styles.customModeLink} onPress={handleSwitchToCustomMode}>
+                    <Text style={styles.customModeLinkText}>
+                      Can't find your ticker? Enter manually →
+                    </Text>
                   </Pressable>
-                ))}
-              </ScrollView>
-            </View>
-          ) : null}
+                ) : null}
 
-          {selected ? (
-            <View style={styles.selectedCard}>
-              <Text style={styles.selectedSymbol}>{selected.symbol}</Text>
-              <Text style={styles.suggestionMeta}>{selected.companyName}</Text>
-              <Text style={styles.suggestionMeta}>{selected.exchange} - {selected.currency}</Text>
-              <Text style={styles.suggestionMeta}>
-                Current price: {livePriceLoading ? "Loading..." : livePrice != null ? `${livePrice.toFixed(2)} ${selected.currency}` : "Unavailable"}
-              </Text>
-            </View>
-          ) : null}
-
-          <Text style={styles.label}>Account</Text>
-          {holdingAccounts.length === 0 ? (
-            <Text style={styles.errorText}>Create a BROKER account before adding holdings.</Text>
-          ) : (
-            <View style={styles.pillRow}>
-              {holdingAccounts.map((account) => {
-                const active = accountId === account.id;
-                return (
-                  <Pressable
-                    key={account.id}
-                    style={[styles.pill, active && styles.pillActive]}
-                    onPress={() => setAccountId(account.id)}
-                  >
-                    <Text style={[styles.pillText, active && styles.pillTextActive]}>{account.name}</Text>
+                {selected ? (
+                  <View style={styles.selectedCard}>
+                    <Text style={styles.selectedSymbol}>{selected.symbol}</Text>
+                    <Text style={styles.suggestionMeta}>{selected.companyName}</Text>
+                    <Text style={styles.suggestionMeta}>{selected.exchange} - {selected.currency}</Text>
+                    <Text style={styles.suggestionMeta}>
+                      Current price: {livePriceLoading ? "Loading..." : livePrice != null ? `${livePrice.toFixed(2)} ${selected.currency}` : "Unavailable"}
+                    </Text>
+                  </View>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* Custom symbol mode */}
+                <View style={styles.customModeHeader}>
+                  <Text style={styles.label}>Manual Entry</Text>
+                  <Pressable onPress={handleSwitchToSearchMode}>
+                    <Text style={styles.backToSearchText}>← Back to search</Text>
                   </Pressable>
-                );
-              })}
+                </View>
+
+                <TextInput
+                  value={customSymbol}
+                  onChangeText={(value) => setCustomSymbol(value.toUpperCase())}
+                  placeholder="Ticker symbol (e.g. DRAM)"
+                  placeholderTextColor={colors.muted}
+                  autoCapitalize="characters"
+                  style={styles.input}
+                />
+
+                <TextInput
+                  value={customCompanyName}
+                  onChangeText={setCustomCompanyName}
+                  placeholder="Company name (e.g. Dataram Corporation)"
+                  placeholderTextColor={colors.muted}
+                  style={styles.inputCompact}
+                />
+
+                <Text style={styles.label}>Currency</Text>
+                <View style={styles.pillRow}>
+                  {(["USD", "INR"] as Currency[]).map((curr) => {
+                    const active = customCurrency === curr;
+                    return (
+                      <Pressable
+                        key={curr}
+                        style={[styles.pill, active && styles.pillActive]}
+                        onPress={() => setCustomCurrency(curr)}
+                      >
+                        <Text style={[styles.pillText, active && styles.pillTextActive]}>{curr}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+
+                <View style={styles.customWarning}>
+                  <Text style={styles.customWarningText}>
+                    ⚠ Price updates may not work for unrecognized symbols. The holding will be tracked at cost basis.
+                  </Text>
+                </View>
+              </>
+            )}
+
+            <Text style={styles.label}>Account</Text>
+            {holdingAccounts.length === 0 ? (
+              <Text style={styles.errorText}>Create a BROKER account before adding holdings.</Text>
+            ) : (
+              <View style={styles.pillRow}>
+                {holdingAccounts.map((account) => {
+                  const active = accountId === account.id;
+                  return (
+                    <Pressable
+                      key={account.id}
+                      style={[styles.pill, active && styles.pillActive]}
+                      onPress={() => setAccountId(account.id)}
+                    >
+                      <Text style={[styles.pillText, active && styles.pillTextActive]}>{account.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+
+            <TextInput
+              value={quantity}
+              onChangeText={setQuantity}
+              placeholder="Quantity"
+              placeholderTextColor={colors.muted}
+              keyboardType="decimal-pad"
+              style={styles.inputCompact}
+            />
+            <Text style={styles.inputHint}>Quantity = total units you currently own (for example, 12.5).</Text>
+            <TextInput
+              value={averagePrice}
+              onChangeText={setAveragePrice}
+              placeholder="Average buy price"
+              placeholderTextColor={colors.muted}
+              keyboardType="decimal-pad"
+              style={styles.inputCompact}
+            />
+            <Text style={styles.inputHint}>Average buy price = weighted cost per unit in the same currency as the ticker.</Text>
+
+            <View style={styles.actionsRow}>
+              <Pressable style={styles.cancelBtn} onPress={handleClose}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.saveBtn, (!canSubmit || isSaving) && styles.saveBtnDisabled]}
+                onPress={handleCreate}
+                disabled={!canSubmit || isSaving}
+              >
+                <Text style={[styles.saveText, (!canSubmit || isSaving) && styles.saveTextDisabled]}>
+                  {isSaving ? "Saving..." : "Save"}
+                </Text>
+              </Pressable>
             </View>
-          )}
-
-          <TextInput
-            value={quantity}
-            onChangeText={setQuantity}
-            placeholder="Quantity"
-            placeholderTextColor={colors.muted}
-            keyboardType="decimal-pad"
-            style={styles.inputCompact}
-          />
-          <Text style={styles.inputHint}>Quantity = total units you currently own (for example, 12.5).</Text>
-          <TextInput
-            value={averagePrice}
-            onChangeText={setAveragePrice}
-            placeholder="Average buy price"
-            placeholderTextColor={colors.muted}
-            keyboardType="decimal-pad"
-            style={styles.inputCompact}
-          />
-          <Text style={styles.inputHint}>Average buy price = weighted cost per unit in the same currency as the ticker.</Text>
-
-          <View style={styles.actionsRow}>
-            <Pressable style={styles.cancelBtn} onPress={handleClose}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.saveBtn, (!canSubmit || isSaving) && styles.saveBtnDisabled]}
-              onPress={handleCreate}
-              disabled={!canSubmit || isSaving}
-            >
-              <Text style={[styles.saveText, (!canSubmit || isSaving) && styles.saveTextDisabled]}>
-                {isSaving ? "Saving..." : "Save"}
-              </Text>
-            </Pressable>
           </View>
-        </View>
+        </ScrollView>
       </View>
       <PortfolioGuideModal visible={showGuide} onClose={() => setShowGuide(false)} />
     </Modal>
@@ -335,13 +472,15 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.7)",
     paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxl,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: "center",
   },
   modalCard: {
-    maxHeight: "90%",
     width: "100%",
     borderRadius: radii.xl,
     backgroundColor: colors.surface,
@@ -499,5 +638,35 @@ const styles = StyleSheet.create({
   },
   saveTextDisabled: {
     color: colors.muted,
+  },
+  // Custom mode styles
+  customModeLink: {
+    marginTop: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  customModeLinkText: {
+    color: colors.accent,
+    fontSize: typography.caption,
+  },
+  customModeHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  backToSearchText: {
+    color: colors.accent,
+    fontSize: typography.caption,
+    marginTop: spacing.lg,
+  },
+  customWarning: {
+    marginTop: spacing.md,
+    backgroundColor: `${colors.warning}22`,
+    borderRadius: radii.md,
+    padding: spacing.md,
+  },
+  customWarningText: {
+    color: colors.warning,
+    fontSize: typography.caption,
+    lineHeight: 20,
   },
 });
