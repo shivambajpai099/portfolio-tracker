@@ -453,7 +453,8 @@ export const searchTickerSuggestions = async (
 
 export const fetchLivePrices = async (
   symbols: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  forceRefresh?: boolean
 ): Promise<ServiceResult<LivePriceQuote[]>> => {
   const normalized = [...new Set(symbols.map(normalizeSymbol).filter(Boolean))];
   if (normalized.length === 0) {
@@ -462,7 +463,7 @@ export const fetchLivePrices = async (
 
   const key = normalized.join(",");
   const cached = PRICE_CACHE.get(key);
-  if (cached && isFresh(cached)) {
+  if (!forceRefresh && cached && isFresh(cached)) {
     return { ok: true, data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   }
 
@@ -514,7 +515,9 @@ export const fetchLivePrices = async (
       };
     }
 
-    const response = await fetch(resolveApiUrl(`/api/quote?symbols=${encodeURIComponent(key)}`), { signal });
+    // Using proxy API
+    const apiUrl = resolveApiUrl(`/api/quote?symbols=${encodeURIComponent(key)}`);
+    const response = await fetch(apiUrl, { signal });
 
     if (!response.ok) {
       if (cached) {

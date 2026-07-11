@@ -3,12 +3,13 @@ import { useRouter } from "expo-router";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
+import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { fetchLivePrices } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
-import { colors, radii, spacing, typography } from "../../src/theme";
+import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { accountSupportsHoldings, type Currency, type Holding } from "../../src/types/portfolio";
 import type { LivePriceQuote } from "../../src/types/marketData";
 import { formatMoney } from "../../src/utils/format";
@@ -56,6 +57,7 @@ const isIndiaHolding = (holding: Holding): boolean => {
 };
 
 export default function HoldingsScreen() {
+  const { colors } = useTheme();
   const router = useRouter();
   const settings = usePortfolioStore((state) => state.settings);
   const updateSettings = usePortfolioStore((state) => state.updateSettings);
@@ -66,6 +68,8 @@ export default function HoldingsScreen() {
   const addHolding = usePortfolioStore((state) => state.addHolding);
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
+  const updateAccount = usePortfolioStore((state) => state.updateAccount);
+  const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
 
   const [searchText, setSearchText] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("value_desc");
@@ -76,6 +80,8 @@ export default function HoldingsScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isImportVisible, setIsImportVisible] = useState(false);
+  const [isImportMenuVisible, setIsImportMenuVisible] = useState(false);
+  const [isImportTransactionsVisible, setIsImportTransactionsVisible] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<Holding | null>(null);
@@ -144,19 +150,31 @@ export default function HoldingsScreen() {
       }
 
       const uniqueSymbols = [...requestSymbols];
-      const result = await fetchLivePrices(uniqueSymbols);
+      
+      // Force refresh to bypass cache when user explicitly clicks refresh
+      const result = await fetchLivePrices(uniqueSymbols, undefined, true);
+      
       const quoteMap = new Map<string, LivePriceQuote>();
-      if (result.ok && result.data) {
-        for (const quote of result.data) {
-          const exact = quote.symbol.toUpperCase();
-          quoteMap.set(exact, quote);
-          quoteMap.set(normalizeIndiaTicker(exact), quote);
-        }
+      
+      // Use data if available, even if result.ok is false (cached data case)
+      const quotes = result.data ?? [];
+      for (const quote of quotes) {
+        const exact = quote.symbol.toUpperCase();
+        quoteMap.set(exact, quote);
+        // Also map without suffix for flexible matching
+        const normalized = normalizeIndiaTicker(exact);
+        quoteMap.set(normalized, quote);
       }
 
       for (const holding of holdings) {
         const key = holding.symbol.toUpperCase();
-        const quote = quoteMap.get(key) ?? quoteMap.get(normalizeIndiaTicker(key));
+        const normalizedKey = normalizeIndiaTicker(key);
+        
+        // Try exact match, then normalized (without suffix), then with .NS/.BO suffix
+        const quote = quoteMap.get(key) 
+          ?? quoteMap.get(normalizedKey)
+          ?? quoteMap.get(`${normalizedKey}.NS`)
+          ?? quoteMap.get(`${normalizedKey}.BO`);
         if (!quote) {
           continue;
         }
@@ -166,7 +184,7 @@ export default function HoldingsScreen() {
           updatedAt: nowIso(),
         });
       }
-
+      
       setLastPricesRefreshedAt(result.fetchedAt ?? nowIso());
     } finally {
       setIsRefreshingPrices(false);
@@ -337,8 +355,8 @@ export default function HoldingsScreen() {
           <Pressable style={[styles.refreshBtn, isRefreshingPrices && styles.refreshBtnDisabled]} onPress={refreshAllMarketPrices} disabled={isRefreshingPrices || holdings.length === 0}>
             <Text style={styles.refreshBtnText}>{isRefreshingPrices ? "Refreshing..." : "Refresh"}</Text>
           </Pressable>
-          <Pressable style={styles.importBtn} onPress={() => setIsImportVisible(true)}>
-            <Text style={styles.importBtnText}>Import</Text>
+          <Pressable style={styles.importBtn} onPress={() => setIsImportMenuVisible(true)}>
+            <Text style={styles.importBtnText}>Import ▾</Text>
           </Pressable>
           <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
             <Text style={styles.addBtnText}>Add</Text>
@@ -547,7 +565,51 @@ export default function HoldingsScreen() {
         }}
         addHolding={addHolding}
         updateHolding={updateHolding}
+        updateAccount={updateAccount}
       />
+
+      <ImportTransactionsModal
+        visible={isImportTransactionsVisible}
+        accounts={brokerAccounts}
+        onClose={() => setIsImportTransactionsVisible(false)}
+        onComplete={(result) => {
+          console.log(`Imported ${result.transactionCount} transactions, ${result.derivedHoldingCount} derived holdings to ${result.accountName}`);
+        }}
+        setAccountTransactions={setAccountTransactions}
+        updateAccount={updateAccount}
+      />
+
+      {/* Import Menu Modal */}
+      <Modal visible={isImportMenuVisible} transparent animationType="fade" onRequestClose={() => setIsImportMenuVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setIsImportMenuVisible(false)}>
+          <View style={styles.importMenuCard}>
+            <Text style={styles.importMenuTitle}>Import Data</Text>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                setIsImportMenuVisible(false);
+                setIsImportVisible(true);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Import Holdings</Text>
+              <Text style={styles.importMenuItemDesc}>Import current holdings snapshot from your broker</Text>
+            </Pressable>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                setIsImportMenuVisible(false);
+                setIsImportTransactionsVisible(true);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Import Transactions</Text>
+              <Text style={styles.importMenuItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
+            </Pressable>
+            <Pressable style={styles.importMenuCancel} onPress={() => setIsImportMenuVisible(false)}>
+              <Text style={styles.importMenuCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal visible={Boolean(editTarget)} transparent animationType="fade" onRequestClose={() => setEditTarget(null)}>
         <View style={styles.modalOverlay}>
@@ -767,18 +829,18 @@ const styles = StyleSheet.create({
   refreshMeta: {
     marginTop: -spacing.sm,
     marginBottom: spacing.lg,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
   },
   headerTitle: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
   },
   refreshBtn: {
     borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: colors.muted,
+    borderColor: defaultColors.muted,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
@@ -786,39 +848,39 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   refreshBtnText: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
   addBtn: {
     borderRadius: radii.pill,
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xs,
   },
   addBtnText: {
-    color: colors.bg,
+    color: defaultColors.bg,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
   importBtn: {
     borderRadius: radii.pill,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xs,
   },
   importBtnText: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightMedium,
   },
   searchInput: {
     marginBottom: spacing.lg,
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
   },
   controlRow: {
@@ -838,12 +900,12 @@ const styles = StyleSheet.create({
   filtersBtn: {
     borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: colors.muted,
+    borderColor: defaultColors.muted,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
   filtersBtnText: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
   },
@@ -858,24 +920,24 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
   },
   chipActive: {
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
   },
   chipText: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
   },
   chipTextActive: {
-    color: colors.bg,
+    color: defaultColors.bg,
   },
   divider: {
     width: 1,
     alignSelf: "stretch",
     marginHorizontal: spacing.xs,
-    backgroundColor: "#252932",
+    backgroundColor: defaultColors.border,
   },
   listWrap: {
     marginTop: spacing.lg,
@@ -884,7 +946,7 @@ const styles = StyleSheet.create({
   },
   groupCard: {
     borderRadius: radii.xl,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     padding: spacing.lg,
   },
   groupTitleRow: {
@@ -898,26 +960,26 @@ const styles = StyleSheet.create({
     paddingRight: spacing.lg,
   },
   groupSymbol: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.subheading,
     fontWeight: typography.weightSemibold,
   },
   groupName: {
     marginTop: 2,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
   },
   allocationBlock: {
     alignItems: "flex-end",
   },
   groupAllocation: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.subheading,
     fontWeight: typography.weightSemibold,
   },
   allocationContext: {
     marginTop: 2,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
   },
   metricRow: {
@@ -934,17 +996,17 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   metricLabel: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
   },
   netWorthBadge: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
     opacity: 0.7,
   },
   metricValue: {
     marginTop: 2,
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
   },
   metricRight: {
@@ -962,16 +1024,16 @@ const styles = StyleSheet.create({
   },
   accountChip: {
     borderRadius: radii.pill,
-    backgroundColor: colors.bg,
+    backgroundColor: defaultColors.bg,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
   },
   expandedWrap: {
     marginTop: spacing.lg,
     borderTopWidth: 1,
-    borderTopColor: "#1E2128",
+    borderTopColor: defaultColors.border,
     paddingTop: spacing.md,
     gap: spacing.sm,
   },
@@ -986,17 +1048,17 @@ const styles = StyleSheet.create({
     paddingRight: spacing.lg,
   },
   lotSymbol: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
   },
   lotAccount: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.caption,
   },
   lotMeta: {
     marginTop: 2,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
   },
   lotActions: {
@@ -1004,11 +1066,11 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
   },
   editText: {
-    color: colors.accent,
+    color: defaultColors.accent,
     fontSize: typography.caption,
   },
   deleteText: {
-    color: colors.negative,
+    color: defaultColors.negative,
     fontSize: typography.caption,
   },
   emptyWrap: {
@@ -1017,17 +1079,17 @@ const styles = StyleSheet.create({
   },
   emptyCard: {
     borderRadius: radii.xl,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     padding: spacing.lg,
   },
   emptyTitle: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
   emptyText: {
     marginTop: spacing.xs,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
     lineHeight: 18,
   },
@@ -1035,20 +1097,20 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     alignSelf: "flex-start",
     borderRadius: radii.lg,
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
   emptyPrimaryBtnText: {
-    color: colors.bg,
+    color: defaultColors.bg,
     fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
   },
   positiveText: {
-    color: colors.positive,
+    color: defaultColors.positive,
   },
   negativeText: {
-    color: colors.negative,
+    color: defaultColors.negative,
   },
   modalOverlay: {
     flex: 1,
@@ -1060,22 +1122,22 @@ const styles = StyleSheet.create({
   modalCard: {
     width: "100%",
     borderRadius: radii.xl,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     padding: spacing.xl,
   },
   modalTitle: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.subheading,
     fontWeight: typography.weightSemibold,
   },
   modalSubTitle: {
     marginTop: 2,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.body,
   },
   modalLabel: {
     marginTop: spacing.xl,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
   },
   modalPillRow: {
@@ -1086,34 +1148,34 @@ const styles = StyleSheet.create({
   },
   modalPill: {
     borderRadius: radii.pill,
-    backgroundColor: colors.bg,
+    backgroundColor: defaultColors.bg,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
   modalPillActive: {
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
   },
   modalPillText: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
   },
   modalPillTextActive: {
-    color: colors.bg,
+    color: defaultColors.bg,
   },
   modalInput: {
     marginTop: spacing.lg,
     borderRadius: radii.lg,
-    backgroundColor: colors.bg,
-    color: colors.text,
+    backgroundColor: defaultColors.bg,
+    color: defaultColors.text,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
   modalInputCompact: {
     marginTop: spacing.sm,
     borderRadius: radii.lg,
-    backgroundColor: colors.bg,
-    color: colors.text,
+    backgroundColor: defaultColors.bg,
+    color: defaultColors.text,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
@@ -1128,27 +1190,65 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   ghostText: {
-    color: colors.muted,
+    color: defaultColors.muted,
   },
   primaryBtn: {
     borderRadius: radii.lg,
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.sm,
   },
   dangerBtn: {
     borderRadius: radii.lg,
-    backgroundColor: colors.negative,
+    backgroundColor: defaultColors.negative,
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.sm,
   },
   primaryText: {
-    color: colors.text,
+    color: defaultColors.text,
     fontWeight: typography.weightSemibold,
   },
   modalDangerText: {
     marginTop: spacing.sm,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.body,
+  },
+  importMenuCard: {
+    width: "100%",
+    borderRadius: radii.xl,
+    backgroundColor: defaultColors.surface,
+    padding: spacing.lg,
+  },
+  importMenuTitle: {
+    color: defaultColors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.md,
+  },
+  importMenuItem: {
+    backgroundColor: defaultColors.bg,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  importMenuItemTitle: {
+    color: defaultColors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.xs,
+  },
+  importMenuItemDesc: {
+    color: defaultColors.muted,
+    fontSize: typography.caption,
+  },
+  importMenuCancel: {
+    marginTop: spacing.sm,
+    alignItems: "center",
+    paddingVertical: spacing.md,
+  },
+  importMenuCancelText: {
+    color: defaultColors.muted,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
   },
 });

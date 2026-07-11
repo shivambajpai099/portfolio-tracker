@@ -96,5 +96,6 @@ export const seedSettings: PortfolioSettings = {
   allocationIncludeCash: true,
   onboardingTipsSeen: false,
   timelineRetention: "1Y",
+  themeMode: "dark",
 };
 

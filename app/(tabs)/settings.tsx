@@ -7,8 +7,8 @@ import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
-import { colors, radii, spacing, typography } from "../../src/theme";
-import type { AllocationBasis, Currency, TimelineRetention } from "../../src/types/portfolio";
+import { radii, spacing, typography, useTheme, type ThemeColors } from "../../src/theme";
+import type { AllocationBasis, Currency, ThemeMode, TimelineRetention } from "../../src/types/portfolio";
 
 interface PortfolioExport {
   exportedAt: string;
@@ -20,6 +20,7 @@ interface PortfolioExport {
 }
 
 export default function SettingsScreen() {
+  const { colors } = useTheme();
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
   const accounts = usePortfolioStore((s) => s.accounts);
@@ -77,7 +78,6 @@ export default function SettingsScreen() {
       const filename = `portfolio-${Date.now()}.json`;
 
       if (Platform.OS === "web") {
-        // Browser: trigger file download via anchor element
         const blob = new Blob([json], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
@@ -115,7 +115,6 @@ export default function SettingsScreen() {
       let raw: string;
 
       if (Platform.OS === "web") {
-        // On web the URI is a blob: URL — read it with FileReader
         raw = await new Promise<string>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
           xhr.open("GET", uri);
@@ -136,7 +135,6 @@ export default function SettingsScreen() {
 
       clearAllData();
 
-      // Re-hydrate from file
       for (const account of data.accounts as Parameters<typeof addAccount>[0][]) {
         addAccount(account);
       }
@@ -193,18 +191,18 @@ export default function SettingsScreen() {
   return (
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Settings</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
 
         {statusMsg ? (
-          <View style={styles.statusCard}>
-            <Text style={styles.statusText}>{statusMsg}</Text>
+          <View style={[styles.statusCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.statusText, { color: colors.accent }]}>{statusMsg}</Text>
           </View>
         ) : null}
 
         {/* ── Exchange rate ────────────────────────────────────────── */}
-        <SectionLabel>Exchange Rate</SectionLabel>
+        <SectionLabel colors={colors}>Exchange Rate</SectionLabel>
         <View style={styles.sectionWrap}>
-          <Text style={styles.rateHint}>1 USD equals</Text>
+          <Text style={[styles.rateHint, { color: colors.muted }]}>1 USD equals</Text>
           <View style={styles.rateRow}>
             <TextInput
               value={rateInput}
@@ -215,32 +213,32 @@ export default function SettingsScreen() {
               onSubmitEditing={commitRate}
               keyboardType="decimal-pad"
               returnKeyType="done"
-              style={styles.rateInput}
+              style={[styles.rateInput, { backgroundColor: colors.surface, color: colors.text }]}
               placeholderTextColor={colors.muted}
             />
-            <Text style={styles.inrText}>INR</Text>
-            <Pressable style={styles.saveBtn} onPress={commitRate}>
-              <Text style={styles.saveBtnText}>Save</Text>
+            <Text style={[styles.inrText, { color: colors.muted }]}>INR</Text>
+            <Pressable style={[styles.saveBtn, { backgroundColor: colors.accent }]} onPress={commitRate}>
+              <Text style={[styles.saveBtnText, { color: colors.bg }]}>Save</Text>
             </Pressable>
           </View>
-          {rateError ? <Text style={styles.errorText}>{rateError}</Text> : null}
+          {rateError ? <Text style={[styles.errorText, { color: colors.negative }]}>{rateError}</Text> : null}
         </View>
 
         {/* ── Reporting currency ───────────────────────────────────── */}
-        <SectionLabel>Reporting Currency</SectionLabel>
+        <SectionLabel colors={colors}>Reporting Currency</SectionLabel>
         <View style={styles.currencyRow}>
           {(["INR", "USD"] as Currency[]).map((c) => {
             const active = settings.reportingCurrency === c;
             return (
-              <Pressable key={c} onPress={() => setReportingCurrency(c)} style={[styles.currencyPill, active && styles.currencyPillActive]}>
-                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{c}</Text>
+              <Pressable key={c} onPress={() => setReportingCurrency(c)} style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}>
+                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{c}</Text>
               </Pressable>
             );
           })}
         </View>
 
         {/* ── Allocation settings ──────────────────────────────────── */}
-        <SectionLabel>Allocation Basis</SectionLabel>
+        <SectionLabel colors={colors}>Allocation Basis</SectionLabel>
         <View style={styles.currencyRow}>
           {(["CURRENT_VALUE", "INVESTED_VALUE"] as AllocationBasis[]).map((basis) => {
             const active = settings.allocationBasis === basis;
@@ -249,15 +247,15 @@ export default function SettingsScreen() {
               <Pressable
                 key={basis}
                 onPress={() => updateSettings({ allocationBasis: basis })}
-                style={[styles.currencyPill, active && styles.currencyPillActive]}
+                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
               >
-                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{label}</Text>
+                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
               </Pressable>
             );
           })}
         </View>
 
-        <SectionLabel>Cash in Allocation</SectionLabel>
+        <SectionLabel colors={colors}>Cash in Allocation</SectionLabel>
         <View style={styles.currencyRow}>
           {([true, false] as const).map((include) => {
             const active = settings.allocationIncludeCash === include;
@@ -266,15 +264,15 @@ export default function SettingsScreen() {
               <Pressable
                 key={String(include)}
                 onPress={() => updateSettings({ allocationIncludeCash: include })}
-                style={[styles.currencyPill, active && styles.currencyPillActive]}
+                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
               >
-                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{label}</Text>
+                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
               </Pressable>
             );
           })}
         </View>
 
-        <SectionLabel>History Retention</SectionLabel>
+        <SectionLabel colors={colors}>History Retention</SectionLabel>
         <View style={styles.currencyRowWrap}>
           {([
             ["6M", "6 Months"],
@@ -287,90 +285,111 @@ export default function SettingsScreen() {
               <Pressable
                 key={value}
                 onPress={() => updateSettings({ timelineRetention: value as TimelineRetention })}
-                style={[styles.currencyPill, active && styles.currencyPillActive]}
+                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
               >
-                <Text style={[styles.currencyPillText, active && styles.currencyPillTextActive]}>{label}</Text>
+                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
               </Pressable>
             );
           })}
         </View>
 
-        {/* ── Data ─────────────────────────────────────────────────── */}
-        <SectionLabel>Help</SectionLabel>
+        {/* ── Theme ────────────────────────────────────────────────── */}
+        <SectionLabel colors={colors}>Theme</SectionLabel>
+        <View style={styles.currencyRowWrap}>
+          {([
+            ["light", "Light"],
+            ["dark", "Dark"],
+            ["system", "System"],
+          ] as const).map(([value, label]) => {
+            const active = (settings.themeMode ?? "dark") === value;
+            return (
+              <Pressable
+                key={value}
+                onPress={() => updateSettings({ themeMode: value as ThemeMode })}
+                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
+              >
+                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {/* ── Help ─────────────────────────────────────────────────── */}
+        <SectionLabel colors={colors}>Help</SectionLabel>
         <View style={styles.cardList}>
-          <Pressable onPress={() => setShowGuide(true)} style={styles.actionCard}>
+          <Pressable onPress={() => setShowGuide(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
             <View>
-              <Text style={styles.actionTitle}>Portfolio Guide</Text>
-              <Text style={styles.actionSubtitle}>Understand metrics, filters, and how to input holdings</Text>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Portfolio Guide</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Understand metrics, filters, and how to input holdings</Text>
             </View>
-            <Text style={styles.actionArrow}>?</Text>
+            <Text style={{ color: colors.muted }}>?</Text>
           </Pressable>
-          <Pressable onPress={showGuideNextLaunch} style={styles.actionCard}>
+          <Pressable onPress={showGuideNextLaunch} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
             <View>
-              <Text style={styles.actionTitle}>Show Guide on Next Launch</Text>
-              <Text style={styles.actionSubtitle}>Useful when sharing the app with someone new</Text>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Show Guide on Next Launch</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Useful when sharing the app with someone new</Text>
             </View>
-            <Text style={styles.actionArrow}>↻</Text>
+            <Text style={{ color: colors.muted }}>↻</Text>
           </Pressable>
         </View>
 
         {/* ── Data ─────────────────────────────────────────────────── */}
-        <SectionLabel>Data</SectionLabel>
+        <SectionLabel colors={colors}>Data</SectionLabel>
         <View style={styles.cardList}>
-          <Pressable onPress={handleExport} style={styles.actionCard}>
+          <Pressable onPress={handleExport} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
             <View>
-              <Text style={styles.actionTitle}>Export Portfolio</Text>
-              <Text style={styles.actionSubtitle}>Save a JSON backup of all your data</Text>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Export Portfolio</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Save a JSON backup of all your data</Text>
             </View>
-            <Text style={styles.actionArrow}>↑</Text>
+            <Text style={{ color: colors.muted }}>↑</Text>
           </Pressable>
 
-          <Pressable onPress={handleImport} style={styles.actionCard}>
+          <Pressable onPress={handleImport} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
             <View>
-              <Text style={styles.actionTitle}>Import Portfolio</Text>
-              <Text style={styles.actionSubtitle}>Restore from a JSON backup file</Text>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Import Portfolio</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Restore from a JSON backup file</Text>
             </View>
-            <Text style={styles.actionArrow}>↓</Text>
+            <Text style={{ color: colors.muted }}>↓</Text>
           </Pressable>
         </View>
 
         {/* ── Auth ─────────────────────────────────────────────────── */}
-        <SectionLabel>Auth</SectionLabel>
+        <SectionLabel colors={colors}>Auth</SectionLabel>
         <View style={styles.cardList}>
-          <Pressable onPress={handleSignOut} style={styles.actionCard}>
+          <Pressable onPress={handleSignOut} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
             <View>
-              <Text style={styles.actionTitle}>Sign Out</Text>
-              <Text style={styles.actionSubtitle}>End current session on this device</Text>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Sign Out</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>End current session on this device</Text>
             </View>
-            <Text style={styles.actionArrow}>→</Text>
+            <Text style={{ color: colors.muted }}>→</Text>
           </Pressable>
         </View>
 
         {/* ── Danger zone ──────────────────────────────────────────── */}
-        <SectionLabel style={styles.dangerLabel}>Danger Zone</SectionLabel>
-        <Pressable onPress={() => setShowClearConfirm(true)} style={styles.actionCard}>
+        <SectionLabel colors={colors} style={styles.dangerLabel}>Danger Zone</SectionLabel>
+        <Pressable onPress={() => setShowClearConfirm(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
           <View>
-            <Text style={styles.dangerTitle}>Clear All Data</Text>
-            <Text style={styles.actionSubtitle}>Permanently removes all accounts, holdings and balances</Text>
+            <Text style={[styles.actionTitle, { color: colors.negative }]}>Clear All Data</Text>
+            <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Permanently removes all accounts, holdings and balances</Text>
           </View>
-          <Text style={styles.dangerTitle}>×</Text>
+          <Text style={{ color: colors.negative }}>×</Text>
         </Pressable>
       </ScrollView>
 
       {/* ── Clear confirmation modal ─────────────────────────────── */}
       <Modal visible={showClearConfirm} transparent animationType="fade" onRequestClose={() => setShowClearConfirm(false)}>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Clear all data?</Text>
-            <Text style={styles.modalText}>
+          <View style={[styles.modalCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Clear all data?</Text>
+            <Text style={[styles.modalText, { color: colors.muted }]}>
               This will permanently delete all accounts, holdings, and cash balances. This cannot be undone.
             </Text>
             <View style={styles.modalActions}>
               <Pressable style={styles.ghostBtn} onPress={() => setShowClearConfirm(false)}>
-                <Text style={styles.ghostText}>Cancel</Text>
+                <Text style={{ color: colors.muted }}>Cancel</Text>
               </Pressable>
-              <Pressable style={styles.dangerBtn} onPress={confirmClear}>
-                <Text style={styles.dangerBtnText}>Clear</Text>
+              <Pressable style={[styles.dangerBtn, { backgroundColor: colors.negative }]} onPress={confirmClear}>
+                <Text style={[styles.dangerBtnText, { color: colors.text }]}>Clear</Text>
               </Pressable>
             </View>
           </View>
@@ -381,8 +400,10 @@ export default function SettingsScreen() {
   );
 }
 
-function SectionLabel({ children, style }: { children: string; style?: object }) {
-  return <Text style={[styles.sectionLabel, style]}>{children}</Text>;
+function SectionLabel({ children, style, colors }: { children: string; style?: object; colors?: ThemeColors }) {
+  const theme = useTheme();
+  const c = colors ?? theme.colors;
+  return <Text style={[styles.sectionLabel, { color: c.muted }, style]}>{children}</Text>;
 }
 
 const styles = StyleSheet.create({
@@ -391,24 +412,20 @@ const styles = StyleSheet.create({
   },
   title: {
     marginBottom: spacing.xxl,
-    color: colors.text,
     fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
   },
   statusCard: {
     marginBottom: spacing.xl,
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
   statusText: {
-    color: colors.accent,
     fontSize: typography.body,
   },
   sectionLabel: {
     marginBottom: spacing.md,
-    color: colors.muted,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
     textTransform: "uppercase",
@@ -419,7 +436,6 @@ const styles = StyleSheet.create({
   },
   rateHint: {
     marginBottom: spacing.sm,
-    color: colors.muted,
     fontSize: typography.caption,
   },
   rateRow: {
@@ -430,29 +446,23 @@ const styles = StyleSheet.create({
   rateInput: {
     flex: 1,
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
-    color: colors.text,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     fontSize: typography.body,
   },
   inrText: {
-    color: colors.muted,
     fontSize: typography.body,
   },
   saveBtn: {
     borderRadius: radii.lg,
-    backgroundColor: colors.accent,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
   saveBtnText: {
-    color: colors.bg,
     fontWeight: typography.weightSemibold,
   },
   errorText: {
     marginTop: spacing.xs,
-    color: colors.negative,
     fontSize: typography.caption,
   },
   currencyRow: {
@@ -468,19 +478,11 @@ const styles = StyleSheet.create({
   },
   currencyPill: {
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
   },
-  currencyPillActive: {
-    backgroundColor: colors.accent,
-  },
   currencyPillText: {
-    color: colors.muted,
     fontWeight: typography.weightSemibold,
-  },
-  currencyPillTextActive: {
-    color: colors.bg,
   },
   cardList: {
     marginBottom: spacing.sm,
@@ -491,30 +493,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
   },
   actionTitle: {
-    color: colors.text,
     fontSize: typography.body,
     fontWeight: typography.weightMedium,
   },
   actionSubtitle: {
     marginTop: 2,
-    color: colors.muted,
     fontSize: typography.caption,
-  },
-  actionArrow: {
-    color: colors.muted,
   },
   dangerLabel: {
     marginTop: spacing.xxl,
-  },
-  dangerTitle: {
-    color: colors.negative,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
   },
   modalOverlay: {
     flex: 1,
@@ -526,17 +517,14 @@ const styles = StyleSheet.create({
   modalCard: {
     width: "100%",
     borderRadius: radii.xl,
-    backgroundColor: colors.surface,
     padding: spacing.xl,
   },
   modalTitle: {
-    color: colors.text,
     fontSize: typography.subheading,
     fontWeight: typography.weightSemibold,
   },
   modalText: {
     marginTop: spacing.sm,
-    color: colors.muted,
     fontSize: typography.body,
   },
   modalActions: {
@@ -549,17 +537,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
-  ghostText: {
-    color: colors.muted,
-  },
   dangerBtn: {
     borderRadius: radii.lg,
-    backgroundColor: colors.negative,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
   dangerBtnText: {
-    color: colors.text,
     fontWeight: typography.weightSemibold,
   },
 });

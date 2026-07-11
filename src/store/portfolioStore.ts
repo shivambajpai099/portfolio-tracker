@@ -16,6 +16,7 @@ import type {
   PortfolioSettings,
   TimelineRetention,
 } from "../types/portfolio";
+import type { Transaction } from "../types/transaction";
 
 const normalizeSettings = (settings: Partial<PortfolioSettings> | undefined): PortfolioSettings => ({
   ...seedSettings,
@@ -155,6 +156,7 @@ interface PortfolioState {
   accounts: Account[];
   holdings: Holding[];
   cashHoldings: CashHolding[];
+  transactions: Transaction[];
   allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
   fxRates: FxRates;
@@ -176,6 +178,12 @@ interface PortfolioState {
   updateCashHolding: (cashHoldingId: string, updates: Partial<CashHolding>) => void;
   removeCashHolding: (cashHoldingId: string) => void;
 
+  // Transaction mutations
+  addTransactions: (transactions: Transaction[]) => void;
+  setAccountTransactions: (accountId: string, transactions: Transaction[]) => void;
+  removeTransactionsByAccount: (accountId: string) => void;
+  clearTransactions: () => void;
+
   updateSettings: (updates: Partial<PortfolioSettings>) => void;
   updateFxRates: (rates: FxRates) => void;
   clearAllData: () => void;
@@ -191,6 +199,7 @@ export const usePortfolioStore = create<PortfolioState>()(
       accounts: seedAccounts,
       holdings: seedHoldings,
       cashHoldings: seedCashHoldings,
+      transactions: [],
       allocationSnapshots: [
         buildAllocationSnapshot(
           seedHoldings,
@@ -206,11 +215,12 @@ export const usePortfolioStore = create<PortfolioState>()(
       hydrated: false,
       setHydrated: (value: boolean) => set({ hydrated: value }),
       getSnapshot: () => {
-        const { accounts, holdings, cashHoldings, allocationSnapshots, settings, fxRates, snapshotUpdatedAt } = get();
+        const { accounts, holdings, cashHoldings, transactions, allocationSnapshots, settings, fxRates, snapshotUpdatedAt } = get();
         return {
           accounts,
           holdings,
           cashHoldings,
+          transactions,
           allocationSnapshots,
           settings,
           fxRates,
@@ -222,6 +232,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           accounts: snapshot.accounts,
           holdings: snapshot.holdings,
           cashHoldings: snapshot.cashHoldings,
+          transactions: snapshot.transactions ?? [],
           allocationSnapshots: pruneSnapshotsByRetention(
             normalizeAllocationSnapshots(
               snapshot.allocationSnapshots?.length
@@ -364,6 +375,35 @@ export const usePortfolioStore = create<PortfolioState>()(
           };
         }),
 
+      // Transaction mutations
+      addTransactions: (newTransactions: Transaction[]) =>
+        set((state) => ({
+          transactions: [...state.transactions, ...newTransactions],
+          snapshotUpdatedAt: new Date().toISOString(),
+        })),
+
+      setAccountTransactions: (accountId: string, newTransactions: Transaction[]) =>
+        set((state) => {
+          // Remove existing transactions for this account, then add new ones
+          const otherTransactions = state.transactions.filter((tx) => tx.accountId !== accountId);
+          return {
+            transactions: [...otherTransactions, ...newTransactions],
+            snapshotUpdatedAt: new Date().toISOString(),
+          };
+        }),
+
+      removeTransactionsByAccount: (accountId: string) =>
+        set((state) => ({
+          transactions: state.transactions.filter((tx) => tx.accountId !== accountId),
+          snapshotUpdatedAt: new Date().toISOString(),
+        })),
+
+      clearTransactions: () =>
+        set({
+          transactions: [],
+          snapshotUpdatedAt: new Date().toISOString(),
+        }),
+
       updateSettings: (updates: Partial<PortfolioSettings>) =>
         set((state) => {
           const now = new Date().toISOString();
@@ -385,6 +425,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           accounts: [],
           holdings: [],
           cashHoldings: [],
+          transactions: [],
           allocationSnapshots: [],
           settings: seedSettings,
           fxRates: seedFxRates,
@@ -423,6 +464,7 @@ export const usePortfolioStore = create<PortfolioState>()(
         accounts: state.accounts,
         holdings: state.holdings,
         cashHoldings: state.cashHoldings,
+        transactions: state.transactions,
         allocationSnapshots: state.allocationSnapshots,
         settings: state.settings,
         fxRates: state.fxRates,
@@ -434,6 +476,7 @@ export const usePortfolioStore = create<PortfolioState>()(
             accounts: state.accounts,
             holdings: state.holdings,
             cashHoldings: state.cashHoldings,
+            transactions: state.transactions ?? [],
             allocationSnapshots: state.allocationSnapshots,
             settings: normalizeSettings(state.settings),
             fxRates: state.fxRates,
@@ -448,6 +491,7 @@ export const usePortfolioStore = create<PortfolioState>()(
             accounts: state.accounts,
             holdings: state.holdings,
             cashHoldings: state.cashHoldings,
+            transactions: state.transactions ?? [],
             allocationSnapshots: [
               buildAllocationSnapshot(
                 state.holdings,
@@ -475,6 +519,7 @@ export const usePortfolioStore = create<PortfolioState>()(
             accounts: state.accounts,
             holdings: state.holdings,
             cashHoldings: state.cashHoldings,
+            transactions: state.transactions ?? [],
             allocationSnapshots: normalizeAllocationSnapshots(state.allocationSnapshots),
             settings: normalizeSettings(state.settings),
             fxRates: state.fxRates,

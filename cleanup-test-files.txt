@@ -1,0 +1,5 @@
+# Files to delete manually:
+# rm api/test-quote.ts api/debug-india.ts scripts/test-indian-prices.js scripts/test-nse-bse-api.mjs scripts/run-tests.sh src/services/__tests__/indianStocks.test.ts src/services/__tests__/indianStocks.spec.ts src/services/debugIndianStocks.ts
+
+# Or keep the test files for future debugging if needed
+

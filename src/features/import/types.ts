@@ -180,3 +180,94 @@ export interface ImportCommitResult {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Transaction Import Types
+// ---------------------------------------------------------------------------
+
+import type { ParsedTransaction, TransactionParseResult } from "../../types/transaction";
+
+// Re-export for convenience
+export type { ParsedTransaction, TransactionParseResult };
+
+/**
+ * Parser type discriminator.
+ */
+export type ParserType = "holdings" | "transactions";
+
+/**
+ * Interface for a transaction source parser.
+ *
+ * Similar to HoldingsSourceParser but returns transactions instead of holdings.
+ * Transactions are processed through FIFO to derive holdings.
+ */
+export interface TransactionSourceParser {
+  /** Unique identifier for this parser (e.g., "vested-transactions") */
+  id: string;
+  /** Display name shown in the UI (e.g., "Vested Transactions") */
+  displayName: string;
+  /** Supported file extensions (e.g., [".xlsx", ".csv"]) */
+  supportedExtensions: string[];
+  /** Brief description of supported file format */
+  description: string;
+  /** Parser type discriminator */
+  parserType: "transactions";
+
+  /**
+   * Parse a file and extract transaction data.
+   *
+   * @param fileUri - URI to the file (from document picker)
+   * @param fileExtension - File extension (e.g., ".csv")
+   * @returns TransactionParseResult with transactions, skipped rows, and errors
+   */
+  parse(fileUri: string, fileExtension: string): Promise<TransactionParseResult>;
+
+  /**
+   * Optional: Check if a file matches this parser's expected format.
+   */
+  canParse?(fileUri: string, fileExtension: string): Promise<boolean>;
+}
+
+/**
+ * Union type for any source parser.
+ */
+export type SourceParser = HoldingsSourceParser | TransactionSourceParser;
+
+/**
+ * Type guard to check if a parser is a transaction parser.
+ */
+export const isTransactionParser = (parser: SourceParser): parser is TransactionSourceParser => {
+  return "parserType" in parser && parser.parserType === "transactions";
+};
+
+/**
+ * Type guard to check if a parser is a holdings parser.
+ */
+export const isHoldingsParser = (parser: SourceParser): parser is HoldingsSourceParser => {
+  return !("parserType" in parser) || (parser as TransactionSourceParser).parserType !== "transactions";
+};
+
+/**
+ * Review data for transaction imports.
+ * Shows derived holdings that will be created from transactions.
+ */
+export interface TransactionImportReviewData {
+  /** Number of transactions parsed */
+  transactionCount: number;
+  /** Number of BUY transactions */
+  buyCount: number;
+  /** Number of SELL transactions */
+  sellCount: number;
+  /** Holdings derived from transactions (preview) */
+  derivedHoldings: EnrichedHolding[];
+  /** Rows that were skipped during parsing */
+  skippedRows: SkippedRow[];
+  /** Any errors during FIFO derivation (e.g., sell exceeds buys) */
+  derivationErrors: string[];
+  /** Summary */
+  summary: {
+    transactionCount: number;
+    derivedHoldingCount: number;
+    skippedCount: number;
+    errorCount: number;
+  };
+}
