@@ -35,9 +35,11 @@ app/
     settings.tsx
 src/
   components/
-    HoldingRow.tsx
     ScreenContainer.tsx
-    StatCard.tsx
+    DonutChart.tsx
+    TimeSeriesChart.tsx
+    AddHoldingModal.tsx
+    PortfolioGuideModal.tsx
   features/
     auth/
       authService.ts

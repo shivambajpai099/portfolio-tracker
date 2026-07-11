@@ -1,18 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
-import { PortfolioHealthCard } from "../../src/components/PortfolioHealthCard";
-import { RebalancingCard } from "../../src/components/RebalancingCard";
-import { DeployCashCard } from "../../src/components/DeployCashCard";
-import { DeployCashModal } from "../../src/components/DeployCashModal";
-import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
 import {
-  calcConcentrationRisk,
-  calcGeographicSplit,
   calcPortfolioTotals,
-  calcRebalancingSuggestions,
   calcSymbolAllocations,
   convert,
 } from "../../src/features/portfolio/calculations";
@@ -37,8 +29,6 @@ const DONUT_PALETTE = [
 ];
 
 const CASH_COLOR = "#374151";
-const GEO_INDIA_COLOR = "#F59E0B";
-const GEO_US_COLOR = "#6366F1";
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -47,28 +37,9 @@ export default function DashboardScreen() {
   const accounts = usePortfolioStore((s) => s.accounts);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
-  const hydrated = usePortfolioStore((s) => s.hydrated);
   const updateSettings = usePortfolioStore((s) => s.updateSettings);
 
   const [geoFilter, setGeoFilter] = useState<GeoFilter>("ALL");
-  const [showGuide, setShowGuide] = useState(false);
-  const [showDeployCashModal, setShowDeployCashModal] = useState(false);
-  const [showRebalancingDetails, setShowRebalancingDetails] = useState(false);
-  const [showDeployCashDetails, setShowDeployCashDetails] = useState(false);
-
-  useEffect(() => {
-    if (!hydrated || settings.onboardingTipsSeen) {
-      return;
-    }
-    setShowGuide(true);
-  }, [hydrated, settings.onboardingTipsSeen]);
-
-  const closeGuide = () => {
-    setShowGuide(false);
-    if (!settings.onboardingTipsSeen) {
-      updateSettings({ onboardingTipsSeen: true });
-    }
-  };
 
   const rc: Currency = settings.reportingCurrency;
 
@@ -113,46 +84,17 @@ export default function DashboardScreen() {
       return a.symbol.localeCompare(b.symbol);
     });
   }, [allocations, settings.allocationBasis]);
-  const geoSplit = useMemo(() => calcGeographicSplit(holdings, fxRates, rc), [holdings, fxRates, rc]);
-  const concentration = useMemo(() => calcConcentrationRisk(allocations), [allocations]);
-
-  // Top holding by allocation pct (rankedAllocations is already sorted desc)
-  const topHolding = rankedAllocations[0] ?? null;
 
   const cashValueRC = useMemo(
     () => filteredCashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
     [filteredCashHoldings, rc, fxRates]
   );
 
-  // For rebalancing we always use the full unfiltered portfolio (ignore geo filter)
-  const totalCashForRebalancing = useMemo(
-    () => cashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
-    [cashHoldings, rc, fxRates]
-  );
+  const allocationContextLabel = [
+    settings.allocationBasis === "INVESTED_VALUE" ? "By invested value" : "By current value",
+    settings.allocationIncludeCash ? "cash included" : "cash excluded",
+  ].join(" · ");
 
-  const deployCashAllocationContext = useMemo(
-    () => ({
-      indiaCurrentValue: geoSplit.indiaCurrentValue,
-      usCurrentValue: geoSplit.usCurrentValue,
-      cashCurrentValue: totalCashForRebalancing,
-    }),
-    [geoSplit.indiaCurrentValue, geoSplit.usCurrentValue, totalCashForRebalancing]
-  );
-
-
-  const rebalancingResult = useMemo(() => {
-    if (!settings.targetAllocation) return null;
-    return calcRebalancingSuggestions(
-      geoSplit.indiaCurrentValue,
-      geoSplit.usCurrentValue,
-      totalCashForRebalancing,
-      settings.targetAllocation,
-      rc
-    );
-  }, [settings.targetAllocation, geoSplit.indiaCurrentValue, geoSplit.usCurrentValue, totalCashForRebalancing, rc]);
-
-  // The sum of symbol allocationPcts may be < 100 when cash is included in the denominator.
-  // The remainder is the cash slice.
   const cashAllocationPct = useMemo(() => {
     if (!settings.allocationIncludeCash || cashValueRC === 0) return 0;
     const symbolsTotal = rankedAllocations.reduce((sum, a) => sum + a.allocationPct, 0);
@@ -169,24 +111,6 @@ export default function DashboardScreen() {
     }
     return slices;
   }, [rankedAllocations, cashAllocationPct]);
-
-  // Hero donut — same slices (no cash, just position overview)
-  const donutSlices = useMemo(
-    () => rankedAllocations.map((a, i) => ({ value: a.allocationPct, color: DONUT_PALETTE[i % DONUT_PALETTE.length] })),
-    [rankedAllocations]
-  );
-
-  const allocationContextLabel = [
-    settings.allocationBasis === "INVESTED_VALUE" ? "By invested value" : "By current value",
-    settings.allocationIncludeCash ? "cash included" : "cash excluded",
-  ].join(" · ");
-
-  const concentrationColor =
-    concentration.level === "HIGH"
-      ? colors.negative
-      : concentration.level === "MODERATE"
-      ? GEO_INDIA_COLOR
-      : colors.positive;
 
   return (
     <ScreenContainer>
@@ -205,20 +129,6 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        <Pressable style={styles.guideCta} onPress={() => setShowGuide(true)}>
-          <Text style={styles.guideCtaTitle}>New here? Open Portfolio Guide</Text>
-          <Text style={styles.guideCtaSubtitle}>See how metrics work and how to enter holdings correctly.</Text>
-        </Pressable>
-
-        <PortfolioHealthCard
-          concentration={concentration}
-          topHolding={topHolding}
-          cashAllocationPct={cashAllocationPct}
-          geoSplit={geoSplit}
-          allocationIncludeCash={settings.allocationIncludeCash}
-          onAddHoldingPress={() => router.push("/(tabs)/holdings" as never)}
-        />
-
         {accounts.length === 0 ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>No accounts yet</Text>
@@ -230,111 +140,40 @@ export default function DashboardScreen() {
           </View>
         ) : null}
 
-        <View style={styles.heroRow}>
-          <View style={styles.heroLeft}>
-            <Text style={styles.heroLabel}>Total Portfolio Value</Text>
-            <Text style={styles.heroValue}>{formatMoney(totals.currentValue, rc)}</Text>
+        <View style={styles.heroSection}>
+          <Text style={styles.heroLabel}>Total Portfolio Value</Text>
+          <Text style={styles.heroValue}>{formatMoney(totals.currentValue, rc)}</Text>
 
-            <View style={styles.heroStatsWrap}>
-              {/* Invested */}
-              <View style={styles.heroStatRow}>
-                <Text style={styles.heroStatKey}>Invested</Text>
-                <Text style={styles.heroStatValue}>{formatMoney(totals.investedValue, rc)}</Text>
-              </View>
+          <View style={styles.heroStatsWrap}>
+            <View style={styles.heroStatRow}>
+              <Text style={styles.heroStatKey}>Invested</Text>
+              <Text style={styles.heroStatValue}>{formatMoney(totals.investedValue, rc)}</Text>
+            </View>
 
-              {/* Gain / Loss */}
-              <View style={styles.heroStatRow}>
-                <Text style={styles.heroStatKey}>Gain/Loss</Text>
+            <View style={styles.heroStatRow}>
+              <Text style={styles.heroStatKey}>Gain/Loss</Text>
+              <Text style={[
+                styles.heroStatGain,
+                totals.gainLoss >= 0 ? styles.positiveText : styles.negativeText,
+              ]}>
+                {totals.gainLoss >= 0 ? "+" : ""}
+                {formatMoney(totals.gainLoss, rc)}
+              </Text>
+              <View style={[
+                styles.gainBadge,
+                totals.gainLoss >= 0 ? styles.gainBadgePositive : styles.gainBadgeNegative,
+              ]}>
                 <Text style={[
-                  styles.heroStatGain,
+                  styles.gainBadgeText,
                   totals.gainLoss >= 0 ? styles.positiveText : styles.negativeText,
                 ]}>
-                  {totals.gainLoss >= 0 ? "+" : ""}
-                  {formatMoney(totals.gainLoss, rc)}
+                  {totals.gainLossPct >= 0 ? "+" : ""}
+                  {totals.gainLossPct.toFixed(2)}%
                 </Text>
-                <View style={[
-                  styles.gainBadge,
-                  totals.gainLoss >= 0 ? styles.gainBadgePositive : styles.gainBadgeNegative,
-                ]}>
-                  <Text style={[
-                    styles.gainBadgeText,
-                    totals.gainLoss >= 0 ? styles.positiveText : styles.negativeText,
-                  ]}>
-                    {totals.gainLossPct >= 0 ? "+" : ""}
-                    {totals.gainLossPct.toFixed(2)}%
-                  </Text>
-                </View>
               </View>
             </View>
           </View>
-
-          <View style={styles.donutWrap}>
-            <DonutChart slices={donutSlices} size={108} strokeWidth={14} />
-            <View style={styles.donutCenter}>
-              <Text style={styles.donutCenterLabel}>pos</Text>
-              <Text style={styles.donutCenterValue}>{concentration.symbolCount}</Text>
-            </View>
-          </View>
         </View>
-
-        <View style={styles.sectionGap}>
-          <Text style={styles.sectionLabel}>Geographic Split</Text>
-          <View style={styles.geoRow}>
-            <View style={styles.geoLeft}>
-              <View style={[styles.dot, { backgroundColor: GEO_INDIA_COLOR }]} />
-              <Text style={styles.geoName}>India</Text>
-            </View>
-            <View style={styles.geoRight}>
-              <Text style={styles.geoPct}>{geoSplit.indiaValuePct.toFixed(1)}%</Text>
-              <Text style={styles.geoValue}>{formatMoney(geoSplit.indiaCurrentValue, rc)}</Text>
-            </View>
-          </View>
-          <View style={styles.geoRowBottom}>
-            <View style={styles.geoLeft}>
-              <View style={[styles.dot, { backgroundColor: GEO_US_COLOR }]} />
-              <Text style={styles.geoName}>United States</Text>
-            </View>
-            <View style={styles.geoRight}>
-              <Text style={styles.geoPct}>{geoSplit.usValuePct.toFixed(1)}%</Text>
-              <Text style={styles.geoValue}>{formatMoney(geoSplit.usCurrentValue, rc)}</Text>
-            </View>
-          </View>
-          <View style={styles.geoBarTrack}>
-            <View style={[styles.geoBarFill, { width: `${geoSplit.indiaValuePct}%`, backgroundColor: GEO_INDIA_COLOR }]} />
-          </View>
-        </View>
-
-        {concentration.level !== "LOW" ? (
-          <View style={styles.warningRow}>
-            <View style={[styles.warningIndicator, { backgroundColor: concentrationColor }]} />
-            <View style={styles.warningContent}>
-              <Text style={[styles.warningTitle, { color: concentrationColor }]}>
-                {concentration.level === "HIGH" ? "High" : "Moderate"} concentration
-              </Text>
-              <Text style={styles.warningText}>
-                Largest position {concentration.topHoldingPct.toFixed(1)}% · Top 5 positions {concentration.top5Pct.toFixed(1)}%
-              </Text>
-            </View>
-          </View>
-        ) : null}
-
-        <RebalancingCard
-          targetAllocation={settings.targetAllocation}
-          result={rebalancingResult}
-          onSave={(target) => updateSettings({ targetAllocation: target })}
-          isExpanded={showRebalancingDetails}
-          onToggleExpanded={() => setShowRebalancingDetails((prev) => !prev)}
-        />
-
-        <DeployCashCard
-          totalCashRC={totalCashForRebalancing}
-          targetAllocation={settings.targetAllocation}
-          reportingCurrency={rc}
-          currentAllocation={deployCashAllocationContext}
-          onPlanDeployment={() => setShowDeployCashModal(true)}
-          isExpanded={showDeployCashDetails}
-          onToggleExpanded={() => setShowDeployCashDetails((prev) => !prev)}
-        />
 
         <View style={styles.sectionGap}>
           <Text style={styles.sectionLabel}>Allocations</Text>
@@ -373,7 +212,6 @@ export default function DashboardScreen() {
             })}
           </View>
 
-          {/* Allocation donut */}
           <View style={styles.allocDonutWrap}>
             <DonutChart slices={allocationDonutSlices} size={160} strokeWidth={22} />
             <View style={styles.allocDonutCenter}>
@@ -382,7 +220,6 @@ export default function DashboardScreen() {
             </View>
           </View>
 
-          {/* Ranked list */}
           <View style={styles.allocList}>
             {rankedAllocations.map((item, i) => {
               const barColor = DONUT_PALETTE[i % DONUT_PALETTE.length];
@@ -454,15 +291,6 @@ export default function DashboardScreen() {
           </View>
         </View>
       </ScrollView>
-      <DeployCashModal
-        visible={showDeployCashModal}
-        totalCashRC={totalCashForRebalancing}
-        targetAllocation={settings.targetAllocation}
-        reportingCurrency={rc}
-        currentAllocation={deployCashAllocationContext}
-        onClose={() => setShowDeployCashModal(false)}
-      />
-      <PortfolioGuideModal visible={showGuide} onClose={closeGuide} />
     </ScreenContainer>
   );
 }
@@ -481,24 +309,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
-  },
-  guideCta: {
-    marginTop: -spacing.xl,
-    marginBottom: spacing.xxl,
-    borderRadius: radii.lg,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  guideCtaTitle: {
-    color: colors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
-  },
-  guideCtaSubtitle: {
-    marginTop: spacing.xs,
-    color: colors.muted,
-    fontSize: typography.caption,
   },
   filterRow: {
     flexDirection: "row",
@@ -521,15 +331,8 @@ const styles = StyleSheet.create({
   filterTextActive: {
     color: colors.bg,
   },
-  heroRow: {
+  heroSection: {
     marginBottom: spacing.xxxl,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  heroLeft: {
-    flex: 1,
-    paddingRight: spacing.xxxl,
   },
   heroLabel: {
     color: colors.muted,
@@ -580,23 +383,6 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
   },
-  donutWrap: {
-    position: "relative",
-  },
-  donutCenter: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  donutCenterLabel: {
-    color: colors.muted,
-    fontSize: typography.micro,
-  },
-  donutCenterValue: {
-    color: colors.text,
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
-  },
   sectionGap: {
     marginBottom: spacing.xxxl,
   },
@@ -640,80 +426,6 @@ const styles = StyleSheet.create({
   },
   allocList: {
     gap: 0,
-  },
-  geoRow: {
-    marginBottom: spacing.sm,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  geoRowBottom: {
-    marginBottom: spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  geoLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: radii.pill,
-  },
-  geoName: {
-    color: colors.text,
-    fontSize: typography.body,
-  },
-  geoRight: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: spacing.sm,
-  },
-  geoPct: {
-    color: colors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
-  },
-  geoValue: {
-    color: colors.muted,
-    fontSize: typography.caption,
-  },
-  geoBarTrack: {
-    height: 4,
-    width: "100%",
-    overflow: "hidden",
-    borderRadius: radii.pill,
-    backgroundColor: colors.surface,
-  },
-  geoBarFill: {
-    height: "100%",
-  },
-  warningRow: {
-    marginBottom: spacing.xxxl,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.sm,
-  },
-  warningIndicator: {
-    marginTop: 2,
-    width: 2,
-    alignSelf: "stretch",
-    borderRadius: radii.sm,
-  },
-  warningContent: {
-    flex: 1,
-  },
-  warningTitle: {
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
-  },
-  warningText: {
-    marginTop: 2,
-    color: colors.muted,
-    fontSize: typography.caption,
   },
   allocationItem: {
     marginBottom: spacing.xl,

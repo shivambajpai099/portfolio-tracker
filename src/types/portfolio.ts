@@ -102,7 +102,6 @@ export interface LivePriceCache {
   updatedAt?: TimestampISO;
 }
 
-export type BrokerAccount = Account;
 
 export interface FxRates {
   USDINR: number;

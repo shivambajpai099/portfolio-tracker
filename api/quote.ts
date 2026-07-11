@@ -16,6 +16,7 @@ const RETRYABLE_UPSTREAM_STATUSES = new Set([401, 429, 500, 502, 503, 504]);
 
 const FINNHUB_API_KEY = String(process.env.FINNHUB_API_KEY ?? "").trim();
 const FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote";
+const INDIA_SUFFIX_PATTERN = /\.(NS|BO)$/i;
 
 const YAHOO_QUOTE_BASE_URLS = [
   "https://query2.finance.yahoo.com",
@@ -81,6 +82,12 @@ const inferCurrency = (symbol: string): string => {
   return "USD";
 };
 
+const isIndiaSymbol = (symbol: string): boolean => INDIA_SUFFIX_PATTERN.test(symbol);
+
+const stripIndiaSuffix = (symbol: string): string => symbol.replace(INDIA_SUFFIX_PATTERN, "");
+
+const inferIndiaExchange = (symbol: string): "NSE" | "BSE" => (symbol.endsWith(".BO") ? "BSE" : "NSE");
+
 const putCache = (key: string, payload: YahooCompatiblePayload): void => {
   if (CACHE.has(key)) {
     CACHE.delete(key);
@@ -114,16 +121,172 @@ const dedupeBySymbol = (items: YahooQuoteItem[]): YahooQuoteItem[] => {
   return [...map.values()];
 };
 
-const extractSymbols = (payload: YahooCompatiblePayload): Set<string> => {
-  return new Set(payload.quoteResponse.result.map((item) => item.symbol));
-};
-
 const pickMissingSymbols = (requested: string, present: Set<string>): string => {
   return requested
     .split(",")
     .filter(Boolean)
     .filter((symbol) => !present.has(symbol))
     .join(",");
+};
+
+const pickIndiaSymbols = (symbols: string): string => {
+  return symbols
+    .split(",")
+    .filter(Boolean)
+    .filter((symbol) => isIndiaSymbol(symbol))
+    .join(",");
+};
+
+const readNumeric = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[^0-9.\-]/g, ""));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const extractPrice = (payload: unknown): number | null => {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const directCandidates = [
+    record.lastPrice,
+    record.ltp,
+    record.price,
+    record.currentPrice,
+    record.close,
+    record.value,
+  ];
+
+  for (const candidate of directCandidates) {
+    const parsed = readNumeric(candidate);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  const nestedCandidates = [record.priceInfo, record.data, record.quote, record.result, record.response];
+  for (const nested of nestedCandidates) {
+    const nestedParsed = extractPrice(nested);
+    if (nestedParsed !== null) {
+      return nestedParsed;
+    }
+  }
+
+  return null;
+};
+
+const callNseBseMethod = async (
+  client: Record<string, unknown>,
+  methodName: string,
+  symbol: string,
+  exchange: "NSE" | "BSE"
+): Promise<unknown> => {
+  const method = client[methodName];
+  if (typeof method !== "function") {
+    return null;
+  }
+
+  const fn = method as (...args: unknown[]) => Promise<unknown> | unknown;
+  try {
+    return await fn(symbol, exchange);
+  } catch {
+    try {
+      return await fn(symbol);
+    } catch {
+      return null;
+    }
+  }
+};
+
+const buildNseBseClient = async (): Promise<Record<string, unknown> | null> => {
+  try {
+    const dynamicImport = new Function("m", "return import(m)") as (moduleName: string) => Promise<unknown>;
+    const mod = (await dynamicImport("nse-bse-api")) as Record<string, unknown>;
+    const candidates: unknown[] = [mod.default, mod.client, mod.api, mod];
+
+    for (const candidate of candidates) {
+      if (!candidate) {
+        continue;
+      }
+
+      if (typeof candidate === "function") {
+        try {
+          const instance = new (candidate as new () => unknown)();
+          if (instance && typeof instance === "object") {
+            return instance as Record<string, unknown>;
+          }
+        } catch {
+          // Ignore constructor mismatch; try other exports.
+        }
+      }
+
+      if (typeof candidate === "object") {
+        return candidate as Record<string, unknown>;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
+const fetchNseBseQuotes = async (normalized: string): Promise<YahooCompatiblePayload | null> => {
+  const indiaSymbols = normalized.split(",").filter((symbol) => isIndiaSymbol(symbol));
+  if (indiaSymbols.length === 0) {
+    return null;
+  }
+
+  const client = await buildNseBseClient();
+  if (!client) {
+    return null;
+  }
+
+  const methodCandidates = [
+    "getQuote",
+    "quote",
+    "getStockQuote",
+    "getSecurityQuote",
+    "getQuoteData",
+    "getDetails",
+  ];
+
+  const resultItems = await Promise.all(
+    indiaSymbols.map(async (symbol) => {
+      const baseSymbol = stripIndiaSuffix(symbol);
+      const exchange = inferIndiaExchange(symbol);
+
+      for (const methodName of methodCandidates) {
+        const payload = await callNseBseMethod(client, methodName, baseSymbol, exchange);
+        const price = extractPrice(payload);
+        if (price === null) {
+          continue;
+        }
+
+        return {
+          symbol,
+          regularMarketPrice: price,
+          regularMarketTime: Math.floor(Date.now() / 1000),
+          currency: "INR",
+          exchange,
+          fullExchangeName: exchange,
+        } satisfies YahooQuoteItem;
+      }
+
+      return null;
+    })
+  );
+
+  const filtered = resultItems.flatMap((item) => (item ? [item] : []));
+  return filtered.length > 0 ? toPayload(filtered) : null;
 };
 
 const fetchFinnhubQuotes = async (normalized: string, signal: AbortSignal): Promise<YahooCompatiblePayload | null> => {
@@ -232,33 +395,46 @@ const fetchProviderPayload = async (
   signal: AbortSignal,
   res: any,
 ): Promise<YahooCompatiblePayload | null> => {
-  const finnhub = await fetchFinnhubQuotes(normalized, signal);
-  if (!finnhub) {
-    const yahooOnly = await fetchYahooQuotes(normalized, signal);
-    if (yahooOnly) {
-      res.setHeader("X-Upstream-Provider", "YAHOO");
-      res.setHeader("X-Upstream-Status", "200");
+  const providersUsed: string[] = [];
+  const items: YahooQuoteItem[] = [];
+
+  const yahoo = await fetchYahooQuotes(normalized, signal);
+  if (yahoo) {
+    providersUsed.push("YAHOO");
+    items.push(...yahoo.quoteResponse.result);
+  }
+
+  let present = new Set(items.map((item) => item.symbol));
+  const indiaMissing = pickIndiaSymbols(pickMissingSymbols(normalized, present));
+  if (indiaMissing) {
+    const indiaProvider = await fetchNseBseQuotes(indiaMissing);
+    if (indiaProvider) {
+      providersUsed.push("NSE_BSE_API");
+      items.push(...indiaProvider.quoteResponse.result);
+      present = new Set(items.map((item) => item.symbol));
     }
-    return yahooOnly;
+
+    const indiaStillMissing = pickIndiaSymbols(pickMissingSymbols(normalized, present));
+    res.setHeader("X-Upstream-Provider-India", indiaStillMissing ? "NO_DATA" : "NSE_BSE_API");
+  } else {
+    res.setHeader("X-Upstream-Provider-India", "N/A");
   }
 
-  const finnhubSymbols = extractSymbols(finnhub);
-  const missing = pickMissingSymbols(normalized, finnhubSymbols);
-  if (!missing) {
-    res.setHeader("X-Upstream-Provider", "FINNHUB");
-    res.setHeader("X-Upstream-Status", "200");
-    return finnhub;
+  const missing = pickMissingSymbols(normalized, present);
+  if (missing) {
+    const finnhub = await fetchFinnhubQuotes(missing, signal);
+    if (finnhub) {
+      providersUsed.push("FINNHUB");
+      items.push(...finnhub.quoteResponse.result);
+    }
   }
 
-  const yahooMissing = await fetchYahooQuotes(missing, signal);
-  if (!yahooMissing) {
-    res.setHeader("X-Upstream-Provider", "FINNHUB");
-    res.setHeader("X-Upstream-Status", "200");
-    return finnhub;
+  const merged = dedupeBySymbol(items);
+  if (merged.length === 0) {
+    return null;
   }
 
-  const merged = dedupeBySymbol([...finnhub.quoteResponse.result, ...yahooMissing.quoteResponse.result]);
-  res.setHeader("X-Upstream-Provider", "FINNHUB+YAHOO");
+  res.setHeader("X-Upstream-Provider", providersUsed.join("+") || "UNKNOWN");
   res.setHeader("X-Upstream-Status", "200");
   return toPayload(merged);
 };
@@ -267,7 +443,10 @@ const applyCorsHeaders = (res: any): void => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Expose-Headers", "X-Request-Id, X-Cache, X-Upstream-Provider, X-Upstream-Status");
+  res.setHeader(
+    "Access-Control-Expose-Headers",
+    "X-Request-Id, X-Cache, X-Upstream-Provider, X-Upstream-Provider-India, X-Upstream-Status"
+  );
   res.setHeader("Vary", "Origin");
 };
 

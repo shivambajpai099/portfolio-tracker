@@ -31,6 +31,7 @@
     "react-native-url-polyfill": "^2.0.0",
     "react-native-view-shot": "^3.8.0",
     "react-native-web": "^0.20.0",
+    "nse-bse-api": "latest",
     "zustand": "^5.0.0"
   },
   "devDependencies": {

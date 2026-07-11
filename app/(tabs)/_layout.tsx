@@ -50,24 +50,10 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="xray"
+        name="insights"
         options={{
-          title: "X-Ray",
-          tabBarIcon: ({ color, size }) => <Ionicons name="analytics-outline" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="drift"
-        options={{
-          title: "Drift",
-          tabBarIcon: ({ color, size }) => <Ionicons name="trending-up-outline" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="timeline"
-        options={{
-          title: "Timeline",
-          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart-outline" size={size} color={color} />,
+          title: "Insights",
+          tabBarIcon: ({ color, size }) => <Ionicons name="bulb-outline" size={size} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -83,6 +69,19 @@ export default function TabsLayout() {
           title: "Settings",
           tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size} color={color} />,
         }}
+      />
+      {/* Hide old screens from tab bar but keep for backward compatibility */}
+      <Tabs.Screen
+        name="xray"
+        options={{ href: null }}
+      />
+      <Tabs.Screen
+        name="drift"
+        options={{ href: null }}
+      />
+      <Tabs.Screen
+        name="timeline"
+        options={{ href: null }}
       />
     </Tabs>
   );

@@ -72,6 +72,7 @@ export default function HoldingsScreen() {
   const [currencyFilter, setCurrencyFilter] = useState<CurrencyFilter>("ALL");
   const [perfFilter, setPerfFilter] = useState<PerfFilter>("ALL");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [showFilters, setShowFilters] = useState(false);
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
@@ -352,97 +353,26 @@ export default function HoldingsScreen() {
         style={styles.searchInput}
       />
 
-      {/* Group-by chips */}
-      <View style={styles.chipWrap}>
-        {([
-          ["stock", "Stock"],
-          ["account", "Account"],
-          ["country", "Country"],
-          ["asset_type", "Type"],
-        ] as const).map(([key, label]) => {
-          const active = groupBy === key;
-          return (
-            <Pressable
-              key={key}
-              style={[styles.chip, active && styles.chipActive]}
-              onPress={() => { setGroupBy(key); setExpandedGroups({}); }}
-            >
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {/* Allocation basis / cash inclusion filters */}
-      <View style={styles.chipWrap}>
-        {([
-          ["CURRENT_VALUE", "Current %"],
-          ["INVESTED_VALUE", "Invested %"],
-        ] as const).map(([basis, label]) => {
-          const active = settings.allocationBasis === basis;
-          return (
-            <Pressable
-              key={basis}
-              style={[styles.chip, active && styles.chipActive]}
-              onPress={() => updateSettings({ allocationBasis: basis })}
-            >
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-            </Pressable>
-          );
-        })}
-
-        {([
-          [true, "Include Cash"],
-          [false, "Exclude Cash"],
-        ] as const).map(([include, label]) => {
-          const active = settings.allocationIncludeCash === include;
-          return (
-            <Pressable
-              key={label}
-              style={[styles.chip, active && styles.chipActive]}
-              onPress={() => updateSettings({ allocationIncludeCash: include })}
-            >
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {/* Sort + filter chips */}
-      <View style={styles.chipWrap}>
-        {([
-          ["value_desc", "Value"],
-          ["allocation_desc", "Alloc"],
-          ["gain_desc", "Gain"],
-          ["alpha_asc", "A–Z"],
-        ] as const).map(([key, label]) => {
-          const active = sortKey === key;
-          return (
-            <Pressable key={key} style={[styles.chip, active && styles.chipActive]} onPress={() => setSortKey(key)}>
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-            </Pressable>
-          );
-        })}
-
-        <View style={styles.divider} />
-
-        {(["ALL", "INR", "USD"] as CurrencyFilter[]).map((value) => {
-          const active = currencyFilter === value;
-          return (
-            <Pressable key={value} style={[styles.chip, active && styles.chipActive]} onPress={() => setCurrencyFilter(value)}>
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{value}</Text>
-            </Pressable>
-          );
-        })}
-
-        {(["ALL", "GAIN", "LOSS"] as PerfFilter[]).map((value) => {
-          const active = perfFilter === value;
-          return (
-            <Pressable key={value} style={[styles.chip, active && styles.chipActive]} onPress={() => setPerfFilter(value)}>
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{value}</Text>
-            </Pressable>
-          );
-        })}
+      {/* Primary sort control + Filters button */}
+      <View style={styles.controlRow}>
+        <View style={styles.sortRow}>
+          {([
+            ["value_desc", "Value"],
+            ["allocation_desc", "Alloc"],
+            ["gain_desc", "Gain"],
+            ["alpha_asc", "A–Z"],
+          ] as const).map(([key, label]) => {
+            const active = sortKey === key;
+            return (
+              <Pressable key={key} style={[styles.chip, active && styles.chipActive]} onPress={() => setSortKey(key)}>
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Pressable style={styles.filtersBtn} onPress={() => setShowFilters(true)}>
+          <Text style={styles.filtersBtnText}>Filters</Text>
+        </Pressable>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -677,6 +607,130 @@ export default function HoldingsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Filters Modal */}
+      <Modal visible={showFilters} transparent animationType="slide" onRequestClose={() => setShowFilters(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Filters</Text>
+
+            {/* Group-by options */}
+            <Text style={styles.modalLabel}>Group by</Text>
+            <View style={styles.modalPillRow}>
+              {([
+                ["stock", "Stock"],
+                ["account", "Account"],
+                ["country", "Country"],
+                ["asset_type", "Type"],
+              ] as const).map(([key, label]) => {
+                const active = groupBy === key;
+                return (
+                  <Pressable
+                    key={key}
+                    style={[styles.modalPill, active && styles.modalPillActive]}
+                    onPress={() => { setGroupBy(key); setExpandedGroups({}); }}
+                  >
+                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Allocation basis / cash inclusion */}
+            <Text style={styles.modalLabel}>Allocation settings</Text>
+            <View style={styles.modalPillRow}>
+              {([
+                ["CURRENT_VALUE", "Current %"],
+                ["INVESTED_VALUE", "Invested %"],
+              ] as const).map(([basis, label]) => {
+                const active = settings.allocationBasis === basis;
+                return (
+                  <Pressable
+                    key={basis}
+                    style={[styles.modalPill, active && styles.modalPillActive]}
+                    onPress={() => updateSettings({ allocationBasis: basis })}
+                  >
+                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+
+              {([
+                [true, "Include Cash"],
+                [false, "Exclude Cash"],
+              ] as const).map(([include, label]) => {
+                const active = settings.allocationIncludeCash === include;
+                return (
+                  <Pressable
+                    key={label}
+                    style={[styles.modalPill, active && styles.modalPillActive]}
+                    onPress={() => updateSettings({ allocationIncludeCash: include })}
+                  >
+                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Sort + filter options */}
+            <Text style={styles.modalLabel}>Sort & Filter</Text>
+            <View style={styles.modalPillRow}>
+              {([
+                ["value_desc", "Value"],
+                ["allocation_desc", "Alloc"],
+                ["gain_desc", "Gain"],
+                ["alpha_asc", "A–Z"],
+              ] as const).map(([key, label]) => {
+                const active = sortKey === key;
+                return (
+                  <Pressable
+                    key={key}
+                    style={[styles.modalPill, active && styles.modalPillActive]}
+                    onPress={() => setSortKey(key)}
+                  >
+                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+
+              {(["ALL", "INR", "USD"] as CurrencyFilter[]).map((value) => {
+                const active = currencyFilter === value;
+                return (
+                  <Pressable
+                    key={value}
+                    style={[styles.modalPill, active && styles.modalPillActive]}
+                    onPress={() => setCurrencyFilter(value)}
+                  >
+                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{value}</Text>
+                  </Pressable>
+                );
+              })}
+
+              {(["ALL", "GAIN", "LOSS"] as PerfFilter[]).map((value) => {
+                const active = perfFilter === value;
+                return (
+                  <Pressable
+                    key={value}
+                    style={[styles.modalPill, active && styles.modalPillActive]}
+                    onPress={() => setPerfFilter(value)}
+                  >
+                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{value}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.modalActions}>
+              <Pressable style={styles.ghostBtn} onPress={() => setShowFilters(false)}>
+                <Text style={styles.ghostText}>Close</Text>
+              </Pressable>
+              <Pressable style={styles.primaryBtn} onPress={clearFilters}>
+                <Text style={styles.primaryText}>Clear All</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScreenContainer>
   );
 }
@@ -738,6 +792,32 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     color: colors.text,
     fontSize: typography.body,
+  },
+  controlRow: {
+    marginBottom: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+  },
+  sortRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.xs,
+    flex: 1,
+  },
+  filtersBtn: {
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.muted,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  filtersBtnText: {
+    color: colors.muted,
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
   chipWrap: {
     marginBottom: spacing.sm,
