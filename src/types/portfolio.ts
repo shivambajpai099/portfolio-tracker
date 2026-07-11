@@ -1,5 +1,6 @@
 export type Currency = "INR" | "USD";
 export type TimestampISO = string;
+export type ThemeMode = "light" | "dark" | "system";
 
 export type AccountType = "BROKER" | "SAVINGS";
 
@@ -18,6 +19,10 @@ export interface Account {
   baseCurrency: Currency;
   createdAt?: TimestampISO;
   updatedAt?: TimestampISO;
+  /** Timestamp when holdings were last imported to this account */
+  lastImportedAt?: TimestampISO;
+  /** Source/parser used for the last import (e.g., "INDMoney", "Manual") */
+  lastImportSource?: string;
 }
 
 export interface Holding {
@@ -86,6 +91,8 @@ export interface PortfolioSettings {
   targetAllocation?: TargetAllocation | null;
   /** How long to retain historical allocation/timeline snapshots. */
   timelineRetention?: TimelineRetention;
+  /** App theme mode: light, dark, or system default */
+  themeMode?: ThemeMode;
   lastViewedAt?: TimestampISO;
   updatedAt?: TimestampISO;
 }

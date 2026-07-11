@@ -3,9 +3,10 @@ import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { useAuthStore } from "../../src/store/authStore";
-import { colors, radii, spacing, typography } from "../../src/theme";
+import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 
 export default function SignupScreen() {
+  const { colors } = useTheme();
   const router = useRouter();
   const signUp = useAuthStore((state) => state.signUp);
   const clearError = useAuthStore((state) => state.clearError);
@@ -71,40 +72,40 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xxxl,
   },
   title: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
   },
   subtitle: {
     marginTop: spacing.xs,
     marginBottom: spacing.xl,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.body,
   },
   input: {
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
-    color: colors.text,
+    backgroundColor: defaultColors.surface,
+    color: defaultColors.text,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
   inputCompact: {
     marginTop: spacing.sm,
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
-    color: colors.text,
+    backgroundColor: defaultColors.surface,
+    color: defaultColors.text,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
   errorText: {
     marginTop: spacing.sm,
-    color: colors.negative,
+    color: defaultColors.negative,
     fontSize: typography.caption,
   },
   primaryBtn: {
     marginTop: spacing.lg,
     borderRadius: radii.lg,
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
     alignItems: "center",
     paddingVertical: spacing.md,
   },
@@ -112,7 +113,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   primaryText: {
-    color: colors.bg,
+    color: defaultColors.bg,
     fontWeight: typography.weightSemibold,
   },
   linkWrap: {
@@ -120,8 +121,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   linkText: {
-    color: colors.accent,
+    color: defaultColors.accent,
     fontSize: typography.caption,
   },
 });
-

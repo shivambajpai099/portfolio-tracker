@@ -9,7 +9,7 @@ import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { CountryAllocationBlock } from "../../src/components/CountryAllocationBlock";
 import { RiskSnapshotSection } from "../../src/components/RiskSnapshotSection";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
-import { colors, radii, spacing, typography } from "../../src/theme";
+import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { calcSymbolAllocations, convert, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { formatMoney } from "../../src/utils/format";
 import type { AllocationSnapshot, Holding } from "../../src/types/portfolio";
@@ -103,9 +103,9 @@ const trendFromDelta = (delta: number): Trend => {
 };
 
 const trendColor = (trend: Trend): string => {
-  if (trend === "UP") return colors.positive;
-  if (trend === "DOWN") return colors.negative;
-  return colors.muted;
+  if (trend === "UP") return defaultColors.positive;
+  if (trend === "DOWN") return defaultColors.negative;
+  return defaultColors.muted;
 };
 
 const formatSignedPct = (value: number): string => `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
@@ -164,6 +164,7 @@ const buildHoldingChanges = (latest: AllocationSnapshot, baseline: AllocationSna
 };
 
 export default function PortfolioInsightsScreen() {
+  const { colors } = useTheme();
   const holdings = usePortfolioStore((s) => s.holdings);
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
   const fxRates = usePortfolioStore((s) => s.fxRates);
@@ -584,7 +585,7 @@ function CollapsibleSectionHeader({
       <Ionicons
         name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"}
         size={20}
-        color={colors.accent}
+        color={defaultColors.accent}
       />
     </Pressable>
   );
@@ -602,7 +603,7 @@ function ReviewMetric({
   return (
     <View style={styles.reviewMetric}>
       <Text style={styles.reviewMetricLabel}>{label}</Text>
-      <Text style={[styles.reviewMetricValue, { color: positive ? colors.text : colors.negative }]}>{value}</Text>
+      <Text style={[styles.reviewMetricValue, { color: positive ? defaultColors.text : defaultColors.negative }]}>{value}</Text>
     </View>
   );
 }
@@ -612,30 +613,30 @@ const styles = StyleSheet.create({
     paddingBottom: 48,
   },
   title: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
   },
   subtitle: {
     marginTop: spacing.xs,
     marginBottom: spacing.lg,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
   },
   emptyCard: {
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
   },
   emptyTitle: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
   emptyText: {
     marginTop: spacing.xs,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
     lineHeight: 18,
   },
@@ -647,7 +648,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   sectionHeader: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
@@ -658,7 +659,7 @@ const styles = StyleSheet.create({
   periodCard: {
     marginBottom: spacing.lg,
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
   },
@@ -666,13 +667,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   periodTitle: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
   periodDates: {
     marginTop: 2,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
   },
   changeList: {
@@ -687,7 +688,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   changeText: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.caption,
     lineHeight: 18,
   },
@@ -711,14 +712,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   holdingTitle: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
     textTransform: "uppercase",
     letterSpacing: 1,
     fontWeight: typography.weightMedium,
   },
   holdingFallback: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
   },
   holdingRow: {
@@ -729,7 +730,7 @@ const styles = StyleSheet.create({
   },
   holdingText: {
     flex: 1,
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.caption,
     lineHeight: 18,
   },
@@ -746,30 +747,30 @@ const styles = StyleSheet.create({
   },
   monthPill: {
     borderRadius: radii.pill,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   monthPillActive: {
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
   },
   monthText: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
     fontWeight: typography.weightMedium,
   },
   monthTextActive: {
-    color: colors.bg,
+    color: defaultColors.bg,
   },
   reviewCard: {
     borderRadius: radii.lg,
-    backgroundColor: colors.surface,
+    backgroundColor: defaultColors.surface,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
     gap: spacing.md,
   },
   reviewTitle: {
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
   },
@@ -781,28 +782,28 @@ const styles = StyleSheet.create({
   reviewMetric: {
     width: "48%",
     borderRadius: radii.md,
-    backgroundColor: colors.bg,
+    backgroundColor: defaultColors.bg,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
   reviewMetricLabel: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
   },
   reviewMetricValue: {
     marginTop: 2,
-    color: colors.text,
+    color: defaultColors.text,
     fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
   },
   summaryBlock: {
     gap: spacing.sm,
     paddingTop: spacing.xs,
-    borderTopColor: "#1E2128",
+    borderTopColor: defaultColors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   summaryLabel: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.micro,
     textTransform: "uppercase",
     letterSpacing: 1,
@@ -818,11 +819,11 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
   },
   summaryText: {
     flex: 1,
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
     lineHeight: 18,
   },
@@ -834,17 +835,17 @@ const styles = StyleSheet.create({
   },
   exportBtn: {
     borderRadius: radii.pill,
-    backgroundColor: colors.accent,
+    backgroundColor: defaultColors.accent,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
   exportBtnText: {
-    color: colors.bg,
+    color: defaultColors.bg,
     fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
   },
   exportStatus: {
-    color: colors.muted,
+    color: defaultColors.muted,
     fontSize: typography.caption,
   },
 });

@@ -2,15 +2,17 @@ import { Redirect, Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { ActivityIndicator, Platform, View } from "react-native";
 import { useAuthStore } from "../../src/store/authStore";
+import { useTheme } from "../../src/theme";
 
 export default function TabsLayout() {
   const initialized = useAuthStore((state) => state.initialized);
   const session = useAuthStore((state) => state.session);
+  const { colors } = useTheme();
 
   if (!initialized) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#0B0C10" }}>
-        <ActivityIndicator color="#67E8F9" />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg }}>
+        <ActivityIndicator color={colors.accent} />
       </View>
     );
   }
@@ -23,15 +25,15 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: Platform.OS !== "web",
-        headerStyle: { backgroundColor: "#0B0C10" },
-        headerTitleStyle: { color: "#F2F4F8" },
-        headerTintColor: "#F2F4F8",
+        headerStyle: { backgroundColor: colors.bg },
+        headerTitleStyle: { color: colors.text },
+        headerTintColor: colors.text,
         tabBarStyle: {
-          backgroundColor: "#0B0C10",
-          borderTopColor: "#1E2128",
+          backgroundColor: colors.bg,
+          borderTopColor: colors.border,
         },
-        tabBarActiveTintColor: "#67E8F9",
-        tabBarInactiveTintColor: "#8B909A",
+        tabBarActiveTintColor: colors.accent,
+        tabBarInactiveTintColor: colors.muted,
         tabBarLabelStyle: { fontSize: 11 },
       }}
     >

@@ -37,12 +37,17 @@ interface ImportHoldingsModalProps {
   onComplete: (result: ImportCompleteResult) => void;
   addHolding: (holding: Holding) => void;
   updateHolding: (holdingId: string, updates: Partial<Holding>) => void;
+  updateAccount?: (accountId: string, updates: Partial<Account>) => void;
+  /** Pre-select an account when opening the modal */
+  preSelectedAccountId?: string;
 }
 
 interface ImportCompleteResult {
   addedCount: number;
   updatedCount: number;
   accountName: string;
+  accountId: string;
+  parserName: string;
 }
 
 export function ImportHoldingsModal({
@@ -53,6 +58,8 @@ export function ImportHoldingsModal({
   onComplete,
   addHolding,
   updateHolding,
+  updateAccount,
+  preSelectedAccountId,
 }: ImportHoldingsModalProps) {
   // Step state
   const [step, setStep] = useState<ImportStep>("upload");
@@ -105,6 +112,13 @@ export function ImportHoldingsModal({
     () => accounts.find((a) => a.id === selectedAccountId),
     [accounts, selectedAccountId]
   );
+
+  // Pre-select account if provided
+  useEffect(() => {
+    if (visible && preSelectedAccountId) {
+      setSelectedAccountId(preSelectedAccountId);
+    }
+  }, [visible, preSelectedAccountId]);
 
   // Reset state when modal closes
   const handleClose = () => {
@@ -239,6 +253,7 @@ export function ImportHoldingsModal({
 
     try {
       const currency: Currency = parseResult.currency || selectedAccount.baseCurrency;
+      const parser = getParser(selectedParserId);
 
       const result = commitImport(
         reviewData,
@@ -250,10 +265,21 @@ export function ImportHoldingsModal({
         updateHolding
       );
 
+      // Update account with import metadata
+      if (updateAccount && (result.summary.addedCount > 0 || result.summary.updatedCount > 0)) {
+        updateAccount(selectedAccountId, {
+          lastImportedAt: new Date().toISOString(),
+          lastImportSource: parser?.displayName || selectedParserId,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
       onComplete({
         addedCount: result.summary.addedCount,
         updatedCount: result.summary.updatedCount,
         accountName: selectedAccount.name,
+        accountId: selectedAccountId,
+        parserName: parser?.displayName || selectedParserId,
       });
 
       handleClose();
