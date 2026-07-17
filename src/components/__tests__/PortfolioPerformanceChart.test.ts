@@ -10,24 +10,28 @@ describe("PortfolioPerformanceChart", () => {
   // formatDateLabel
   // ---------------------------------------------------------------------------
   describe("formatDateLabel", () => {
-    it("formats daily view with month and day", () => {
-      const result = formatDateLabel("2024-03-15", "daily");
-      // The exact format depends on locale, but should include month and day
-      expect(result).toMatch(/Mar|15/);
-    });
-
-    it("formats monthly view with month and year", () => {
+    it("formats monthly view with month name", () => {
       const result = formatDateLabel("2024-03-15", "monthly");
-      expect(result).toMatch(/Mar|24/);
+      expect(result).toMatch(/Mar/);
     });
 
-    it("formats yearly view with just year", () => {
+    it("formats quarterly view with quarter number", () => {
+      const result = formatDateLabel("2024-03-15", "quarterly");
+      expect(result).toBe("Q1");
+    });
+
+    it("formats quarterly view Q2", () => {
+      const result = formatDateLabel("2024-05-15", "quarterly");
+      expect(result).toBe("Q2");
+    });
+
+    it("formats yearly view with 2-digit year", () => {
       const result = formatDateLabel("2024-03-15", "yearly");
-      expect(result).toBe("2024");
+      expect(result).toBe("24");
     });
 
     it("returns original string for invalid date", () => {
-      const result = formatDateLabel("invalid-date", "daily");
+      const result = formatDateLabel("invalid-date", "monthly");
       expect(result).toBe("invalid-date");
     });
   });

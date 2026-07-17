@@ -4,6 +4,9 @@ export type ThemeMode = "light" | "dark" | "system";
 
 export type AccountType = "BROKER" | "SAVINGS";
 
+/** Data source for account holdings: manual entry or derived from transactions. */
+export type AccountDataSource = "manual" | "transactions";
+
 /** Returns true if the account type supports equity/fund holdings. */
 export const accountSupportsHoldings = (type: AccountType): boolean => type === "BROKER";
 
@@ -17,6 +20,8 @@ export interface Account {
   broker: string;
   type: AccountType;
   baseCurrency: Currency;
+  /** How holdings are sourced: "manual" (direct entry) or "transactions" (derived from imported transactions). */
+  dataSource?: AccountDataSource;
   createdAt?: TimestampISO;
   updatedAt?: TimestampISO;
   /** Timestamp when holdings were last imported to this account */

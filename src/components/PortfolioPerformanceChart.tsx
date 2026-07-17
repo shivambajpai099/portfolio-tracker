@@ -1,6 +1,6 @@
-import { useMemo, useState, useCallback } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import Svg, { Circle, Defs, Line, LinearGradient, Path, Stop, G } from "react-native-svg";
+import { useMemo, useState } from "react";
+import { Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
+import { LineChart } from "react-native-chart-kit";
 import { colors, radii, spacing, typography, useTheme } from "../theme";
 import type { Currency } from "../types/portfolio";
 import { formatMoney } from "../utils/format";
@@ -15,7 +15,7 @@ export interface PortfolioHistoryPoint {
   currentValue: number;
 }
 
-export type TimeRangeView = "daily" | "monthly" | "yearly";
+export type TimeRangeView = "monthly" | "quarterly" | "yearly";
 
 interface PortfolioPerformanceChartProps {
   /** Historical portfolio data points */
@@ -36,12 +36,7 @@ interface PortfolioPerformanceChartProps {
 // Constants
 // ---------------------------------------------------------------------------
 
-const WIDTH = 320;
-const HEIGHT = 200;
-const PADDING_X = 14;
-const PADDING_Y = 24;
-const LEGEND_HEIGHT = 32;
-
+const CHART_HEIGHT = 220;
 const INVESTED_COLOR = "#6366F1"; // Indigo
 const CURRENT_VALUE_COLOR = "#22C55E"; // Green
 
@@ -57,12 +52,14 @@ export const formatDateLabel = (dateStr: string, view: TimeRangeView): string =>
   if (Number.isNaN(date.getTime())) return dateStr;
 
   switch (view) {
-    case "daily":
-      return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     case "monthly":
-      return date.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+      return date.toLocaleDateString(undefined, { month: "short" });
+    case "quarterly": {
+      const quarter = Math.floor(date.getMonth() / 3) + 1;
+      return `Q${quarter}`;
+    }
     case "yearly":
-      return date.getFullYear().toString();
+      return date.getFullYear().toString().slice(-2);
     default:
       return dateStr;
   }
@@ -79,6 +76,7 @@ export const calcGainLoss = (point: PortfolioHistoryPoint): { absolute: number; 
 
 /**
  * Transforms data points into projected coordinates for SVG rendering.
+ * Kept for backward compatibility with tests.
  */
 export const projectDataToCoords = (
   data: PortfolioHistoryPoint[],
@@ -96,7 +94,7 @@ export const projectDataToCoords = (
     return { investedCoords: [], currentValueCoords: [], minValue: 0, maxValue: 0 };
   }
 
-  // Find min/max across both series
+  const LEGEND_HEIGHT = 32;
   const allValues = data.flatMap((p) => [p.investedAmount, p.currentValue]);
   const minValue = Math.min(...allValues);
   const maxValue = Math.max(...allValues);
@@ -119,20 +117,20 @@ export const projectDataToCoords = (
 };
 
 /**
- * Creates an SVG path string from coordinates.
+ * Formats large numbers for Y-axis labels (e.g., 100000 -> 100K)
  */
-const pathFromCoords = (coords: Array<{ x: number; y: number }>): string => {
-  if (coords.length === 0) return "";
-  return coords.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-};
-
-/**
- * Creates an area path (for gradient fill) from coordinates.
- */
-const areaPathFromCoords = (coords: Array<{ x: number; y: number }>, baseY: number): string => {
-  if (coords.length === 0) return "";
-  const linePath = pathFromCoords(coords);
-  return `${linePath} L ${coords[coords.length - 1].x} ${baseY} L ${coords[0].x} ${baseY} Z`;
+const formatYAxisLabel = (value: string): string => {
+  const num = parseFloat(value);
+  if (num >= 10000000) {
+    return `${(num / 10000000).toFixed(1)}Cr`;
+  }
+  if (num >= 100000) {
+    return `${(num / 100000).toFixed(1)}L`;
+  }
+  if (num >= 1000) {
+    return `${(num / 1000).toFixed(0)}K`;
+  }
+  return num.toFixed(0);
 };
 
 // ---------------------------------------------------------------------------
@@ -148,26 +146,11 @@ export function PortfolioPerformanceChart({
   error = null,
 }: PortfolioPerformanceChartProps) {
   const { colors: themeColors } = useTheme();
-  
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [showInvested, setShowInvested] = useState(true);
-  const [showCurrentValue, setShowCurrentValue] = useState(true);
 
-  // Project data to coordinates
-  const graph = useMemo(() => {
-    return projectDataToCoords(data, WIDTH, HEIGHT, PADDING_X, PADDING_Y);
-  }, [data]);
-
-  // Path strings for SVG
-  const paths = useMemo(() => {
-    const baseY = HEIGHT - PADDING_Y - LEGEND_HEIGHT;
-    return {
-      investedLine: pathFromCoords(graph.investedCoords),
-      investedArea: areaPathFromCoords(graph.investedCoords, baseY),
-      currentValueLine: pathFromCoords(graph.currentValueCoords),
-      currentValueArea: areaPathFromCoords(graph.currentValueCoords, baseY),
-    };
-  }, [graph]);
+  // Get screen width for responsive chart
+  const screenWidth = Dimensions.get("window").width;
+  const chartWidth = Math.min(screenWidth - spacing.md * 2, 400);
 
   // Selected point data
   const selectedPoint = useMemo(() => {
@@ -182,9 +165,41 @@ export function PortfolioPerformanceChart({
     return calcGainLoss(selectedPoint);
   }, [selectedPoint]);
 
-  const handlePointSelect = useCallback((index: number) => {
-    setSelectedIndex(index);
-  }, []);
+  // Prepare chart data
+  const chartData = useMemo(() => {
+    if (data.length === 0) {
+      return {
+        labels: [],
+        datasets: [{ data: [0] }],
+      };
+    }
+
+    // Limit labels to avoid crowding
+    const maxLabels = 6;
+    const step = Math.ceil(data.length / maxLabels);
+    const labels = data.map((point, index) => 
+      index % step === 0 || index === data.length - 1 
+        ? formatDateLabel(point.date, view) 
+        : ""
+    );
+
+    return {
+      labels,
+      datasets: [
+        {
+          data: data.map((p) => p.investedAmount),
+          color: () => INVESTED_COLOR,
+          strokeWidth: 2,
+        },
+        {
+          data: data.map((p) => p.currentValue),
+          color: () => CURRENT_VALUE_COLOR,
+          strokeWidth: 2,
+        },
+      ],
+      legend: ["Invested", "Current Value"],
+    };
+  }, [data, view]);
 
   // Loading state
   if (isLoading) {
@@ -214,19 +229,34 @@ export function PortfolioPerformanceChart({
       <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
         <Text style={[styles.cardTitle, { color: themeColors.text }]}>Portfolio Performance</Text>
         <View style={styles.emptyContainer}>
-          <Text style={[styles.emptyTitle, { color: themeColors.text }]}>No Historical Data</Text>
+          <Text style={[styles.emptyTitle, { color: themeColors.text }]}>No Transaction Data</Text>
           <Text style={[styles.emptyText, { color: themeColors.muted }]}>
-            Portfolio performance data will appear here once you have historical snapshots.
-          </Text>
-          <Text style={[styles.emptyText, { color: themeColors.muted }]}>
-            Keep tracking your portfolio to see how it grows over time.
+            Import transactions to see your portfolio performance over time.
           </Text>
         </View>
       </View>
     );
   }
 
-  const baseY = HEIGHT - PADDING_Y - LEGEND_HEIGHT;
+  const chartConfig = {
+    backgroundColor: themeColors.surface,
+    backgroundGradientFrom: themeColors.surface,
+    backgroundGradientTo: themeColors.surface,
+    decimalPlaces: 0,
+    color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+    labelColor: () => themeColors.muted,
+    style: {
+      borderRadius: radii.md,
+    },
+    propsForDots: {
+      r: "4",
+      strokeWidth: "2",
+    },
+    propsForLabels: {
+      fontSize: typography.micro,
+    },
+    formatYLabel: formatYAxisLabel,
+  };
 
   return (
     <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
@@ -235,7 +265,7 @@ export function PortfolioPerformanceChart({
         <Text style={[styles.cardTitle, { color: themeColors.text }]}>Portfolio Performance</Text>
         {onViewChange && (
           <View style={styles.viewSelector}>
-            {(["daily", "monthly", "yearly"] as TimeRangeView[]).map((v) => {
+            {(["monthly", "quarterly", "yearly"] as TimeRangeView[]).map((v) => {
               const active = view === v;
               return (
                 <Pressable
@@ -247,7 +277,7 @@ export function PortfolioPerformanceChart({
                   ]}
                 >
                   <Text style={[styles.viewOptionText, { color: active ? themeColors.bg : themeColors.muted }]}>
-                    {v.charAt(0).toUpperCase() + v.slice(1, 3)}
+                    {v === "monthly" ? "Mon" : v === "quarterly" ? "Qtr" : "Year"}
                   </Text>
                 </Pressable>
               );
@@ -295,102 +325,36 @@ export function PortfolioPerformanceChart({
       )}
 
       {/* Chart */}
-      <View style={styles.chartWrap}>
-        <Svg width="100%" height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
-          <Defs>
-            <LinearGradient id="investedFill" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor={INVESTED_COLOR} stopOpacity="0.25" />
-              <Stop offset="1" stopColor={INVESTED_COLOR} stopOpacity="0.02" />
-            </LinearGradient>
-            <LinearGradient id="currentValueFill" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor={CURRENT_VALUE_COLOR} stopOpacity="0.25" />
-              <Stop offset="1" stopColor={CURRENT_VALUE_COLOR} stopOpacity="0.02" />
-            </LinearGradient>
-          </Defs>
-
-          {/* X-axis baseline */}
-          <Line
-            x1={PADDING_X}
-            y1={baseY}
-            x2={WIDTH - PADDING_X}
-            y2={baseY}
-            stroke={themeColors.border}
-            strokeWidth={1}
-          />
-
-          {/* Invested series */}
-          {showInvested && paths.investedArea && (
-            <G>
-              <Path d={paths.investedArea} fill="url(#investedFill)" />
-              <Path d={paths.investedLine} fill="none" stroke={INVESTED_COLOR} strokeWidth={2} />
-              {graph.investedCoords.map((coord, index) => (
-                <Circle
-                  key={`invested-${index}`}
-                  cx={coord.x}
-                  cy={coord.y}
-                  r={selectedIndex === index ? 4 : 2}
-                  fill={INVESTED_COLOR}
-                />
-              ))}
-            </G>
-          )}
-
-          {/* Current value series */}
-          {showCurrentValue && paths.currentValueLine && (
-            <G>
-              <Path d={paths.currentValueArea} fill="url(#currentValueFill)" />
-              <Path d={paths.currentValueLine} fill="none" stroke={CURRENT_VALUE_COLOR} strokeWidth={2} />
-              {graph.currentValueCoords.map((coord, index) => (
-                <Circle
-                  key={`current-${index}`}
-                  cx={coord.x}
-                  cy={coord.y}
-                  r={selectedIndex === index ? 4 : 2}
-                  fill={CURRENT_VALUE_COLOR}
-                />
-              ))}
-            </G>
-          )}
-        </Svg>
-
-        {/* Touch targets for point selection */}
-        <View style={styles.touchRow}>
-          {data.map((_, index) => (
-            <Pressable key={index} style={styles.touchSlot} onPress={() => handlePointSelect(index)} />
-          ))}
-        </View>
+      <View style={styles.chartContainer}>
+        <LineChart
+          data={chartData}
+          width={chartWidth}
+          height={CHART_HEIGHT}
+          chartConfig={chartConfig}
+          bezier
+          withInnerLines={false}
+          withOuterLines
+          withVerticalLines={false}
+          withHorizontalLines
+          withVerticalLabels
+          withHorizontalLabels
+          fromZero={false}
+          segments={4}
+          onDataPointClick={({ index }) => setSelectedIndex(index)}
+          style={styles.chart}
+        />
       </View>
 
-      {/* X-axis labels */}
-      <View style={styles.xAxisLabels}>
-        <Text style={[styles.axisLabel, { color: themeColors.muted }]}>
-          {data[0] ? formatDateLabel(data[0].date, view) : ""}
-        </Text>
-        <Text style={[styles.axisLabel, { color: themeColors.muted }]}>
-          {data[data.length - 1] ? formatDateLabel(data[data.length - 1].date, view) : ""}
-        </Text>
-      </View>
-
-      {/* Legend with toggle */}
+      {/* Legend */}
       <View style={styles.legend}>
-        <Pressable
-          style={[styles.legendItem, !showInvested && styles.legendItemDisabled]}
-          onPress={() => setShowInvested(!showInvested)}
-        >
-          <View style={[styles.legendDot, { backgroundColor: INVESTED_COLOR, opacity: showInvested ? 1 : 0.3 }]} />
-          <Text style={[styles.legendText, { color: showInvested ? themeColors.text : themeColors.muted }]}>
-            Invested
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.legendItem, !showCurrentValue && styles.legendItemDisabled]}
-          onPress={() => setShowCurrentValue(!showCurrentValue)}
-        >
-          <View style={[styles.legendDot, { backgroundColor: CURRENT_VALUE_COLOR, opacity: showCurrentValue ? 1 : 0.3 }]} />
-          <Text style={[styles.legendText, { color: showCurrentValue ? themeColors.text : themeColors.muted }]}>
-            Current Value
-          </Text>
-        </Pressable>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: INVESTED_COLOR }]} />
+          <Text style={[styles.legendText, { color: themeColors.text }]}>Invested</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: CURRENT_VALUE_COLOR }]} />
+          <Text style={[styles.legendText, { color: themeColors.text }]}>Current Value</Text>
+        </View>
       </View>
     </View>
   );
@@ -462,24 +426,12 @@ const styles = StyleSheet.create({
     fontWeight: typography.weightMedium,
     fontVariant: ["tabular-nums"],
   },
-  chartWrap: {
-    position: "relative",
+  chartContainer: {
+    alignItems: "center",
+    marginHorizontal: -spacing.md,
   },
-  touchRow: {
-    ...StyleSheet.absoluteFillObject,
-    flexDirection: "row",
-  },
-  touchSlot: {
-    flex: 1,
-  },
-  xAxisLabels: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: spacing.xs,
-    paddingHorizontal: PADDING_X - spacing.md,
-  },
-  axisLabel: {
-    fontSize: typography.micro,
+  chart: {
+    borderRadius: radii.md,
   },
   legend: {
     flexDirection: "row",
@@ -494,9 +446,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-  },
-  legendItemDisabled: {
-    opacity: 0.6,
   },
   legendDot: {
     width: 8,

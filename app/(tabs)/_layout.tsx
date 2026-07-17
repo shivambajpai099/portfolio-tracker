@@ -59,6 +59,13 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="transactionInsights"
+        options={{
+          title: "Analytics",
+          tabBarIcon: ({ color, size }) => <Ionicons name="analytics-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="accounts"
         options={{
           title: "Accounts",

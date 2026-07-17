@@ -7,6 +7,7 @@ import { captureRef } from "react-native-view-shot";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { TimeSeriesChart, type TimeSeriesPoint } from "../../src/components/TimeSeriesChart";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
+import type { Transaction } from "../../src/types/transaction";
 import { colors, radii, spacing, typography } from "../../src/theme";
 import type { AllocationSnapshot } from "../../src/types/portfolio";
 import { formatMoney } from "../../src/utils/format";
@@ -56,6 +57,43 @@ const toSeries = (
   selector: (s: AllocationSnapshot) => number
 ): TimeSeriesPoint[] => snapshots.map((snapshot) => ({ label: compactDate(snapshot.date), value: selector(snapshot) }));
 
+const derivePerformanceData = (
+  transactions: Transaction[],
+  groupBy: "year" | "quarter"
+): TimeSeriesPoint[] => {
+  const aggregatedData: Record<string, { investedAmount: number; currentValue: number }> = {};
+
+  transactions.forEach((transaction) => {
+    const date = new Date(transaction.transactionDate);
+    let dateKey;
+
+    if (groupBy === "year") {
+      dateKey = `${date.getFullYear()}`;
+    } else if (groupBy === "quarter") {
+      const quarter = Math.floor(date.getMonth() / 3) + 1;
+      dateKey = `${date.getFullYear()}-Q${quarter}`;
+    }
+
+    if (!aggregatedData[dateKey]) {
+      aggregatedData[dateKey] = { investedAmount: 0, currentValue: 0 };
+    }
+
+    const transactionValue = transaction.quantity * transaction.pricePerShare;
+
+    if (transaction.type === "BUY") {
+      aggregatedData[dateKey].investedAmount += transactionValue;
+      aggregatedData[dateKey].currentValue += transactionValue;
+    } else if (transaction.type === "SELL") {
+      aggregatedData[dateKey].currentValue -= transactionValue;
+    }
+  });
+
+  return Object.entries(aggregatedData).map(([date, values]) => ({
+    label: date,
+    value: values.currentValue,
+  }));
+};
+
 export default function PortfolioTimelineScreen() {
   const router = useRouter();
   const snapshots = usePortfolioStore((s) => s.allocationSnapshots);
@@ -64,6 +102,9 @@ export default function PortfolioTimelineScreen() {
   const [reviewExportMsg, setReviewExportMsg] = useState("");
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
   const [reviewCardNode, setReviewCardNode] = useState<View | null>(null);
+
+  const transactions = usePortfolioStore((state) => state.transactions);
+  const performanceData = useMemo(() => derivePerformanceData(transactions, "quarter"), [transactions]);
 
   const sorted = useMemo(
     () => [...snapshots].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
@@ -319,6 +360,16 @@ export default function PortfolioTimelineScreen() {
               <TimeSeriesChart
                 points={gainSeries}
                 color={latest.gainLoss >= 0 ? colors.positive : colors.negative}
+                yLabel={`Range: ${range}`}
+                formatValue={(v) => formatMoney(v, rc)}
+              />
+            </View>
+
+            <View style={styles.chartSection}>
+              <Text style={styles.sectionLabel}>Portfolio Performance</Text>
+              <TimeSeriesChart
+                points={performanceData}
+                color="#4ADE80"
                 yLabel={`Range: ${range}`}
                 formatValue={(v) => formatMoney(v, rc)}
               />
@@ -594,5 +645,3 @@ function ReviewMetric({
     </View>
   );
 }
-
-

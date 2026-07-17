@@ -97,7 +97,7 @@ export default function DashboardScreen() {
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
   const updateSettings = usePortfolioStore((s) => s.updateSettings);
-  const allocationSnapshots = usePortfolioStore((s) => s.allocationSnapshots);
+  const transactions = usePortfolioStore((s) => s.transactions);
 
   const [geoFilter, setGeoFilter] = useState<GeoFilter>("ALL");
   const [expanded, setExpanded] = useState(false);
@@ -205,53 +205,76 @@ export default function DashboardScreen() {
   const hiddenCount = rankedAllocations.length - VISIBLE_POSITIONS;
   const showMoreRow = !expanded && hiddenCount > 0;
 
-  // Transform allocation snapshots to performance chart data
+  // Build performance chart data from transactions
   const performanceData = useMemo((): PortfolioHistoryPoint[] => {
-    if (allocationSnapshots.length === 0) return [];
+    if (transactions.length === 0) return [];
 
-    // Sort snapshots by date
-    const sorted = [...allocationSnapshots].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    // Sort transactions by date
+    const sorted = [...transactions].sort(
+      (a, b) => new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()
     );
 
-    // Group by view type
-    if (performanceView === "daily") {
-      // Return all points for daily view
-      return sorted.map((s) => ({
-        date: s.date,
-        investedAmount: s.investedValue,
-        currentValue: s.totalPortfolioValue,
-      }));
-    }
+    // Build cumulative invested amounts per period
+    const periodData = new Map<string, { invested: number; value: number }>();
+    let cumulativeInvested = 0;
 
-    if (performanceView === "monthly") {
-      // Group by month, take last snapshot of each month
-      const byMonth = new Map<string, typeof sorted[0]>();
-      for (const s of sorted) {
-        const d = new Date(s.date);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-        byMonth.set(key, s); // Last one wins
+    for (const tx of sorted) {
+      const d = new Date(tx.transactionDate);
+      const txValue = tx.quantity * tx.pricePerShare + (tx.fees ?? 0);
+      
+      // For BUY, add to invested; for SELL, subtract
+      if (tx.type === "BUY") {
+        cumulativeInvested += convert(txValue, tx.currency, rc, fxRates);
+      } else {
+        cumulativeInvested -= convert(txValue, tx.currency, rc, fxRates);
       }
-      return [...byMonth.values()].map((s) => ({
-        date: s.date,
-        investedAmount: s.investedValue,
-        currentValue: s.totalPortfolioValue,
-      }));
+
+      // Create period key based on view
+      let key: string;
+      if (performanceView === "monthly") {
+        key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      } else if (performanceView === "quarterly") {
+        const quarter = Math.floor(d.getMonth() / 3) + 1;
+        key = `${d.getFullYear()}-Q${quarter}`;
+      } else {
+        key = `${d.getFullYear()}`;
+      }
+
+      // Update period with latest cumulative value
+      periodData.set(key, {
+        invested: cumulativeInvested,
+        value: cumulativeInvested, // Will use current value for last period
+      });
     }
 
-    // Yearly view - group by year, take last snapshot of each year
-    const byYear = new Map<string, typeof sorted[0]>();
-    for (const s of sorted) {
-      const d = new Date(s.date);
-      const key = `${d.getFullYear()}`;
-      byYear.set(key, s);
-    }
-    return [...byYear.values()].map((s) => ({
-      date: s.date,
-      investedAmount: s.investedValue,
-      currentValue: s.totalPortfolioValue,
-    }));
-  }, [allocationSnapshots, performanceView]);
+    // Convert to array and sort by period
+    const periods = [...periodData.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+    // For the last period, use current portfolio value
+    const currentValue = totals.currentValue;
+
+    return periods.map(([key, data], index) => {
+      // Parse key back to a representative date
+      let date: string;
+      if (performanceView === "monthly") {
+        const [year, month] = key.split("-");
+        date = new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1).toISOString();
+      } else if (performanceView === "quarterly") {
+        const [year, q] = key.split("-Q");
+        const month = (parseInt(q, 10) - 1) * 3;
+        date = new Date(parseInt(year, 10), month, 1).toISOString();
+      } else {
+        date = new Date(parseInt(key, 10), 0, 1).toISOString();
+      }
+
+      return {
+        date,
+        investedAmount: data.invested,
+        // Only last period shows current value, others show invested as estimate
+        currentValue: index === periods.length - 1 ? currentValue : data.invested,
+      };
+    });
+  }, [transactions, performanceView, rc, fxRates, totals.currentValue]);
 
   return (
     <ScreenContainer>

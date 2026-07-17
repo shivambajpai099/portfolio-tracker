@@ -6,11 +6,13 @@ import type {
   Holding,
   PortfolioSettings,
 } from "../../types/portfolio";
+import type { Transaction } from "../../types/transaction";
 
 export interface PortfolioSnapshotData {
   accounts: Account[];
   holdings: Holding[];
   cashHoldings: CashHolding[];
+  transactions?: Transaction[];
   allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
   fxRates: FxRates;
@@ -23,7 +25,7 @@ export interface PortfolioSnapshotPayload {
   portfolio: PortfolioSnapshotData;
 }
 
-export const SNAPSHOT_SCHEMA_VERSION = 1;
+export const SNAPSHOT_SCHEMA_VERSION = 2;
 
 export const makeSnapshotPayload = (data: PortfolioSnapshotData): PortfolioSnapshotPayload => ({
   schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -57,6 +59,7 @@ export const parseSnapshotPayload = (input: unknown): PortfolioSnapshotData | nu
     accounts: p.accounts,
     holdings: p.holdings,
     cashHoldings: p.cashHoldings,
+    transactions: Array.isArray(p.transactions) ? p.transactions : [],
     allocationSnapshots: Array.isArray((p as Partial<PortfolioSnapshotData>).allocationSnapshots)
       ? ((p as Partial<PortfolioSnapshotData>).allocationSnapshots as AllocationSnapshot[]).map((snapshot) => ({
           ...snapshot,

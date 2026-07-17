@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
+import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { fetchLivePrices } from "../../src/services/yahooFinanceService";
@@ -68,6 +69,7 @@ export default function HoldingsScreen() {
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
+  const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
 
   const [searchText, setSearchText] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("value_desc");
@@ -78,6 +80,8 @@ export default function HoldingsScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isImportVisible, setIsImportVisible] = useState(false);
+  const [isImportMenuVisible, setIsImportMenuVisible] = useState(false);
+  const [isImportTransactionsVisible, setIsImportTransactionsVisible] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<Holding | null>(null);
@@ -351,8 +355,8 @@ export default function HoldingsScreen() {
           <Pressable style={[styles.refreshBtn, isRefreshingPrices && styles.refreshBtnDisabled]} onPress={refreshAllMarketPrices} disabled={isRefreshingPrices || holdings.length === 0}>
             <Text style={styles.refreshBtnText}>{isRefreshingPrices ? "Refreshing..." : "Refresh"}</Text>
           </Pressable>
-          <Pressable style={styles.importBtn} onPress={() => setIsImportVisible(true)}>
-            <Text style={styles.importBtnText}>Import</Text>
+          <Pressable style={styles.importBtn} onPress={() => setIsImportMenuVisible(true)}>
+            <Text style={styles.importBtnText}>Import ▾</Text>
           </Pressable>
           <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
             <Text style={styles.addBtnText}>Add</Text>
@@ -563,6 +567,49 @@ export default function HoldingsScreen() {
         updateHolding={updateHolding}
         updateAccount={updateAccount}
       />
+
+      <ImportTransactionsModal
+        visible={isImportTransactionsVisible}
+        accounts={brokerAccounts}
+        onClose={() => setIsImportTransactionsVisible(false)}
+        onComplete={(result) => {
+          console.log(`Imported ${result.transactionCount} transactions, ${result.derivedHoldingCount} derived holdings to ${result.accountName}`);
+        }}
+        setAccountTransactions={setAccountTransactions}
+        updateAccount={updateAccount}
+      />
+
+      {/* Import Menu Modal */}
+      <Modal visible={isImportMenuVisible} transparent animationType="fade" onRequestClose={() => setIsImportMenuVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setIsImportMenuVisible(false)}>
+          <View style={styles.importMenuCard}>
+            <Text style={styles.importMenuTitle}>Import Data</Text>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                setIsImportMenuVisible(false);
+                setIsImportVisible(true);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Import Holdings</Text>
+              <Text style={styles.importMenuItemDesc}>Import current holdings snapshot from your broker</Text>
+            </Pressable>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                setIsImportMenuVisible(false);
+                setIsImportTransactionsVisible(true);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Import Transactions</Text>
+              <Text style={styles.importMenuItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
+            </Pressable>
+            <Pressable style={styles.importMenuCancel} onPress={() => setIsImportMenuVisible(false)}>
+              <Text style={styles.importMenuCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal visible={Boolean(editTarget)} transparent animationType="fade" onRequestClose={() => setEditTarget(null)}>
         <View style={styles.modalOverlay}>
@@ -1165,5 +1212,43 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     color: defaultColors.muted,
     fontSize: typography.body,
+  },
+  importMenuCard: {
+    width: "100%",
+    borderRadius: radii.xl,
+    backgroundColor: defaultColors.surface,
+    padding: spacing.lg,
+  },
+  importMenuTitle: {
+    color: defaultColors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.md,
+  },
+  importMenuItem: {
+    backgroundColor: defaultColors.bg,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  importMenuItemTitle: {
+    color: defaultColors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.xs,
+  },
+  importMenuItemDesc: {
+    color: defaultColors.muted,
+    fontSize: typography.caption,
+  },
+  importMenuCancel: {
+    marginTop: spacing.sm,
+    alignItems: "center",
+    paddingVertical: spacing.md,
+  },
+  importMenuCancelText: {
+    color: defaultColors.muted,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
   },
 });
