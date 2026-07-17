@@ -1,18 +1,49 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
 import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { TickerImage } from "../../src/components/TickerImage";
+import { Sparkline } from "../../src/components/Sparkline";
 import { holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
-import { fetchLivePrices } from "../../src/services/yahooFinanceService";
+import { fetchLivePrices, fetchSparklineData } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { accountSupportsHoldings, type Currency, type Holding } from "../../src/types/portfolio";
+import type { Transaction } from "../../src/types/transaction";
 import type { LivePriceQuote } from "../../src/types/marketData";
 import { formatMoney } from "../../src/utils/format";
+
+// Ticker color palette (shared with Overview screen)
+const TICKER_PALETTE = [
+  "#67E8F9",
+  "#6366F1",
+  "#F59E0B",
+  "#22C55E",
+  "#EC4899",
+  "#3B82F6",
+  "#A78BFA",
+  "#F97316",
+  "#14B8A6",
+  "#E879F9",
+];
+
+/**
+ * Deterministic color assignment based on ticker symbol hash.
+ * Ensures consistent colors across renders and reorderings.
+ */
+const getTickerColor = (symbol: string): string => {
+  let hash = 0;
+  for (let i = 0; i < symbol.length; i++) {
+    hash = symbol.charCodeAt(i) + ((hash << 5) - hash);
+    hash = hash & hash;
+  }
+  const index = Math.abs(hash) % TICKER_PALETTE.length;
+  return TICKER_PALETTE[index];
+};
 
 type SortKey = "allocation_desc" | "gain_desc" | "alpha_asc" | "value_desc";
 type PerfFilter = "ALL" | "GAIN" | "LOSS";
@@ -70,6 +101,7 @@ export default function HoldingsScreen() {
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
   const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
+  const transactions = usePortfolioStore((state) => state.transactions);
 
   const [searchText, setSearchText] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("value_desc");
@@ -77,6 +109,8 @@ export default function HoldingsScreen() {
   const [currencyFilter, setCurrencyFilter] = useState<CurrencyFilter>("ALL");
   const [perfFilter, setPerfFilter] = useState<PerfFilter>("ALL");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [expandedTab, setExpandedTab] = useState<Record<string, "accounts" | "transactions">>({});
+  const [sparklineData, setSparklineData] = useState<Record<string, number[]>>({});
   const [showFilters, setShowFilters] = useState(false);
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isImportVisible, setIsImportVisible] = useState(false);
@@ -336,8 +370,50 @@ export default function HoldingsScreen() {
     setDeleteTarget(null);
   };
 
-  const toggleGroup = (id: string) =>
+  const toggleGroup = (id: string, symbol: string) => {
+    const isCurrentlyExpanded = expandedGroups[id];
     setExpandedGroups((prev) => ({ ...prev, [id]: !prev[id] }));
+    
+    // Set default tab to accounts when expanding
+    if (!isCurrentlyExpanded) {
+      setExpandedTab((prev) => ({ ...prev, [id]: "accounts" }));
+      
+      // Fetch sparkline data if not already cached
+      if (!sparklineData[symbol]) {
+        fetchSparklineData(symbol).then((result) => {
+          if (result.ok && result.data) {
+            setSparklineData((prev) => ({ ...prev, [symbol]: result.data }));
+          }
+        });
+      }
+    }
+  };
+
+  const getTickerTransactions = (symbol: string): Transaction[] => {
+    const normalizedSymbol = normalizeIndiaTicker(symbol);
+    return transactions
+      .filter((tx) => normalizeIndiaTicker(tx.symbol) === normalizedSymbol)
+      .sort((a, b) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime());
+  };
+
+  // Memoize visible symbol list for sparkline fetching
+  const visibleSymbols = useMemo(
+    () => visibleGroups.slice(0, 10).map((g) => g.title),
+    [visibleGroups]
+  );
+
+  // Fetch sparklines for visible holdings on mount
+  useEffect(() => {
+    visibleSymbols.forEach((symbol) => {
+      if (!sparklineData[symbol]) {
+        fetchSparklineData(symbol).then((result) => {
+          if (result.ok && result.data) {
+            setSparklineData((prev) => ({ ...prev, [symbol]: result.data }));
+          }
+        });
+      }
+    });
+  }, [visibleSymbols]);
 
   const clearFilters = () => {
     setSearchText("");
@@ -425,97 +501,166 @@ export default function HoldingsScreen() {
 
           {holdings.length > 0 ? visibleGroups.map((group) => {
             const isExpanded = Boolean(expandedGroups[group.id]);
+            const currentTab = expandedTab[group.id] ?? "accounts";
             const gainPositive = group.gainLoss >= 0;
+            const tickerColor = getTickerColor(group.title);
+            const displayValue = settings.allocationBasis === "INVESTED_VALUE" ? group.investedValue : group.currentValue;
+            const sparkline = sparklineData[group.title] ?? [];
+            const tickerTransactions = isExpanded && currentTab === "transactions" ? getTickerTransactions(group.title) : [];
+            const accountCount = group.linkedAccountsLabel.length;
 
             return (
-              <View key={group.id} style={styles.groupCard}>
-                <Pressable onPress={() => toggleGroup(group.id)}>
-                  {/* Title row */}
-                  <View style={styles.groupTitleRow}>
-                    <View style={styles.groupTitleWrap}>
-                      <Text style={styles.groupSymbol}>{group.title}</Text>
-                      {group.subtitle ? <Text style={styles.groupName}>{group.subtitle}</Text> : null}
-                    </View>
-                    <View style={styles.allocationBlock}>
-                      <Text style={styles.groupAllocation}>{group.allocationPct.toFixed(1)}%</Text>
-                      <Text style={styles.allocationContext}>
-                        {settings.allocationBasis === "INVESTED_VALUE" ? "invested" : "current"}
-                        {settings.allocationIncludeCash ? "" : " · excl. cash"}
-                      </Text>
-                    </View>
-                  </View>
-
-
-                  {/* Metrics row */}
-                  <View style={styles.metricRow}>
-                    <View>
-                      <Text style={styles.metricLabel}>Invested</Text>
-                      <Text style={styles.metricValue}>{formatMoney(group.investedValue, settings.reportingCurrency)}</Text>
-                    </View>
-                    <View style={styles.metricCenter}>
-                      <View style={styles.metricLabelRow}>
-                        <Text style={styles.metricLabel}>Current</Text>
-                        <Text style={styles.netWorthBadge}>{group.netWorthPct.toFixed(1)}% of net worth</Text>
+              <View key={group.id}>
+                {/* Main row */}
+                <View style={[styles.holdingRow, { borderBottomColor: colors.border }]}>
+                  <View style={styles.holdingLeft}>
+                    <TickerImage symbol={group.title} size={28} fallbackColor={tickerColor} />
+                    <View style={styles.holdingInfo}>
+                      <View style={styles.holdingTickerRow}>
+                        <Text style={[styles.holdingTicker, { color: colors.text }]}>{group.title}</Text>
+                        <View style={[styles.allocationBadge, { backgroundColor: `${tickerColor}22` }]}>
+                          <Text style={[styles.allocationBadgeText, { color: tickerColor }]}>
+                            {group.allocationPct.toFixed(1)}%
+                          </Text>
+                        </View>
                       </View>
-                      <Text style={styles.metricValue}>{formatMoney(group.currentValue, settings.reportingCurrency)}</Text>
-                    </View>
-                    <View style={styles.metricRight}>
-                      <Text style={styles.metricLabel}>Gain / Loss</Text>
-                      <Text style={[styles.metricValue, gainPositive ? styles.positiveText : styles.negativeText]}>
-                        {gainPositive ? "+" : ""}{formatMoney(group.gainLoss, settings.reportingCurrency)}
-                      </Text>
-                      <Text style={[styles.gainLossPct, gainPositive ? styles.positiveText : styles.negativeText]}>
-                        {gainPositive ? "+" : ""}{group.gainLossPct.toFixed(2)}%
+                      <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
+                        {group.subtitle || group.title}
                       </Text>
                     </View>
                   </View>
-                </Pressable>
+                  
+                  {/* Sparkline */}
+                  {sparkline.length >= 2 && (
+                    <View style={styles.sparklineWrap}>
+                      <Sparkline data={sparkline} width={48} height={20} />
+                    </View>
+                  )}
+                  
+                  <View style={styles.holdingRight}>
+                    <Text style={[styles.holdingValue, { color: colors.text }]}>
+                      {formatMoney(displayValue, settings.reportingCurrency)}
+                    </Text>
+                    <Text style={[styles.holdingGain, { color: gainPositive ? colors.positive : colors.negative }]}>
+                      {gainPositive ? "+" : ""}{group.gainLossPct.toFixed(2)}% · {gainPositive ? "+" : ""}{formatMoney(group.gainLoss, settings.reportingCurrency)}
+                    </Text>
+                  </View>
+                </View>
 
-                {/* Account chips — only in stock view */}
-                {groupBy === "stock" ? (
-                  <View style={styles.accountChipWrap}>
-                    {group.linkedAccountsLabel.map((label) => (
-                      <Text key={`${group.id}-${label}`} style={styles.accountChip}>{label}</Text>
-                    ))}
+                {/* Account count chip + Details toggle — only in stock view */}
+                {groupBy === "stock" && accountCount > 0 ? (
+                  <View style={[styles.accountChipRow, { borderBottomColor: colors.border }]}>
+                    <Text style={[styles.accountCountChip, { backgroundColor: colors.surface, color: colors.muted }]}>
+                      {accountCount} account{accountCount > 1 ? "s" : ""}
+                    </Text>
+                    <Pressable onPress={() => toggleGroup(group.id, group.title)} style={styles.detailsBtn}>
+                      <Text style={[styles.detailsBtnText, { color: colors.accent }]}>
+                        {isExpanded ? "Hide" : "Details"}
+                      </Text>
+                    </Pressable>
                   </View>
                 ) : null}
 
-                {/* Expanded lots */}
+                {/* Expanded view with tabs */}
                 {isExpanded ? (
-                  <View style={styles.expandedWrap}>
-                    {group.lots.map((lot) => {
-                      const lotCurrent = toRC(holdingMarketValue(lot), lot.currency);
-                      const lotInvested = toRC(holdingCost(lot), lot.currency);
-                      const lotGain = lotCurrent - lotInvested;
-                      const lotGainPositive = lotGain >= 0;
-                      return (
-                        <View key={lot.id} style={styles.lotRow}>
-                          <View style={styles.lotInfo}>
-                            {groupBy !== "stock" ? (
-                              <Text style={styles.lotSymbol}>{lot.symbol} · {lot.companyName}</Text>
-                            ) : null}
-                            <Text style={styles.lotAccount}>{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
-                            <Text style={styles.lotMeta}>
-                              {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
-                              {"  "}
-                              · cur {formatMoney(lot.marketPrice, lot.currency)}
-                              {"  "}
-                              <Text style={[lotGainPositive ? styles.positiveText : styles.negativeText]}>
-                                {lotGainPositive ? "+" : ""}{formatMoney(lotGain, settings.reportingCurrency)}
+                  <View style={[styles.expandedWrap, { borderBottomColor: colors.border }]}>
+                    {/* Tab bar */}
+                    <View style={styles.tabBar}>
+                      <Pressable
+                        onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "accounts" }))}
+                        style={[styles.tab, currentTab === "accounts" && styles.tabActive]}
+                      >
+                        <Text style={[styles.tabText, currentTab === "accounts" && { color: colors.accent }]}>
+                          Accounts
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "transactions" }))}
+                        style={[styles.tab, currentTab === "transactions" && styles.tabActive]}
+                      >
+                        <Text style={[styles.tabText, currentTab === "transactions" && { color: colors.accent }]}>
+                          Transactions
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {/* Accounts tab content */}
+                    {currentTab === "accounts" && (
+                      <View style={styles.tabContent}>
+                        {group.lots.map((lot) => {
+                          const lotCurrent = toRC(holdingMarketValue(lot), lot.currency);
+                          const lotInvested = toRC(holdingCost(lot), lot.currency);
+                          const lotGain = lotCurrent - lotInvested;
+                          const lotGainPositive = lotGain >= 0;
+                          return (
+                            <View key={lot.id} style={styles.lotRow}>
+                              <View style={styles.lotInfo}>
+                                {groupBy !== "stock" ? (
+                                  <Text style={[styles.lotSymbol, { color: colors.text }]}>{lot.symbol} · {lot.companyName}</Text>
+                                ) : null}
+                                <Text style={[styles.lotAccount, { color: colors.text }]}>{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
+                                <Text style={[styles.lotMeta, { color: colors.muted }]}>
+                                  {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
+                                  {"  "}· cur {formatMoney(lot.marketPrice, lot.currency)}
+                                  {"  "}
+                                  <Text style={[lotGainPositive ? styles.positiveText : styles.negativeText]}>
+                                    {lotGainPositive ? "+" : ""}{formatMoney(lotGain, settings.reportingCurrency)}
+                                  </Text>
+                                </Text>
+                              </View>
+                              <View style={styles.lotActions}>
+                                <Pressable onPress={() => openEdit(lot)}>
+                                  <Text style={styles.editText}>Edit</Text>
+                                </Pressable>
+                                <Pressable onPress={() => setDeleteTarget(lot)}>
+                                  <Text style={styles.deleteText}>Delete</Text>
+                                </Pressable>
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
+
+                    {/* Transactions tab content */}
+                    {currentTab === "transactions" && (
+                      <View style={styles.tabContent}>
+                        {tickerTransactions.length === 0 ? (
+                          <Text style={[styles.noTransactionsText, { color: colors.muted }]}>
+                            No transaction history for {group.title}
+                          </Text>
+                        ) : (
+                          tickerTransactions.map((tx) => (
+                            <View key={tx.id} style={styles.transactionRow}>
+                              <View style={styles.transactionLeft}>
+                                <View style={[
+                                  styles.transactionTypeBadge,
+                                  { backgroundColor: tx.type === "BUY" ? `${colors.positive}22` : `${colors.negative}22` }
+                                ]}>
+                                  <Text style={[
+                                    styles.transactionTypeText,
+                                    { color: tx.type === "BUY" ? colors.positive : colors.negative }
+                                  ]}>
+                                    {tx.type}
+                                  </Text>
+                                </View>
+                                <View style={styles.transactionInfo}>
+                                  <Text style={[styles.transactionDate, { color: colors.text }]}>
+                                    {new Date(tx.transactionDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                                  </Text>
+                                  <Text style={[styles.transactionMeta, { color: colors.muted }]}>
+                                    {tx.quantity} @ {formatMoney(tx.pricePerShare, tx.currency)}
+                                  </Text>
+                                </View>
+                              </View>
+                              <Text style={[styles.transactionAmount, { color: colors.text }]}>
+                                {formatMoney(tx.quantity * tx.pricePerShare, tx.currency)}
                               </Text>
-                            </Text>
-                          </View>
-                          <View style={styles.lotActions}>
-                            <Pressable onPress={() => openEdit(lot)}>
-                              <Text style={styles.editText}>Edit</Text>
-                            </Pressable>
-                            <Pressable onPress={() => setDeleteTarget(lot)}>
-                              <Text style={styles.deleteText}>Delete</Text>
-                            </Pressable>
-                          </View>
-                        </View>
-                      );
-                    })}
+                            </View>
+                          ))
+                        )}
+                      </View>
+                    )}
                   </View>
                 ) : null}
               </View>
@@ -941,100 +1086,114 @@ const styles = StyleSheet.create({
   },
   listWrap: {
     marginTop: spacing.lg,
-    gap: spacing.lg,
+    gap: 0,
     paddingBottom: spacing.xxxl,
   },
-  groupCard: {
-    borderRadius: radii.xl,
-    backgroundColor: defaultColors.surface,
-    padding: spacing.lg,
-  },
-  groupTitleRow: {
-    marginBottom: spacing.md,
+  // Holdings list rows (matches Overview screen style)
+  holdingRow: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  groupTitleWrap: {
+  holdingLeft: {
+    flexDirection: "row",
+    alignItems: "center",
     flex: 1,
-    paddingRight: spacing.lg,
-  },
-  groupSymbol: {
-    color: defaultColors.text,
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
-  },
-  groupName: {
-    marginTop: 2,
-    color: defaultColors.muted,
-    fontSize: typography.caption,
-  },
-  allocationBlock: {
-    alignItems: "flex-end",
-  },
-  groupAllocation: {
-    color: defaultColors.text,
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
-  },
-  allocationContext: {
-    marginTop: 2,
-    color: defaultColors.muted,
-    fontSize: typography.micro,
-  },
-  metricRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-end",
-  },
-  metricCenter: {
-    alignItems: "center",
-  },
-  metricLabelRow: {
-    flexDirection: "row",
-    alignItems: "center",
     gap: spacing.sm,
+    paddingRight: spacing.md,
   },
-  metricLabel: {
-    color: defaultColors.muted,
-    fontSize: typography.micro,
+  holdingInfo: {
+    flex: 1,
   },
-  netWorthBadge: {
-    color: defaultColors.muted,
-    fontSize: typography.micro,
-    opacity: 0.7,
+  holdingTickerRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: spacing.xs,
   },
-  metricValue: {
-    marginTop: 2,
-    color: defaultColors.text,
+  holdingTicker: {
     fontSize: typography.body,
+    fontWeight: typography.weightBold,
   },
-  metricRight: {
-    alignItems: "flex-end",
+  allocationBadge: {
+    paddingHorizontal: spacing.xs + 2,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
   },
-  gainLossPct: {
+  allocationBadgeText: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
+  },
+  holdingName: {
     fontSize: typography.micro,
     marginTop: 1,
   },
-  accountChipWrap: {
-    marginTop: spacing.md,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.xs,
+  sparklineWrap: {
+    marginHorizontal: spacing.sm,
   },
-  accountChip: {
+  holdingRight: {
+    alignItems: "flex-end",
+  },
+  holdingValue: {
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+    fontVariant: ["tabular-nums"],
+  },
+  holdingGain: {
+    fontSize: typography.micro,
+    marginTop: 1,
+  },
+  accountChipRow: {
+    paddingVertical: spacing.sm,
+    paddingLeft: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  accountCountChip: {
     borderRadius: radii.pill,
-    backgroundColor: defaultColors.bg,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
-    color: defaultColors.muted,
     fontSize: typography.micro,
+    overflow: "hidden",
+  },
+  detailsBtn: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  detailsBtnText: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
   expandedWrap: {
-    marginTop: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: defaultColors.border,
-    paddingTop: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  tabBar: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginBottom: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: defaultColors.border,
+  },
+  tab: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+  },
+  tabActive: {
+    borderBottomWidth: 2,
+    borderBottomColor: defaultColors.accent,
+    marginBottom: -StyleSheet.hairlineWidth,
+  },
+  tabText: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+    color: defaultColors.muted,
+  },
+  tabContent: {
     gap: spacing.sm,
   },
   lotRow: {
@@ -1048,17 +1207,14 @@ const styles = StyleSheet.create({
     paddingRight: spacing.lg,
   },
   lotSymbol: {
-    color: defaultColors.text,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
   },
   lotAccount: {
-    color: defaultColors.text,
     fontSize: typography.caption,
   },
   lotMeta: {
     marginTop: 2,
-    color: defaultColors.muted,
     fontSize: typography.micro,
   },
   lotActions: {
@@ -1072,6 +1228,51 @@ const styles = StyleSheet.create({
   deleteText: {
     color: defaultColors.negative,
     fontSize: typography.caption,
+  },
+  noTransactionsText: {
+    fontSize: typography.caption,
+    fontStyle: "italic",
+    textAlign: "center",
+    paddingVertical: spacing.md,
+  },
+  transactionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.xs,
+  },
+  transactionLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    flex: 1,
+  },
+  transactionTypeBadge: {
+    borderRadius: radii.sm,
+    paddingHorizontal: spacing.xs + 2,
+    paddingVertical: 2,
+    minWidth: 36,
+    alignItems: "center",
+  },
+  transactionTypeText: {
+    fontSize: typography.micro,
+    fontWeight: typography.weightSemibold,
+  },
+  transactionInfo: {
+    flex: 1,
+  },
+  transactionDate: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+  },
+  transactionMeta: {
+    fontSize: typography.micro,
+    marginTop: 1,
+  },
+  transactionAmount: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
+    fontVariant: ["tabular-nums"],
   },
   emptyWrap: {
     marginTop: spacing.xxxl,

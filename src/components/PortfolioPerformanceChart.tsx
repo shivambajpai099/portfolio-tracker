@@ -3,7 +3,7 @@ import { Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 import { LineChart } from "react-native-chart-kit";
 import { colors, radii, spacing, typography, useTheme } from "../theme";
 import type { Currency } from "../types/portfolio";
-import { formatMoney } from "../utils/format";
+import { formatMoney, formatCompact, formatCompactGainLoss } from "../utils/format";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,7 +117,8 @@ export const projectDataToCoords = (
 };
 
 /**
- * Formats large numbers for Y-axis labels (e.g., 100000 -> 100K)
+ * Formats large numbers for Y-axis labels (e.g., 100000 -> 100L)
+ * Uses Indian numbering notation: k (thousands), L (lakhs), Cr (crores)
  */
 const formatYAxisLabel = (value: string): string => {
   const num = parseFloat(value);
@@ -128,7 +129,7 @@ const formatYAxisLabel = (value: string): string => {
     return `${(num / 100000).toFixed(1)}L`;
   }
   if (num >= 1000) {
-    return `${(num / 1000).toFixed(0)}K`;
+    return `${(num / 1000).toFixed(0)}k`;
   }
   return num.toFixed(0);
 };
@@ -296,14 +297,14 @@ export function PortfolioPerformanceChart({
             <View style={[styles.tooltipDot, { backgroundColor: INVESTED_COLOR }]} />
             <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Invested:</Text>
             <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
-              {formatMoney(selectedPoint.investedAmount, currency)}
+              {formatCompact(selectedPoint.investedAmount, currency)}
             </Text>
           </View>
           <View style={styles.tooltipRow}>
             <View style={[styles.tooltipDot, { backgroundColor: CURRENT_VALUE_COLOR }]} />
             <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Current:</Text>
             <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
-              {formatMoney(selectedPoint.currentValue, currency)}
+              {formatCompact(selectedPoint.currentValue, currency)}
             </Text>
           </View>
           {gainLoss && (
@@ -315,8 +316,7 @@ export function PortfolioPerformanceChart({
                   { color: gainLoss.absolute >= 0 ? themeColors.positive : themeColors.negative },
                 ]}
               >
-                {gainLoss.absolute >= 0 ? "+" : ""}
-                {formatMoney(gainLoss.absolute, currency)} ({gainLoss.percentage >= 0 ? "+" : ""}
+                {formatCompactGainLoss(gainLoss.absolute, currency)} ({gainLoss.percentage >= 0 ? "+" : ""}
                 {gainLoss.percentage.toFixed(2)}%)
               </Text>
             </View>

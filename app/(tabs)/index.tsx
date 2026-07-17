@@ -12,7 +12,7 @@ import {
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { radii, spacing, typography, useTheme } from "../../src/theme";
 import type { Currency } from "../../src/types/portfolio";
-import { formatMoney } from "../../src/utils/format";
+import { formatMoney, formatCompact, formatCompactGainLoss } from "../../src/utils/format";
 
 type GeoFilter = "ALL" | "INDIA" | "US";
 
@@ -30,12 +30,9 @@ const TICKER_PALETTE = [
 ];
 
 const CASH_COLOR = "#374151";
-const OTHERS_COLOR = "#4B5563";
 
 // Number of positions to show before "X more positions" row
 const VISIBLE_POSITIONS = 5;
-// Number of top positions to show individually in the allocation bar
-const TOP_N_BAR_SEGMENTS = 5;
 
 /**
  * Deterministic color assignment based on ticker symbol hash.
@@ -158,44 +155,6 @@ export default function DashboardScreen() {
     return Math.max(0, 100 - symbolsTotal);
   }, [rankedAllocations, settings.allocationIncludeCash, cashValueRC]);
 
-  // Build allocation bar segments: top N + others + cash
-  const allocationBarSegments = useMemo(() => {
-    const topN = rankedAllocations.slice(0, TOP_N_BAR_SEGMENTS);
-    const othersAllocations = rankedAllocations.slice(TOP_N_BAR_SEGMENTS);
-    const othersPct = othersAllocations.reduce((sum, a) => sum + a.allocationPct, 0);
-
-    const segments: Array<{ symbol: string; pct: number; color: string; tooltip: string }> = [];
-
-    for (const item of topN) {
-      segments.push({
-        symbol: item.symbol,
-        pct: item.allocationPct,
-        color: getTickerColor(item.symbol),
-        tooltip: `${item.symbol}: ${item.allocationPct.toFixed(1)}%`,
-      });
-    }
-
-    if (othersPct > 0) {
-      segments.push({
-        symbol: "OTHERS",
-        pct: othersPct,
-        color: OTHERS_COLOR,
-        tooltip: `${othersAllocations.length} others: ${othersPct.toFixed(1)}%`,
-      });
-    }
-
-    if (cashAllocationPct > 0) {
-      segments.push({
-        symbol: "CASH",
-        pct: cashAllocationPct,
-        color: CASH_COLOR,
-        tooltip: `Cash: ${cashAllocationPct.toFixed(1)}%`,
-      });
-    }
-
-    return segments;
-  }, [rankedAllocations, cashAllocationPct]);
-
   // Determine which holdings to display based on expanded state
   const visibleAllocations = useMemo(() => {
     if (expanded) return rankedAllocations;
@@ -281,15 +240,35 @@ export default function DashboardScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.headerRow}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Portfolio</Text>
-          <View style={styles.filterRow}>
-            {(["ALL", "INDIA", "US"] as GeoFilter[]).map((f) => {
-              const active = geoFilter === f;
-              return (
-                <Pressable key={f} onPress={() => setGeoFilter(f)} style={[styles.filterPill, { backgroundColor: active ? colors.accent : colors.surface }]}>
-                  <Text style={[styles.filterText, { color: active ? colors.bg : colors.muted }]}>{f}</Text>
-                </Pressable>
-              );
-            })}
+          <View style={styles.headerControls}>
+            {/* Currency toggle */}
+            <View style={[styles.currencyToggle, { backgroundColor: colors.surface }]}>
+              {(["INR", "USD"] as Currency[]).map((c) => {
+                const active = rc === c;
+                return (
+                  <Pressable
+                    key={c}
+                    onPress={() => updateSettings({ reportingCurrency: c })}
+                    style={[styles.currencyOption, active && { backgroundColor: colors.accent }]}
+                  >
+                    <Text style={[styles.currencyText, { color: active ? colors.bg : colors.muted }]}>
+                      {c === "INR" ? "₹" : "$"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {/* Geo filter */}
+            <View style={styles.filterRow}>
+              {(["ALL", "INDIA", "US"] as GeoFilter[]).map((f) => {
+                const active = geoFilter === f;
+                return (
+                  <Pressable key={f} onPress={() => setGeoFilter(f)} style={[styles.filterPill, { backgroundColor: active ? colors.accent : colors.surface }]}>
+                    <Text style={[styles.filterText, { color: active ? colors.bg : colors.muted }]}>{f}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
         </View>
 
@@ -393,24 +372,6 @@ export default function DashboardScreen() {
             </View>
           </View>
 
-          {/* Horizontal stacked allocation bar */}
-          {allocationBarSegments.length > 0 && (
-            <View style={styles.allocationBar}>
-              {allocationBarSegments.map((segment) => (
-                <View
-                  key={segment.symbol}
-                  style={[
-                    styles.allocationBarSegment,
-                    {
-                      width: `${segment.pct}%`,
-                      backgroundColor: segment.color,
-                    },
-                  ]}
-                  accessibilityLabel={segment.tooltip}
-                />
-              ))}
-            </View>
-          )}
 
           {/* Holdings list */}
           <View style={styles.allocList}>
@@ -425,7 +386,11 @@ export default function DashboardScreen() {
                     <View style={styles.holdingInfo}>
                       <View style={styles.holdingTickerRow}>
                         <Text style={[styles.holdingTicker, { color: colors.text }]}>{item.symbol}</Text>
-                        <Text style={[styles.holdingAllocation, { color: colors.muted }]}>{item.allocationPct.toFixed(1)}%</Text>
+                        <View style={[styles.allocationBadge, { backgroundColor: `${tickerColor}1F`, borderColor: `${tickerColor}55` }]}>
+                          <Text style={[styles.allocationBadgeText, { color: tickerColor }]}>
+                            {item.allocationPct.toFixed(1)}%
+                          </Text>
+                        </View>
                       </View>
                       <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
                         {item.companyName}
@@ -434,10 +399,10 @@ export default function DashboardScreen() {
                   </View>
                   <View style={styles.holdingRight}>
                     <Text style={[styles.holdingValue, { color: colors.text }]}>
-                      {formatMoney(displayValue, rc)}
+                      {formatCompact(displayValue, rc)}
                     </Text>
                     <Text style={[styles.holdingGain, { color: gainPositive ? colors.positive : colors.negative }]}>
-                      {gainPositive ? "+" : ""}{item.gainLossPct.toFixed(2)}% · {gainPositive ? "+" : ""}{formatMoney(item.gainLoss, rc)}
+                      {gainPositive ? "+" : ""}{item.gainLossPct.toFixed(2)}% · {formatCompactGainLoss(item.gainLoss, rc)}
                     </Text>
                   </View>
                 </View>
@@ -454,7 +419,11 @@ export default function DashboardScreen() {
                   <View style={styles.holdingInfo}>
                     <View style={styles.holdingTickerRow}>
                       <Text style={[styles.holdingTicker, { color: colors.text }]}>CASH</Text>
-                      <Text style={[styles.holdingAllocation, { color: colors.muted }]}>{cashAllocationPct.toFixed(1)}%</Text>
+                      <View style={[styles.allocationBadge, { backgroundColor: `${CASH_COLOR}1F`, borderColor: `${CASH_COLOR}55` }]}>
+                        <Text style={[styles.allocationBadgeText, { color: CASH_COLOR }]}>
+                          {cashAllocationPct.toFixed(1)}%
+                        </Text>
+                      </View>
                     </View>
                     <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1}>
                       Cash &amp; Equivalents
@@ -463,7 +432,7 @@ export default function DashboardScreen() {
                 </View>
                 <View style={styles.holdingRight}>
                   <Text style={[styles.holdingValue, { color: colors.text }]}>
-                    {formatMoney(cashValueRC, rc)}
+                    {formatCompact(cashValueRC, rc)}
                   </Text>
                 </View>
               </View>
@@ -516,6 +485,27 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: typography.heading,
+    fontWeight: typography.weightSemibold,
+  },
+  headerControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  currencyToggle: {
+    flexDirection: "row",
+    borderRadius: radii.sm,
+    padding: 2,
+  },
+  currencyOption: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs - 1,
+    borderRadius: radii.sm - 1,
+    minWidth: 28,
+    alignItems: "center",
+  },
+  currencyText: {
+    fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
   },
   filterRow: {
@@ -627,17 +617,6 @@ const styles = StyleSheet.create({
     height: 14,
     borderRadius: 7,
   },
-  // Horizontal allocation bar
-  allocationBar: {
-    height: 6,
-    borderRadius: 3,
-    overflow: "hidden",
-    flexDirection: "row",
-    marginBottom: spacing.xl,
-  },
-  allocationBarSegment: {
-    height: 6,
-  },
   // Holdings list
   allocList: {
     gap: 0,
@@ -679,8 +658,15 @@ const styles = StyleSheet.create({
     fontSize: typography.body,
     fontWeight: typography.weightBold,
   },
-  holdingAllocation: {
-    fontSize: typography.micro,
+  allocationBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  allocationBadgeText: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   holdingName: {
     fontSize: typography.micro,
