@@ -20,9 +20,25 @@ export const selectDerivedHoldings = (
 };
 
 /**
+ * Resolve a live market price for a symbol from the price map, trying common
+ * Indian-exchange suffix variants (.NS/.BO). Returns undefined when no quote
+ * is available so callers can fall back to the stored price.
+ */
+const resolveLivePrice = (symbol: string, priceMap?: Map<string, number>): number | undefined => {
+  if (!priceMap) return undefined;
+  const normalized = symbol.replace(/\.(NS|BO)$/i, "");
+  return (
+    priceMap.get(symbol) ??
+    priceMap.get(normalized) ??
+    priceMap.get(`${normalized}.NS`) ??
+    priceMap.get(`${normalized}.BO`)
+  );
+};
+
+/**
  * Combine manual holdings and derived holdings from transactions.
- * - Manual accounts: use holdings directly
- * - Transaction accounts: derive holdings from transactions
+ * - All accounts: include manually added holdings
+ * - Transaction accounts: also include derived holdings from transactions
  *
  * This is the main selector for getting all holdings in a unified way.
  */
@@ -42,14 +58,17 @@ export const selectAllHoldings = (
     }
   }
 
-  // Add manual holdings (from non-transaction accounts)
+  // Always include all manual holdings (regardless of account type).
+  // Refresh each holding's marketPrice from the live price map when a quote is
+  // available so the current value reflects the market — leaving averagePrice
+  // (cost basis) untouched. Without this, manual holdings keep a stale
+  // marketPrice (often equal to averagePrice), making Current == Invested.
   for (const holding of manualHoldings) {
-    if (!transactionAccountIds.has(holding.accountId)) {
-      allHoldings.push(holding);
-    }
+    const livePrice = resolveLivePrice(holding.symbol, priceMap);
+    allHoldings.push(livePrice != null ? { ...holding, marketPrice: livePrice } : holding);
   }
 
-  // Add derived holdings for transaction accounts
+  // Also add derived holdings for transaction accounts
   for (const accountId of transactionAccountIds) {
     const derived = selectDerivedHoldings(transactions, accountId, priceMap);
     allHoldings.push(...derived);

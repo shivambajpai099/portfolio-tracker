@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
 import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
+import { TourTarget } from "../../src/components/OnboardingTourProvider";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { SegmentedControl } from "../../src/components/SegmentedControl";
 import { TickerImage } from "../../src/components/TickerImage";
-import { Sparkline } from "../../src/components/Sparkline";
-import { holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
-import { fetchLivePrices, fetchSparklineData } from "../../src/services/yahooFinanceService";
+import { HoldingPerformanceChart } from "../../src/components/HoldingPerformanceChart";
+import { calcHoldingPerformanceHistory, holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
+import { selectAllHoldings } from "../../src/features/portfolio/selectors";
+import { fetchLivePrices } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
@@ -45,10 +48,10 @@ const getTickerColor = (symbol: string): string => {
   return TICKER_PALETTE[index];
 };
 
-type SortKey = "allocation_desc" | "gain_desc" | "alpha_asc" | "value_desc";
-type PerfFilter = "ALL" | "GAIN" | "LOSS";
-type CurrencyFilter = "ALL" | Currency;
-type GroupByKey = "stock" | "account" | "country" | "asset_type";
+type SortColumn = "holding" | "invested" | "current" | "alloc";
+type SortDirection = "desc" | "asc";
+type GroupByKey = "stock" | "account";
+type MarketFilter = "ALL" | "INDIA" | "US";
 
 type DisplayGroup = {
   id: string;
@@ -87,14 +90,17 @@ const isIndiaHolding = (holding: Holding): boolean => {
   return holding.currency === "INR" || sym.endsWith(".NS") || sym.endsWith(".BO");
 };
 
-export default function HoldingsScreen() {
+export function HoldingsSection() {
   const { colors } = useTheme();
   const router = useRouter();
+  const { width: viewportWidth } = useWindowDimensions();
+  // On narrow viewports the three value columns don't comfortably fit, so the
+  // secondary Invested figure (header + per-row value) is hidden. Current + Alloc stay.
+  const hideInvested = viewportWidth < 480;
   const settings = usePortfolioStore((state) => state.settings);
-  const updateSettings = usePortfolioStore((state) => state.updateSettings);
   const accounts = usePortfolioStore((state) => state.accounts);
   const fxRates = usePortfolioStore((state) => state.fxRates);
-  const holdings = usePortfolioStore((state) => state.holdings);
+  const manualHoldings = usePortfolioStore((state) => state.holdings);
   const cashHoldings = usePortfolioStore((state) => state.cashHoldings);
   const addHolding = usePortfolioStore((state) => state.addHolding);
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
@@ -102,22 +108,58 @@ export default function HoldingsScreen() {
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
   const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
   const transactions = usePortfolioStore((state) => state.transactions);
+  const marketPrices = usePortfolioStore((state) => state.marketPrices);
+  const updateMarketPrices = usePortfolioStore((state) => state.updateMarketPrices);
+
+  // Convert marketPrices record to Map for selectAllHoldings
+  const priceMap = useMemo(() => new Map(Object.entries(marketPrices)), [marketPrices]);
+
+  // Combine manual holdings + derived holdings from transaction-sourced accounts
+  const holdings = useMemo(
+    () => selectAllHoldings(manualHoldings, transactions, accounts, priceMap),
+    [manualHoldings, transactions, accounts, priceMap]
+  );
 
   const [searchText, setSearchText] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("value_desc");
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [groupBy, setGroupBy] = useState<GroupByKey>("stock");
-  const [currencyFilter, setCurrencyFilter] = useState<CurrencyFilter>("ALL");
-  const [perfFilter, setPerfFilter] = useState<PerfFilter>("ALL");
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>("ALL");
+  const [showCash, setShowCash] = useState(false);
+  const [cashInfoVisible, setCashInfoVisible] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const [expandedTab, setExpandedTab] = useState<Record<string, "accounts" | "transactions">>({});
-  const [sparklineData, setSparklineData] = useState<Record<string, number[]>>({});
-  const [showFilters, setShowFilters] = useState(false);
+  const [expandedTab, setExpandedTab] = useState<Record<string, "accounts" | "transactions" | "info">>({});
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isImportVisible, setIsImportVisible] = useState(false);
   const [isImportMenuVisible, setIsImportMenuVisible] = useState(false);
   const [isImportTransactionsVisible, setIsImportTransactionsVisible] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
+  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
+  const [hoveredHeader, setHoveredHeader] = useState<SortColumn | null>(null);
+  const [collapsedAccounts, setCollapsedAccounts] = useState<Record<string, boolean>>({});
+
+  // Subtle continuous spin for the refresh icon while a refresh is in-flight.
+  const spinValue = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (isRefreshingPrices) {
+      const loop = Animated.loop(
+        Animated.timing(spinValue, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.linear,
+          useNativeDriver: Platform.OS !== "web",
+        })
+      );
+      loop.start();
+      return () => {
+        loop.stop();
+        spinValue.setValue(0);
+      };
+    }
+    spinValue.setValue(0);
+  }, [isRefreshingPrices, spinValue]);
+  const spin = spinValue.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
   const [editTarget, setEditTarget] = useState<Holding | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Holding | null>(null);
     const [editDraft, setEditDraft] = useState<EditDraft>({
@@ -131,12 +173,6 @@ export default function HoldingsScreen() {
     () => accounts.filter((account) => accountSupportsHoldings(account.type)),
     [accounts]
     );
-
-  const accountById = useMemo(() => {
-    const map = new Map<string, (typeof accounts)[0]>();
-    for (const account of accounts) map.set(account.id, account);
-    return map;
-  }, [accounts]);
 
   const accountNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -200,6 +236,9 @@ export default function HoldingsScreen() {
         quoteMap.set(normalized, quote);
       }
 
+      // Build a record of all fetched prices for transaction-derived holdings
+      const fetchedPrices: Record<string, number> = {};
+
       for (const holding of holdings) {
         const key = holding.symbol.toUpperCase();
         const normalizedKey = normalizeIndiaTicker(key);
@@ -213,10 +252,23 @@ export default function HoldingsScreen() {
           continue;
         }
 
+        // Store the price for this symbol (for transaction-derived holdings)
+        fetchedPrices[key] = quote.price;
+        // Also store normalized key for flexible matching
+        if (normalizedKey !== key) {
+          fetchedPrices[normalizedKey] = quote.price;
+        }
+
+        // Update manual holdings directly
         updateHolding(holding.id, {
           marketPrice: quote.price,
           updatedAt: nowIso(),
         });
+      }
+
+      // Update the centralized market prices in store (for transaction-derived holdings)
+      if (Object.keys(fetchedPrices).length > 0) {
+        updateMarketPrices(fetchedPrices);
       }
       
       setLastPricesRefreshedAt(result.fetchedAt ?? nowIso());
@@ -225,53 +277,60 @@ export default function HoldingsScreen() {
     }
   };
 
+  // Apply the Holdings-level market filter (India / US / all).
+  const marketHoldings = useMemo(() => {
+    if (marketFilter === "ALL") return holdings;
+    return holdings.filter((h) => (marketFilter === "INDIA" ? isIndiaHolding(h) : !isIndiaHolding(h)));
+  }, [holdings, marketFilter]);
+
+  const marketCashHoldings = useMemo(() => {
+    if (marketFilter === "ALL") return cashHoldings;
+    return cashHoldings.filter((c) => (marketFilter === "INDIA" ? c.currency === "INR" : c.currency === "USD"));
+  }, [cashHoldings, marketFilter]);
+
   const totalCashRC = useMemo(
-    () => cashHoldings.reduce((sum, c) => sum + toRC(c.balance, c.currency), 0),
-    [cashHoldings, settings.reportingCurrency, fxRates.USDINR]
+    () => marketCashHoldings.reduce((sum, c) => sum + toRC(c.balance, c.currency), 0),
+    [marketCashHoldings, settings.reportingCurrency, fxRates.USDINR]
   );
 
-  // Returns the group identity for a holding based on the active groupBy key.
-  const getGroupMeta = (holding: Holding): { id: string; title: string; subtitle: string } => {
-    const symbol = holding.symbol.toUpperCase();
-    const india = isIndiaHolding(holding);
-    switch (groupBy) {
-      case "account": {
-        const acct = accountById.get(holding.accountId);
-        return {
-          id: holding.accountId,
-          title: acct?.name ?? holding.accountId,
-          subtitle: acct ? `${acct.broker} · ${acct.owner}` : "",
-        };
-      }
-      case "country":
-        return india
-          ? { id: "india", title: "India", subtitle: "" }
-          : { id: "us", title: "United States", subtitle: "" };
-      case "asset_type":
-        return india
-          ? { id: "india_equity", title: "Indian Equities", subtitle: "INR-denominated stocks" }
-          : { id: "intl_equity", title: "International Equities", subtitle: "USD-denominated stocks" };
-      case "stock":
-      default:
-        return { id: symbol, title: symbol, subtitle: holding.companyName };
+  // Global allocation denominator + net-worth total so every row's allocation %
+  // is computed against the whole (filtered) portfolio regardless of grouping.
+  // Cash is included when the "Include cash" toggle is on.
+  const allocationContext = useMemo(() => {
+    let totalCurrent = 0;
+    let totalInvested = 0;
+    for (const holding of marketHoldings) {
+      totalCurrent += toRC(holdingMarketValue(holding), holding.currency);
+      totalInvested += toRC(holdingCost(holding), holding.currency);
     }
-  };
+    const cashRC = showCash ? totalCashRC : 0;
+    const totalBasis = settings.allocationBasis === "INVESTED_VALUE" ? totalInvested : totalCurrent;
+    return {
+      allocationDenom: totalBasis + cashRC,
+      netWorthTotal: totalCurrent + totalCashRC,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketHoldings, showCash, totalCashRC, settings.allocationBasis, settings.reportingCurrency, fxRates.USDINR]);
 
-  const displayGroups = useMemo<DisplayGroup[]>(() => {
+  // Build display rows grouped by symbol from a subset of holdings. Holdings
+  // remain the primary rows; when the subset is a single account this yields
+  // that account's holdings, when it's everything it merges lots per symbol.
+  const buildSymbolRows = (subset: Holding[], idPrefix: string): DisplayGroup[] => {
+    const { allocationDenom, netWorthTotal } = allocationContext;
     const grouped = new Map<string, DisplayGroup>();
 
-    for (const holding of holdings) {
-      const { id, title, subtitle } = getGroupMeta(holding);
+    for (const holding of subset) {
+      const symbol = holding.symbol.toUpperCase();
       const invested = toRC(holdingCost(holding), holding.currency);
       const current = toRC(holdingMarketValue(holding), holding.currency);
       const accountLabel = accountNameById.get(holding.accountId) ?? holding.accountId;
-
-      const existing = grouped.get(id);
+      const key = `${idPrefix}${symbol}`;
+      const existing = grouped.get(key);
       if (!existing) {
-        grouped.set(id, {
-          id,
-          title,
-          subtitle,
+        grouped.set(key, {
+          id: key,
+          title: symbol,
+          subtitle: holding.companyName,
           investedValue: invested,
           currentValue: current,
           gainLoss: current - invested,
@@ -284,64 +343,111 @@ export default function HoldingsScreen() {
         });
         continue;
       }
-
       existing.investedValue += invested;
       existing.currentValue += current;
       existing.gainLoss = existing.currentValue - existing.investedValue;
-      if (!existing.linkedAccountsLabel.includes(accountLabel)) {
-        existing.linkedAccountsLabel.push(accountLabel);
-      }
-      if (!existing.currencies.includes(holding.currency)) {
-        existing.currencies.push(holding.currency);
-      }
+      if (!existing.linkedAccountsLabel.includes(accountLabel)) existing.linkedAccountsLabel.push(accountLabel);
+      if (!existing.currencies.includes(holding.currency)) existing.currencies.push(holding.currency);
       existing.lots.push(holding);
     }
 
     const values = [...grouped.values()];
-
-    const totalCurrentHoldings = values.reduce((sum, g) => sum + g.currentValue, 0);
-    const netWorthTotal = totalCurrentHoldings + totalCashRC;
-    const totalBasis = values.reduce(
-      (sum, g) => sum + (settings.allocationBasis === "INVESTED_VALUE" ? g.investedValue : g.currentValue),
-      0
-    );
-    const allocationDenom = totalBasis + (settings.allocationIncludeCash ? totalCashRC : 0);
-
     for (const item of values) {
       item.gainLossPct = item.investedValue > 0 ? (item.gainLoss / item.investedValue) * 100 : 0;
       const basisValue = settings.allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue;
       item.allocationPct = allocationDenom > 0 ? (basisValue / allocationDenom) * 100 : 0;
       item.netWorthPct = netWorthTotal > 0 ? (item.currentValue / netWorthTotal) * 100 : 0;
     }
-
     return values;
-  }, [holdings, accounts, accountNameById, groupBy, settings.reportingCurrency, settings.allocationBasis, settings.allocationIncludeCash, fxRates.USDINR, totalCashRC]);
+  };
 
-  const visibleGroups = useMemo(() => {
+  // Search (ticker/company only) + sort applied to a set of rows.
+  const filterAndSortRows = (rows: DisplayGroup[]): DisplayGroup[] => {
     const query = searchText.trim().toLowerCase();
+    const filtered = rows.filter((group) =>
+      query.length === 0 ||
+      group.lots.some((l) => l.symbol.toLowerCase().includes(query) || l.companyName.toLowerCase().includes(query))
+    );
 
-    return displayGroups
-      .filter((group) => {
-        const matchesQuery =
-          query.length === 0 ||
-          group.title.toLowerCase().includes(query) ||
-          group.subtitle.toLowerCase().includes(query) ||
-          group.linkedAccountsLabel.join(" ").toLowerCase().includes(query) ||
-          group.lots.some((l) => l.symbol.toLowerCase().includes(query) || l.companyName.toLowerCase().includes(query));
-        const matchesCurrency = currencyFilter === "ALL" || group.currencies.includes(currencyFilter);
-        const matchesPerf =
-          perfFilter === "ALL" ||
-          (perfFilter === "GAIN" && group.gainLoss >= 0) ||
-          (perfFilter === "LOSS" && group.gainLoss < 0);
-        return matchesQuery && matchesCurrency && matchesPerf;
-      })
-      .sort((a, b) => {
-        if (sortKey === "alpha_asc") return a.title.localeCompare(b.title);
-        if (sortKey === "allocation_desc") return b.allocationPct - a.allocationPct;
-        if (sortKey === "gain_desc") return b.gainLoss - a.gainLoss;
-        return b.currentValue - a.currentValue; // value_desc
-      });
-  }, [displayGroups, searchText, currencyFilter, perfFilter, sortKey]);
+    if (!sortColumn) return filtered; // default order
+
+    const ascCompare = (a: DisplayGroup, b: DisplayGroup): number => {
+      switch (sortColumn) {
+        case "holding":
+          return a.title.localeCompare(b.title);
+        case "invested":
+          return a.investedValue - b.investedValue;
+        case "current":
+          return a.currentValue - b.currentValue;
+        case "alloc":
+          return a.allocationPct - b.allocationPct;
+        default:
+          return 0;
+      }
+    };
+
+    const dir = sortDirection === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => dir * ascCompare(a, b));
+  };
+
+  // Cycle a column through desc → asc → off (default order).
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn !== column) {
+      setSortColumn(column);
+      setSortDirection("desc");
+    } else if (sortDirection === "desc") {
+      setSortDirection("asc");
+    } else {
+      setSortColumn(null);
+      setSortDirection("desc");
+    }
+  };
+
+  // Flat (ungrouped) list of holding rows.
+  const flatRows = useMemo(
+    () => filterAndSortRows(buildSymbolRows(marketHoldings, "")),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [marketHoldings, allocationContext, searchText, sortColumn, sortDirection, settings.allocationBasis, settings.reportingCurrency, fxRates.USDINR]
+  );
+
+  // Per-account sections: account header + that account's holding rows (+ cash).
+  const accountSections = useMemo(() => {
+    const byAccount = new Map<string, Holding[]>();
+    for (const holding of marketHoldings) {
+      const arr = byAccount.get(holding.accountId) ?? [];
+      arr.push(holding);
+      byAccount.set(holding.accountId, arr);
+    }
+    const sections: {
+      account: (typeof accounts)[number];
+      rows: DisplayGroup[];
+      cashRC: number;
+      investedTotal: number;
+      currentTotal: number;
+      allocTotal: number;
+    }[] = [];
+    for (const account of accounts) {
+      const accHoldings = byAccount.get(account.id);
+      const rows = accHoldings ? filterAndSortRows(buildSymbolRows(accHoldings, `${account.id}:`)) : [];
+      const cashRC = showCash
+        ? marketCashHoldings.filter((c) => c.accountId === account.id).reduce((sum, c) => sum + toRC(c.balance, c.currency), 0)
+        : 0;
+      if (rows.length === 0 && cashRC <= 0) continue;
+      const investedTotal = rows.reduce((sum, r) => sum + r.investedValue, 0);
+      const currentTotal = rows.reduce((sum, r) => sum + r.currentValue, 0) + cashRC;
+      const allocTotal = rows.reduce((sum, r) => sum + r.allocationPct, 0)
+        + (allocationContext.allocationDenom > 0 ? (cashRC / allocationContext.allocationDenom) * 100 : 0);
+      sections.push({ account, rows, cashRC, investedTotal, currentTotal, allocTotal });
+    }
+    return sections;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketHoldings, accounts, marketCashHoldings, showCash, allocationContext, searchText, sortColumn, sortDirection, settings.allocationBasis, settings.reportingCurrency, fxRates.USDINR]);
+
+  // Whether any rows are visible after filtering (drives the empty state).
+  const hasVisibleRows =
+    groupBy === "account"
+      ? accountSections.length > 0
+      : flatRows.length > 0 || (showCash && totalCashRC > 0);
 
   const openEdit = (holding: Holding) => {
     setEditTarget(holding);
@@ -370,22 +476,13 @@ export default function HoldingsScreen() {
     setDeleteTarget(null);
   };
 
-  const toggleGroup = (id: string, symbol: string) => {
+  const toggleGroup = (id: string) => {
     const isCurrentlyExpanded = expandedGroups[id];
     setExpandedGroups((prev) => ({ ...prev, [id]: !prev[id] }));
     
     // Set default tab to accounts when expanding
     if (!isCurrentlyExpanded) {
       setExpandedTab((prev) => ({ ...prev, [id]: "accounts" }));
-      
-      // Fetch sparkline data if not already cached
-      if (!sparklineData[symbol]) {
-        fetchSparklineData(symbol).then((result) => {
-          if (result.ok && result.data) {
-            setSparklineData((prev) => ({ ...prev, [symbol]: result.data }));
-          }
-        });
-      }
     }
   };
 
@@ -396,47 +493,349 @@ export default function HoldingsScreen() {
       .sort((a, b) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime());
   };
 
-  // Memoize visible symbol list for sparkline fetching
-  const visibleSymbols = useMemo(
-    () => visibleGroups.slice(0, 10).map((g) => g.title),
-    [visibleGroups]
-  );
-
-  // Fetch sparklines for visible holdings on mount
-  useEffect(() => {
-    visibleSymbols.forEach((symbol) => {
-      if (!sparklineData[symbol]) {
-        fetchSparklineData(symbol).then((result) => {
-          if (result.ok && result.data) {
-            setSparklineData((prev) => ({ ...prev, [symbol]: result.data }));
-          }
-        });
-      }
-    });
-  }, [visibleSymbols]);
-
   const clearFilters = () => {
     setSearchText("");
-    setCurrencyFilter("ALL");
-    setPerfFilter("ALL");
-    setSortKey("value_desc");
+    setSortColumn(null);
+    setSortDirection("desc");
+  };
+
+  // Renders a single holding row (with expand/collapse + tabs).
+  const renderHoldingRow = (group: DisplayGroup, indent = false) => {
+    const isExpanded = Boolean(expandedGroups[group.id]);
+    const currentTab = expandedTab[group.id] ?? "accounts";
+    const gainPositive = group.gainLoss >= 0;
+    const tickerColor = getTickerColor(group.title);
+    const tickerTransactions =
+      isExpanded && (currentTab === "transactions" || currentTab === "info") ? getTickerTransactions(group.title) : [];
+
+    return (
+      <View key={group.id}>
+        {/* Main row - tappable to expand/collapse */}
+        <Pressable
+          onPress={() => toggleGroup(group.id)}
+          onHoverIn={() => setHoveredRowId(group.id)}
+          onHoverOut={() => setHoveredRowId((prev) => (prev === group.id ? null : prev))}
+          style={[
+            styles.gridRow,
+            styles.rowInteractive,
+            (isExpanded || hoveredRowId === group.id) && { backgroundColor: colors.surface },
+            !isExpanded && { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth },
+          ]}
+        >
+          <View style={[styles.colHolding, indent && styles.colHoldingIndent]}>
+            <TickerImage symbol={group.title} size={28} fallbackColor={tickerColor} />
+            <View style={styles.holdingInfo}>
+              <View style={styles.holdingTickerRow}>
+                <Text style={[styles.holdingTicker, { color: colors.text }]}>{group.title}</Text>
+              </View>
+              <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
+                {group.subtitle || group.title}
+              </Text>
+            </View>
+            {/* Expand/collapse chevron (revealed on hover or when expanded) */}
+            <Text style={[styles.rowChevron, { color: colors.muted }, (isExpanded || hoveredRowId === group.id) ? styles.rowChevronVisible : null]}>
+              {isExpanded ? "▴" : "▾"}
+            </Text>
+          </View>
+
+          {!hideInvested ? (
+            <View style={styles.cellInvested}>
+              <Text style={styles.valueInvested}>
+                {formatMoney(group.investedValue, settings.reportingCurrency)}
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={styles.cellCurrent}>
+            <Text style={styles.valueCurrent}>
+              {formatMoney(group.currentValue, settings.reportingCurrency)}
+            </Text>
+            <Text style={[styles.valueGain, { color: gainPositive ? colors.positive : colors.negative }]}>
+              {gainPositive ? "+" : ""}{formatMoney(group.gainLoss, settings.reportingCurrency)} ({gainPositive ? "+" : ""}{group.gainLossPct.toFixed(2)}%)
+            </Text>
+          </View>
+
+          <View style={styles.cellAlloc}>
+            <Text style={[styles.valueAlloc, { color: colors.text }]}>
+              {group.allocationPct.toFixed(1)}%
+            </Text>
+          </View>
+        </Pressable>
+
+        {/* Expanded view with tabs */}
+        {isExpanded ? (
+          <View style={[styles.expandedWrap, { borderBottomColor: colors.border }]}>
+            <View style={styles.tabBar}>
+              <Pressable
+                onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "accounts" }))}
+                style={[styles.tab, currentTab === "accounts" && styles.tabActive]}
+              >
+                <Text style={[styles.tabText, currentTab === "accounts" && { color: colors.accent }]}>Accounts</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "transactions" }))}
+                style={[styles.tab, currentTab === "transactions" && styles.tabActive]}
+              >
+                <Text style={[styles.tabText, currentTab === "transactions" && { color: colors.accent }]}>Transactions</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "info" }))}
+                style={[styles.tab, currentTab === "info" && styles.tabActive]}
+              >
+                <Text style={[styles.tabText, currentTab === "info" && { color: colors.accent }]}>Info</Text>
+              </Pressable>
+            </View>
+
+            {/* Accounts tab content */}
+            {currentTab === "accounts" && (
+              <View style={styles.tabContent}>
+                {group.lots.map((lot) => {
+                  const lotCurrent = toRC(holdingMarketValue(lot), lot.currency);
+                  const lotInvested = toRC(holdingCost(lot), lot.currency);
+                  const lotGain = lotCurrent - lotInvested;
+                  const lotGainPositive = lotGain >= 0;
+                  return (
+                    <View key={lot.id} style={styles.lotRow}>
+                      <View style={styles.lotInfo}>
+                        {groupBy !== "stock" ? (
+                          <Text style={[styles.lotSymbol, { color: colors.text }]}>{lot.symbol} · {lot.companyName}</Text>
+                        ) : null}
+                        <Text style={[styles.lotAccount, { color: colors.text }]}>{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
+                        <Text style={[styles.lotMeta, { color: colors.muted }]}>
+                          {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
+                          {"  "}· cur {formatMoney(lot.marketPrice, lot.currency)}
+                          {"  "}
+                          <Text style={[lotGainPositive ? styles.positiveText : styles.negativeText]}>
+                            {lotGainPositive ? "+" : ""}{formatMoney(lotGain, settings.reportingCurrency)}
+                          </Text>
+                        </Text>
+                      </View>
+                      <View style={styles.lotActions}>
+                        <Pressable onPress={() => openEdit(lot)}>
+                          <Text style={styles.editText}>Edit</Text>
+                        </Pressable>
+                        <Pressable onPress={() => setDeleteTarget(lot)}>
+                          <Text style={styles.deleteText}>Delete</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Transactions tab content */}
+            {currentTab === "transactions" && (
+              <View style={styles.tabContent}>
+                {tickerTransactions.length === 0 ? (
+                  <Text style={[styles.noTransactionsText, { color: colors.muted }]}>
+                    No transaction history for {group.title}
+                  </Text>
+                ) : (
+                  tickerTransactions.map((tx) => (
+                    <View key={tx.id} style={styles.transactionRow}>
+                      <View style={styles.transactionLeft}>
+                        <View style={[
+                          styles.transactionTypeBadge,
+                          { backgroundColor: tx.type === "BUY" ? `${colors.positive}22` : `${colors.negative}22` }
+                        ]}>
+                          <Text style={[
+                            styles.transactionTypeText,
+                            { color: tx.type === "BUY" ? colors.positive : colors.negative }
+                          ]}>
+                            {tx.type}
+                          </Text>
+                        </View>
+                        <View style={styles.transactionInfo}>
+                          <Text style={[styles.transactionDate, { color: colors.text }]}>
+                            {new Date(tx.transactionDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                          </Text>
+                          <Text style={[styles.transactionMeta, { color: colors.muted }]}>
+                            {tx.quantity} @ {formatMoney(tx.pricePerShare, tx.currency)}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.transactionAmount, { color: colors.text }]}>
+                        {formatMoney(tx.quantity * tx.pricePerShare, tx.currency)}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+
+            {/* Info tab content — four stat blocks + performance chart */}
+            {currentTab === "info" && (
+              <View style={styles.infoTabWrap}>
+                {(() => {
+                  const firstHolding = group.lots[0];
+                  const holdingCurrency = firstHolding?.currency ?? settings.reportingCurrency;
+                  const totalShares = group.lots.reduce((sum, lot) => sum + lot.quantity, 0);
+                  const totalCostNative = group.lots.reduce((sum, lot) => sum + lot.quantity * lot.averagePrice, 0);
+                  const avgCost = totalShares > 0 ? totalCostNative / totalShares : 0;
+                  const marketPrice = firstHolding?.marketPrice ?? 0;
+                  const returnPositive = group.gainLoss >= 0;
+                  const gainSign = returnPositive ? "+" : "";
+                  const gainColor = returnPositive ? colors.positive : colors.negative;
+
+                  const performancePoints = calcHoldingPerformanceHistory(
+                    tickerTransactions.map((tx) => ({
+                      transactionDate: tx.transactionDate,
+                      type: tx.type,
+                      quantity: tx.quantity,
+                      pricePerShare: tx.pricePerShare,
+                    })),
+                    marketPrice,
+                    group.title,
+                    holdingCurrency
+                  ).points;
+
+                  return (
+                    <>
+                      {/* Four-block stat row */}
+                      <View style={styles.statGrid}>
+                        <View style={styles.statBlock}>
+                          <Text style={styles.statBlockLabel}>Shares</Text>
+                          <Text style={styles.statBlockValue}>
+                            {totalShares.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                          </Text>
+                        </View>
+                        <View style={styles.statBlock}>
+                          <Text style={styles.statBlockLabel}>Avg price</Text>
+                          <Text style={styles.statBlockValue}>{formatMoney(avgCost, holdingCurrency)}</Text>
+                        </View>
+                        <View style={styles.statBlock}>
+                          <Text style={styles.statBlockLabel}>Market price</Text>
+                          <Text style={styles.statBlockValue}>{formatMoney(marketPrice, holdingCurrency)}</Text>
+                        </View>
+                        <View style={styles.statBlock}>
+                          <Text style={styles.statBlockLabel}>Gain / Loss</Text>
+                          <Text style={[styles.statBlockValue, { color: gainColor }]}>
+                            {gainSign}{formatMoney(group.gainLoss, settings.reportingCurrency)}
+                          </Text>
+                          <Text style={[styles.statBlockSub, { color: gainColor }]}>
+                            {gainSign}{group.gainLossPct.toFixed(2)}%
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Performance chart card */}
+                      <View style={styles.chartCard}>
+                        <Text style={styles.perfLabel}>PERFORMANCE</Text>
+                        <HoldingPerformanceChart
+                          data={performancePoints}
+                          currency={holdingCurrency}
+                          sharesHeld={totalShares}
+                          avgCost={avgCost}
+                          currentPrice={marketPrice}
+                        />
+                      </View>
+                    </>
+                  );
+                })()}
+              </View>
+            )}
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
+  // Renders a non-expandable synthetic Cash row.
+  const renderCashRow = (id: string, amountRC: number, indent = false) => {
+    const allocPct =
+      allocationContext.allocationDenom > 0 ? (amountRC / allocationContext.allocationDenom) * 100 : 0;
+    return (
+      <View key={id} style={[styles.gridRow, styles.cashRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+        <View style={[styles.colHolding, indent && styles.colHoldingIndent]}>
+          <View style={[styles.cashBadge, { backgroundColor: `${colors.muted}22` }]}>
+            <Text style={[styles.cashBadgeText, { color: colors.muted }]}>$</Text>
+          </View>
+          <View style={styles.holdingInfo}>
+            <Text style={[styles.holdingTicker, { color: colors.muted }]}>Cash</Text>
+            <Text style={[styles.holdingName, { color: colors.muted }]}>Uninvested balance</Text>
+          </View>
+        </View>
+        {!hideInvested ? (
+          <View style={styles.cellInvested}>
+            <Text style={styles.valueInvested}>—</Text>
+          </View>
+        ) : null}
+        <View style={styles.cellCurrent}>
+          <Text style={[styles.valueCurrent, { color: colors.muted }]}>
+            {formatMoney(amountRC, settings.reportingCurrency)}
+          </Text>
+        </View>
+        <View style={styles.cellAlloc}>
+          <Text style={[styles.valueAlloc, { color: colors.muted }]}>{allocPct.toFixed(1)}%</Text>
+        </View>
+      </View>
+    );
+  };
+
+  // Renders a clickable, sortable column header cell.
+  const renderSortHeader = (
+    column: SortColumn,
+    label: string,
+    cellStyle: object,
+    textAlign: "left" | "right"
+  ) => {
+    const active = sortColumn === column;
+    const hovered = hoveredHeader === column;
+    const arrow = active ? (sortDirection === "desc" ? " ↓" : " ↑") : " ↕";
+    const textColor = active ? colors.accent : hovered ? "#8A94A3" : "#5A6472";
+    return (
+      <Pressable
+        style={[cellStyle, styles.sortHeaderCell]}
+        onPress={() => handleSort(column)}
+        onHoverIn={() => setHoveredHeader(column)}
+        onHoverOut={() => setHoveredHeader((prev) => (prev === column ? null : prev))}
+        accessibilityRole="button"
+        accessibilityLabel={`Sort by ${label}`}
+      >
+        <Text
+          style={[
+            styles.columnHeaderText,
+            { textAlign, color: textColor },
+          ]}
+        >
+          {label}
+          <Text style={active ? undefined : styles.sortHeaderHint}>{arrow}</Text>
+        </Text>
+      </Pressable>
+    );
   };
 
   return (
-    <ScreenContainer>
+    <>
       {/* Header */}
       <View style={styles.headerRow}>
         <Text style={styles.headerTitle}>Holdings</Text>
         <View style={styles.headerActions}>
-          <Pressable style={[styles.refreshBtn, isRefreshingPrices && styles.refreshBtnDisabled]} onPress={refreshAllMarketPrices} disabled={isRefreshingPrices || holdings.length === 0}>
-            <Text style={styles.refreshBtnText}>{isRefreshingPrices ? "Refreshing..." : "Refresh"}</Text>
+          <Pressable
+            style={[styles.actionBtn, isRefreshingPrices && styles.refreshBtnDisabled]}
+            onPress={refreshAllMarketPrices}
+            disabled={isRefreshingPrices || holdings.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh prices"
+          >
+            <Animated.Text style={[styles.actionBtnIcon, { transform: [{ rotate: spin }] }]}>↻</Animated.Text>
+            <Text style={styles.actionBtnLabel}>{isRefreshingPrices ? "Refreshing" : "Refresh"}</Text>
           </Pressable>
-          <Pressable style={styles.importBtn} onPress={() => setIsImportMenuVisible(true)}>
-            <Text style={styles.importBtnText}>Import ▾</Text>
+          <Pressable
+            style={styles.actionBtn}
+            onPress={() => setIsImportMenuVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Import data"
+          >
+            <Text style={styles.actionBtnIcon}>⭳</Text>
+            <Text style={styles.actionBtnLabel}>Import</Text>
           </Pressable>
-          <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
-            <Text style={styles.addBtnText}>Add</Text>
-          </Pressable>
+          <TourTarget tourKey="holdings-add">
+            <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
+              <Text style={styles.addBtnText}>Add</Text>
+            </Pressable>
+          </TourTarget>
         </View>
       </View>
       {lastPricesRefreshedAt ? (
@@ -447,34 +846,64 @@ export default function HoldingsScreen() {
       <TextInput
         value={searchText}
         onChangeText={setSearchText}
-        placeholder="Search ticker, company or account"
+        placeholder="Search ticker or company"
         placeholderTextColor={colors.muted}
         style={styles.searchInput}
       />
 
-      {/* Primary sort control + Filters button */}
-      <View style={styles.controlRow}>
-        <View style={styles.sortRow}>
-          {([
-            ["value_desc", "Value"],
-            ["allocation_desc", "Alloc"],
-            ["gain_desc", "Gain"],
-            ["alpha_asc", "A–Z"],
-          ] as const).map(([key, label]) => {
-            const active = sortKey === key;
-            return (
-              <Pressable key={key} style={[styles.chip, active && styles.chipActive]} onPress={() => setSortKey(key)}>
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-              </Pressable>
-            );
-          })}
+
+      {/* Group By + Include Cash */}
+      <View style={styles.groupControlRow}>
+        <View style={styles.groupControlItem}>
+          <Text style={styles.groupControlLabel}>Group by</Text>
+          <SegmentedControl<GroupByKey>
+            options={[
+              { value: "stock", label: "None" },
+              { value: "account", label: "Account" },
+            ]}
+            value={groupBy}
+            onChange={(next) => {
+              setGroupBy(next);
+              // Default all account sections to expanded when grouping.
+              setExpandedGroups({});
+            }}
+          />
         </View>
-        <Pressable style={styles.filtersBtn} onPress={() => setShowFilters(true)}>
-          <Text style={styles.filtersBtnText}>Filters</Text>
-        </Pressable>
+        <View style={styles.groupControlItem}>
+          <SegmentedControl<MarketFilter>
+            options={[
+              { value: "ALL", label: "All" },
+              { value: "INDIA", label: "India" },
+              { value: "US", label: "US" },
+            ]}
+            value={marketFilter}
+            onChange={setMarketFilter}
+          />
+          <View>
+            <Pressable
+              style={[styles.cashIconBtn, showCash && styles.cashIconBtnActive]}
+              onPress={() => setShowCash((prev) => !prev)}
+              onHoverIn={() => setCashInfoVisible(true)}
+              onHoverOut={() => setCashInfoVisible(false)}
+              onLongPress={() => setCashInfoVisible((prev) => !prev)}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: showCash }}
+              accessibilityLabel="Include uninvested cash in allocation calculations and as a Holdings row"
+            >
+              <Text style={[styles.cashIconText, showCash && styles.cashIconTextActive]}>$</Text>
+            </Pressable>
+            {cashInfoVisible ? (
+              <View style={styles.cashTooltip} pointerEvents="none">
+                <Text style={styles.cashTooltipText}>
+                  Include uninvested cash in allocation calculations and as a Holdings row
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} scrollEnabled={false}>
         <View style={styles.listWrap}>
           {holdings.length === 0 ? (
             <View style={styles.emptyCard}>
@@ -483,7 +912,7 @@ export default function HoldingsScreen() {
                 <>
                   <Text style={styles.emptyText}>Holdings are missing because you do not have a broker account linked yet.</Text>
                   <Text style={styles.emptyText}>Create a broker account first, then come back here to add your first holding.</Text>
-                  <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/accounts" as never)}>
+                  <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/settings" as never)}>
                     <Text style={styles.emptyPrimaryBtnText}>Add Broker Account</Text>
                   </Pressable>
                 </>
@@ -499,175 +928,71 @@ export default function HoldingsScreen() {
             </View>
           ) : null}
 
-          {holdings.length > 0 ? visibleGroups.map((group) => {
-            const isExpanded = Boolean(expandedGroups[group.id]);
-            const currentTab = expandedTab[group.id] ?? "accounts";
-            const gainPositive = group.gainLoss >= 0;
-            const tickerColor = getTickerColor(group.title);
-            const displayValue = settings.allocationBasis === "INVESTED_VALUE" ? group.investedValue : group.currentValue;
-            const sparkline = sparklineData[group.title] ?? [];
-            const tickerTransactions = isExpanded && currentTab === "transactions" ? getTickerTransactions(group.title) : [];
-            const accountCount = group.linkedAccountsLabel.length;
+          {holdings.length > 0 ? (
+            <View style={[styles.gridRow, styles.columnHeaderRow, styles.stickyHeader, { backgroundColor: colors.bg, borderBottomColor: colors.border }]}>
+              {renderSortHeader("holding", groupBy === "account" ? "ACCOUNT / HOLDING" : "HOLDING", styles.colHolding, "left")}
+              {!hideInvested ? renderSortHeader("invested", "INVESTED", styles.cellInvested, "right") : null}
+              {renderSortHeader("current", "CURRENT", styles.cellCurrent, "right")}
+              {renderSortHeader("alloc", "ALLOC", styles.cellAlloc, "right")}
+            </View>
+          ) : null}
 
-            return (
-              <View key={group.id}>
-                {/* Main row */}
-                <View style={[styles.holdingRow, { borderBottomColor: colors.border }]}>
-                  <View style={styles.holdingLeft}>
-                    <TickerImage symbol={group.title} size={28} fallbackColor={tickerColor} />
-                    <View style={styles.holdingInfo}>
-                      <View style={styles.holdingTickerRow}>
-                        <Text style={[styles.holdingTicker, { color: colors.text }]}>{group.title}</Text>
-                        <View style={[styles.allocationBadge, { backgroundColor: `${tickerColor}22` }]}>
-                          <Text style={[styles.allocationBadgeText, { color: tickerColor }]}>
-                            {group.allocationPct.toFixed(1)}%
-                          </Text>
-                        </View>
+          {holdings.length > 0 ? (
+            groupBy === "account" ? (
+              accountSections.map((section) => {
+                const isCollapsed = Boolean(collapsedAccounts[section.account.id]);
+                return (
+                <View key={section.account.id}>
+                  <Pressable
+                    onPress={() =>
+                      setCollapsedAccounts((prev) => ({ ...prev, [section.account.id]: !prev[section.account.id] }))
+                    }
+                    style={[styles.gridRow, styles.sectionHeaderRow, styles.rowInteractive, { borderBottomColor: colors.border }]}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: !isCollapsed }}
+                    accessibilityLabel={`${section.account.name} holdings`}
+                  >
+                    <View style={styles.colHolding}>
+                      <Text style={[styles.sectionChevron, { color: colors.muted }]}>{isCollapsed ? "▸" : "▾"}</Text>
+                      <View style={styles.holdingInfo}>
+                        <Text style={styles.sectionHeaderTitle} numberOfLines={1}>
+                          {section.account.name} ({section.account.owner})
+                        </Text>
+                        <Text style={styles.sectionHeaderMeta} numberOfLines={1}>
+                          {section.account.broker}{section.rows.length ? ` · ${section.rows.length} holding${section.rows.length === 1 ? "" : "s"}` : ""}
+                        </Text>
                       </View>
-                      <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
-                        {group.subtitle || group.title}
-                      </Text>
                     </View>
-                  </View>
-                  
-                  {/* Sparkline */}
-                  {sparkline.length >= 2 && (
-                    <View style={styles.sparklineWrap}>
-                      <Sparkline data={sparkline} width={48} height={20} />
+                    {!hideInvested ? (
+                      <View style={styles.cellInvested}>
+                        <Text style={styles.valueInvested}>{formatMoney(section.investedTotal, settings.reportingCurrency)}</Text>
+                      </View>
+                    ) : null}
+                    <View style={styles.cellCurrent}>
+                      <Text style={styles.valueCurrent}>{formatMoney(section.currentTotal, settings.reportingCurrency)}</Text>
                     </View>
-                  )}
-                  
-                  <View style={styles.holdingRight}>
-                    <Text style={[styles.holdingValue, { color: colors.text }]}>
-                      {formatMoney(displayValue, settings.reportingCurrency)}
-                    </Text>
-                    <Text style={[styles.holdingGain, { color: gainPositive ? colors.positive : colors.negative }]}>
-                      {gainPositive ? "+" : ""}{group.gainLossPct.toFixed(2)}% · {gainPositive ? "+" : ""}{formatMoney(group.gainLoss, settings.reportingCurrency)}
-                    </Text>
-                  </View>
+                    <View style={styles.cellAlloc}>
+                      <Text style={[styles.valueAlloc, { color: colors.text }]}>{section.allocTotal.toFixed(1)}%</Text>
+                    </View>
+                  </Pressable>
+                  {!isCollapsed ? (
+                    <>
+                      {section.cashRC > 0 ? renderCashRow(`${section.account.id}:cash`, section.cashRC, true) : null}
+                      {section.rows.map((row) => renderHoldingRow(row, true))}
+                    </>
+                  ) : null}
                 </View>
+                );
+              })
+            ) : (
+              <>
+                {showCash && totalCashRC > 0 ? renderCashRow("portfolio:cash", totalCashRC) : null}
+                {flatRows.map((row) => renderHoldingRow(row))}
+              </>
+            )
+          ) : null}
 
-                {/* Account count chip + Details toggle — only in stock view */}
-                {groupBy === "stock" && accountCount > 0 ? (
-                  <View style={[styles.accountChipRow, { borderBottomColor: colors.border }]}>
-                    <Text style={[styles.accountCountChip, { backgroundColor: colors.surface, color: colors.muted }]}>
-                      {accountCount} account{accountCount > 1 ? "s" : ""}
-                    </Text>
-                    <Pressable onPress={() => toggleGroup(group.id, group.title)} style={styles.detailsBtn}>
-                      <Text style={[styles.detailsBtnText, { color: colors.accent }]}>
-                        {isExpanded ? "Hide" : "Details"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ) : null}
-
-                {/* Expanded view with tabs */}
-                {isExpanded ? (
-                  <View style={[styles.expandedWrap, { borderBottomColor: colors.border }]}>
-                    {/* Tab bar */}
-                    <View style={styles.tabBar}>
-                      <Pressable
-                        onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "accounts" }))}
-                        style={[styles.tab, currentTab === "accounts" && styles.tabActive]}
-                      >
-                        <Text style={[styles.tabText, currentTab === "accounts" && { color: colors.accent }]}>
-                          Accounts
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "transactions" }))}
-                        style={[styles.tab, currentTab === "transactions" && styles.tabActive]}
-                      >
-                        <Text style={[styles.tabText, currentTab === "transactions" && { color: colors.accent }]}>
-                          Transactions
-                        </Text>
-                      </Pressable>
-                    </View>
-
-                    {/* Accounts tab content */}
-                    {currentTab === "accounts" && (
-                      <View style={styles.tabContent}>
-                        {group.lots.map((lot) => {
-                          const lotCurrent = toRC(holdingMarketValue(lot), lot.currency);
-                          const lotInvested = toRC(holdingCost(lot), lot.currency);
-                          const lotGain = lotCurrent - lotInvested;
-                          const lotGainPositive = lotGain >= 0;
-                          return (
-                            <View key={lot.id} style={styles.lotRow}>
-                              <View style={styles.lotInfo}>
-                                {groupBy !== "stock" ? (
-                                  <Text style={[styles.lotSymbol, { color: colors.text }]}>{lot.symbol} · {lot.companyName}</Text>
-                                ) : null}
-                                <Text style={[styles.lotAccount, { color: colors.text }]}>{accountNameById.get(lot.accountId) ?? lot.accountId}</Text>
-                                <Text style={[styles.lotMeta, { color: colors.muted }]}>
-                                  {lot.quantity} shares · avg {formatMoney(lot.averagePrice, lot.currency)}
-                                  {"  "}· cur {formatMoney(lot.marketPrice, lot.currency)}
-                                  {"  "}
-                                  <Text style={[lotGainPositive ? styles.positiveText : styles.negativeText]}>
-                                    {lotGainPositive ? "+" : ""}{formatMoney(lotGain, settings.reportingCurrency)}
-                                  </Text>
-                                </Text>
-                              </View>
-                              <View style={styles.lotActions}>
-                                <Pressable onPress={() => openEdit(lot)}>
-                                  <Text style={styles.editText}>Edit</Text>
-                                </Pressable>
-                                <Pressable onPress={() => setDeleteTarget(lot)}>
-                                  <Text style={styles.deleteText}>Delete</Text>
-                                </Pressable>
-                              </View>
-                            </View>
-                          );
-                        })}
-                      </View>
-                    )}
-
-                    {/* Transactions tab content */}
-                    {currentTab === "transactions" && (
-                      <View style={styles.tabContent}>
-                        {tickerTransactions.length === 0 ? (
-                          <Text style={[styles.noTransactionsText, { color: colors.muted }]}>
-                            No transaction history for {group.title}
-                          </Text>
-                        ) : (
-                          tickerTransactions.map((tx) => (
-                            <View key={tx.id} style={styles.transactionRow}>
-                              <View style={styles.transactionLeft}>
-                                <View style={[
-                                  styles.transactionTypeBadge,
-                                  { backgroundColor: tx.type === "BUY" ? `${colors.positive}22` : `${colors.negative}22` }
-                                ]}>
-                                  <Text style={[
-                                    styles.transactionTypeText,
-                                    { color: tx.type === "BUY" ? colors.positive : colors.negative }
-                                  ]}>
-                                    {tx.type}
-                                  </Text>
-                                </View>
-                                <View style={styles.transactionInfo}>
-                                  <Text style={[styles.transactionDate, { color: colors.text }]}>
-                                    {new Date(tx.transactionDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
-                                  </Text>
-                                  <Text style={[styles.transactionMeta, { color: colors.muted }]}>
-                                    {tx.quantity} @ {formatMoney(tx.pricePerShare, tx.currency)}
-                                  </Text>
-                                </View>
-                              </View>
-                              <Text style={[styles.transactionAmount, { color: colors.text }]}>
-                                {formatMoney(tx.quantity * tx.pricePerShare, tx.currency)}
-                              </Text>
-                            </View>
-                          ))
-                        )}
-                      </View>
-                    )}
-                  </View>
-                ) : null}
-              </View>
-            );
-          }) : null}
-
-          {holdings.length > 0 && visibleGroups.length === 0 ? (
+          {holdings.length > 0 && !hasVisibleRows ? (
             <View style={styles.emptyWrap}>
               <Text style={styles.emptyTitle}>No results for these filters</Text>
               <Text style={styles.emptyText}>Your holdings are still there, but current filters hide them.</Text>
@@ -722,6 +1047,7 @@ export default function HoldingsScreen() {
         }}
         setAccountTransactions={setAccountTransactions}
         updateAccount={updateAccount}
+        updateMarketPrices={updateMarketPrices}
       />
 
       {/* Import Menu Modal */}
@@ -831,130 +1157,16 @@ export default function HoldingsScreen() {
           </View>
         </View>
       </Modal>
+    </>
+  );
+}
 
-      {/* Filters Modal */}
-      <Modal visible={showFilters} transparent animationType="slide" onRequestClose={() => setShowFilters(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Filters</Text>
-
-            {/* Group-by options */}
-            <Text style={styles.modalLabel}>Group by</Text>
-            <View style={styles.modalPillRow}>
-              {([
-                ["stock", "Stock"],
-                ["account", "Account"],
-                ["country", "Country"],
-                ["asset_type", "Type"],
-              ] as const).map(([key, label]) => {
-                const active = groupBy === key;
-                return (
-                  <Pressable
-                    key={key}
-                    style={[styles.modalPill, active && styles.modalPillActive]}
-                    onPress={() => { setGroupBy(key); setExpandedGroups({}); }}
-                  >
-                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {/* Allocation basis / cash inclusion */}
-            <Text style={styles.modalLabel}>Allocation settings</Text>
-            <View style={styles.modalPillRow}>
-              {([
-                ["CURRENT_VALUE", "Current %"],
-                ["INVESTED_VALUE", "Invested %"],
-              ] as const).map(([basis, label]) => {
-                const active = settings.allocationBasis === basis;
-                return (
-                  <Pressable
-                    key={basis}
-                    style={[styles.modalPill, active && styles.modalPillActive]}
-                    onPress={() => updateSettings({ allocationBasis: basis })}
-                  >
-                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-
-              {([
-                [true, "Include Cash"],
-                [false, "Exclude Cash"],
-              ] as const).map(([include, label]) => {
-                const active = settings.allocationIncludeCash === include;
-                return (
-                  <Pressable
-                    key={label}
-                    style={[styles.modalPill, active && styles.modalPillActive]}
-                    onPress={() => updateSettings({ allocationIncludeCash: include })}
-                  >
-                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {/* Sort + filter options */}
-            <Text style={styles.modalLabel}>Sort & Filter</Text>
-            <View style={styles.modalPillRow}>
-              {([
-                ["value_desc", "Value"],
-                ["allocation_desc", "Alloc"],
-                ["gain_desc", "Gain"],
-                ["alpha_asc", "A–Z"],
-              ] as const).map(([key, label]) => {
-                const active = sortKey === key;
-                return (
-                  <Pressable
-                    key={key}
-                    style={[styles.modalPill, active && styles.modalPillActive]}
-                    onPress={() => setSortKey(key)}
-                  >
-                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-
-              {(["ALL", "INR", "USD"] as CurrencyFilter[]).map((value) => {
-                const active = currencyFilter === value;
-                return (
-                  <Pressable
-                    key={value}
-                    style={[styles.modalPill, active && styles.modalPillActive]}
-                    onPress={() => setCurrencyFilter(value)}
-                  >
-                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{value}</Text>
-                  </Pressable>
-                );
-              })}
-
-              {(["ALL", "GAIN", "LOSS"] as PerfFilter[]).map((value) => {
-                const active = perfFilter === value;
-                return (
-                  <Pressable
-                    key={value}
-                    style={[styles.modalPill, active && styles.modalPillActive]}
-                    onPress={() => setPerfFilter(value)}
-                  >
-                    <Text style={[styles.modalPillText, active && styles.modalPillTextActive]}>{value}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <View style={styles.modalActions}>
-              <Pressable style={styles.ghostBtn} onPress={() => setShowFilters(false)}>
-                <Text style={styles.ghostText}>Close</Text>
-              </Pressable>
-              <Pressable style={styles.primaryBtn} onPress={clearFilters}>
-                <Text style={styles.primaryText}>Clear All</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+export default function HoldingsScreen() {
+  return (
+    <ScreenContainer>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <HoldingsSection />
+      </ScrollView>
     </ScreenContainer>
   );
 }
@@ -992,11 +1204,6 @@ const styles = StyleSheet.create({
   refreshBtnDisabled: {
     opacity: 0.6,
   },
-  refreshBtnText: {
-    color: defaultColors.muted,
-    fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
-  },
   addBtn: {
     borderRadius: radii.pill,
     backgroundColor: defaultColors.accent,
@@ -1006,7 +1213,28 @@ const styles = StyleSheet.create({
   addBtnText: {
     color: defaultColors.bg,
     fontSize: typography.body,
+    fontWeight: typography.weightBold,
+  },
+  actionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: defaultColors.border,
+    backgroundColor: defaultColors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  actionBtnIcon: {
+    color: defaultColors.text,
+    fontSize: typography.body,
     fontWeight: typography.weightSemibold,
+  },
+  actionBtnLabel: {
+    color: defaultColors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
   },
   importBtn: {
     borderRadius: radii.pill,
@@ -1042,17 +1270,188 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     flex: 1,
   },
-  filtersBtn: {
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: defaultColors.muted,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+  groupControlRow: {
+    marginBottom: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: spacing.md,
   },
-  filtersBtnText: {
+  groupControlItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  groupControlLabel: {
     color: defaultColors.muted,
     fontSize: typography.caption,
     fontWeight: typography.weightMedium,
+  },
+  chipAZ: {
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: defaultColors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    marginLeft: spacing.xs,
+  },
+  chipAZActive: {
+    borderColor: defaultColors.accent,
+    backgroundColor: `${defaultColors.accent}22`,
+  },
+  chipAZText: {
+    color: defaultColors.text,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
+    letterSpacing: 0.4,
+  },
+  chipAZTextActive: {
+    color: defaultColors.accent,
+  },
+  cashIconBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: defaultColors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cashIconBtnActive: {
+    borderColor: defaultColors.accent,
+    backgroundColor: `${defaultColors.accent}22`,
+  },
+  cashIconText: {
+    color: defaultColors.muted,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  cashIconTextActive: {
+    color: defaultColors.accent,
+  },
+  cashTooltip: {
+    position: "absolute",
+    bottom: 36,
+    right: 0,
+    width: 220,
+    padding: spacing.sm,
+    borderRadius: radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: defaultColors.border,
+    backgroundColor: defaultColors.surface,
+    zIndex: 20,
+  },
+  cashTooltipText: {
+    color: defaultColors.text,
+    fontSize: typography.caption,
+    lineHeight: 16,
+  },
+  sectionHeader: {
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  sectionHeaderTitle: {
+    color: defaultColors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  sectionHeaderMeta: {
+    marginTop: 1,
+    color: defaultColors.muted,
+    fontSize: typography.caption,
+  },
+  cashBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cashBadgeText: {
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+  },
+  cashRow: {
+    opacity: 0.9,
+  },
+  infoGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    rowGap: spacing.md,
+  },
+  infoSectionLabel: {
+    fontSize: typography.micro,
+    fontWeight: typography.weightSemibold,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  infoKvRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.xs,
+  },
+  infoKvLabel: {
+    fontSize: typography.caption,
+  },
+  infoKvValue: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
+    fontVariant: ["tabular-nums"],
+    textAlign: "right",
+  },
+  infoTabWrap: {
+    // expandedWrap already contributes md(12) horizontal / sm(8) vertical padding;
+    // add the remainder so the info content sits at a consistent ~16px inset.
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.sm,
+    gap: 16,
+  },
+  statGrid: {
+    flexDirection: "row",
+    backgroundColor: "#1E232B",
+    borderRadius: 10,
+    overflow: "hidden",
+    gap: 1,
+  },
+  statBlock: {
+    flex: 1,
+    backgroundColor: "#12161C",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  statBlockLabel: {
+    fontSize: 11,
+    color: "#8A94A3",
+    marginBottom: 4,
+  },
+  statBlockValue: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#F5F7FA",
+    fontVariant: ["tabular-nums"],
+  },
+  statBlockSub: {
+    fontSize: 11,
+    marginTop: 2,
+    fontVariant: ["tabular-nums"],
+  },
+  chartCard: {
+    borderWidth: 1,
+    borderColor: "#1E232B",
+    borderRadius: 10,
+    backgroundColor: "#0E1116",
+    padding: 14,
+  },
+  perfLabel: {
+    fontSize: 11,
+    color: "#5A6472",
+    letterSpacing: 0.55,
+    marginBottom: 8,
   },
   chipWrap: {
     marginBottom: spacing.sm,
@@ -1095,7 +1494,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  rowInteractive: {
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.md,
+    ...(Platform.OS === "web" ? ({ cursor: "pointer", transitionDuration: "150ms" } as object) : {}),
+  },
+  rowChevron: {
+    marginLeft: spacing.sm,
+    width: 14,
+    textAlign: "center",
+    fontSize: typography.caption,
+    opacity: 0,
+  },
+  rowChevronVisible: {
+    opacity: 1,
   },
   holdingLeft: {
     flexDirection: "row",
@@ -1129,48 +1542,170 @@ const styles = StyleSheet.create({
     fontSize: typography.micro,
     marginTop: 1,
   },
-  sparklineWrap: {
-    marginHorizontal: spacing.sm,
+  // Value columns (Invested | Current | Alloc)
+  holdingValueColumns: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 24,
   },
-  holdingRight: {
+  valueColumn: {
+    alignItems: "flex-end",
+    minWidth: 72,
+  },
+  allocColumn: {
+    alignItems: "flex-end",
+    minWidth: 48,
+  },
+  valueColumnLabel: {
+    fontSize: 11,
+    fontWeight: typography.weightMedium,
+    marginBottom: 2,
+  },
+  valueColumnInvested: {
+    fontSize: typography.body,
+    fontWeight: typography.weightRegular,
+    fontVariant: ["tabular-nums"],
+    fontFamily: typography.mono,
+  },
+  valueColumnCurrent: {
+    fontSize: typography.body,
+    fontWeight: typography.weightBold,
+    fontVariant: ["tabular-nums"],
+    fontFamily: typography.mono,
+  },
+  valueColumnGain: {
+    fontSize: typography.micro,
+    fontWeight: typography.weightMedium,
+    marginTop: 2,
+    fontFamily: typography.mono,
+  },
+  valueColumnAlloc: {
+    fontSize: 14,
+    fontWeight: typography.weightBold,
+    fontVariant: ["tabular-nums"],
+    textAlign: "right",
+    fontFamily: typography.mono,
+  },
+  // Shared 4-column grid: HOLDING (1fr) | INVESTED (150) | CURRENT (160) | ALLOC (70)
+  gridRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.md,
+  },
+  colHolding: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingRight: spacing.md,
+  },
+  colHoldingIndent: {
+    paddingLeft: 16,
+  },
+  cellInvested: {
+    width: 150,
     alignItems: "flex-end",
   },
-  holdingValue: {
-    fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
+  cellCurrent: {
+    width: 160,
+    alignItems: "flex-end",
+  },
+  cellAlloc: {
+    width: 70,
+    alignItems: "flex-end",
+  },
+  valueInvested: {
+    fontSize: 13,
+    fontWeight: typography.weightRegular,
+    color: "#8A94A3",
     fontVariant: ["tabular-nums"],
+    textAlign: "right",
   },
-  holdingGain: {
-    fontSize: typography.micro,
-    marginTop: 1,
+  valueCurrent: {
+    fontSize: 14,
+    fontWeight: typography.weightBold,
+    color: "#F5F7FA",
+    fontVariant: ["tabular-nums"],
+    textAlign: "right",
   },
-  accountChipRow: {
-    paddingVertical: spacing.sm,
-    paddingLeft: 36,
+  valueGain: {
+    fontSize: 11,
+    fontWeight: typography.weightRegular,
+    marginTop: 2,
+    fontVariant: ["tabular-nums"],
+    textAlign: "right",
+  },
+  valueAlloc: {
+    fontSize: 14,
+    fontWeight: typography.weightBold,
+    fontVariant: ["tabular-nums"],
+    textAlign: "right",
+  },
+  sortHeaderCell: {
+    ...(Platform.OS === "web"
+      ? ({ cursor: "pointer", userSelect: "none" } as object)
+      : {}),
+  },
+  sortHeaderHint: {
+    color: "#3A4350",
+  },
+  sectionHeaderRow: {
+    marginTop: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  sectionChevron: {
+    width: 14,
+    textAlign: "center",
+    fontSize: typography.caption,
+    marginRight: spacing.xs,
+  },
+  // Sticky column header for the holdings table
+  columnHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingVertical: spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  accountCountChip: {
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    fontSize: typography.micro,
-    overflow: "hidden",
+  stickyHeader: Platform.OS === "web" ? ({ position: "sticky", top: 0, zIndex: 10 } as object) : {},
+  headerLeft: {
+    flex: 1,
+    paddingRight: spacing.md,
   },
-  detailsBtn: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+  columnHeaderText: {
+    fontSize: 11,
+    fontWeight: typography.weightSemibold,
+    letterSpacing: 0.44,
+    textTransform: "uppercase",
   },
-  detailsBtnText: {
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
+  columnHeaderAlloc: {
+    textAlign: "right",
   },
   expandedWrap: {
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  statHeader: {
+    flexDirection: "row",
+    paddingVertical: spacing.md,
+    marginBottom: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  statColumn: {
+    flex: 1,
+  },
+  statLabel: {
+    fontSize: typography.micro,
+    fontWeight: typography.weightMedium,
+    marginBottom: 2,
+  },
+  statValue: {
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+    fontVariant: ["tabular-nums"],
   },
   tabBar: {
     flexDirection: "row",

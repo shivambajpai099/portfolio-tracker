@@ -1,127 +1,117 @@
-import { useRouter } from "expo-router";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { useState, useCallback } from "react";
+import { Text, TextInput, View } from "react-native";
+import { AuthCardLayout, authInputStyles } from "../../src/components/AuthCardLayout";
 import { useAuthStore } from "../../src/store/authStore";
-import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
+import { useTheme } from "../../src/theme";
 
 export default function SignupScreen() {
-  const { colors } = useTheme();
-  const router = useRouter();
+  const { colors: themeColors } = useTheme();
   const signUp = useAuthStore((state) => state.signUp);
+  const signInGoogle = useAuthStore((state) => state.signInGoogle);
   const clearError = useAuthStore((state) => state.clearError);
   const loading = useAuthStore((state) => state.loading);
+  const googleLoading = useAuthStore((state) => state.googleLoading);
   const error = useAuthStore((state) => state.error);
 
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // Name is optional for the signup flow (Supabase doesn't require it by default)
   const canSubmit = email.trim().length > 0 && password.length >= 6 && !loading;
 
-  const submit = async () => {
+  const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
+    // Note: Name can be stored in user metadata if needed in the future
     await signUp(email.trim(), password);
-  };
+  }, [canSubmit, email, password, signUp]);
+
+  const handleGoogleSignIn = useCallback(async () => {
+    await signInGoogle();
+  }, [signInGoogle]);
+
+  const handleNameChange = useCallback((value: string) => {
+    setName(value);
+    clearError();
+  }, [clearError]);
+
+  const handleEmailChange = useCallback((value: string) => {
+    setEmail(value);
+    clearError();
+  }, [clearError]);
+
+  const handlePasswordChange = useCallback((value: string) => {
+    setPassword(value);
+    clearError();
+  }, [clearError]);
 
   return (
-    <ScreenContainer>
-      <View style={styles.wrap}>
-        <Text style={styles.title}>Create Account</Text>
-        <Text style={styles.subtitle}>Use email and password to create your account.</Text>
+    <AuthCardLayout
+      heading="Create your account"
+      subtext="Start tracking your portfolio in seconds."
+      submitLabel="Create account"
+      submitDisabled={!canSubmit}
+      submitLoading={loading}
+      onSubmit={handleSubmit}
+      onGoogleSignIn={handleGoogleSignIn}
+      googleLoading={googleLoading}
+      footerText="Already have an account?"
+      footerLinkLabel="Sign in"
+      footerLinkHref="/(auth)/login"
+      error={error}
+    >
+      {/* Name Field */}
+      <View style={authInputStyles.inputContainer}>
+        <Text style={[authInputStyles.inputLabel, { color: themeColors.muted }]}>Name</Text>
+        <TextInput
+          value={name}
+          onChangeText={handleNameChange}
+          autoCapitalize="words"
+          autoComplete="name"
+          placeholder="Your name"
+          placeholderTextColor={themeColors.muted}
+          style={[
+            authInputStyles.input,
+            { backgroundColor: themeColors.bg, borderColor: themeColors.border, color: themeColors.text },
+          ]}
+        />
+      </View>
 
+      {/* Email Field */}
+      <View style={authInputStyles.inputContainer}>
+        <Text style={[authInputStyles.inputLabel, { color: themeColors.muted }]}>Email</Text>
         <TextInput
           value={email}
-          onChangeText={(value) => {
-            setEmail(value);
-            clearError();
-          }}
+          onChangeText={handleEmailChange}
           keyboardType="email-address"
           autoCapitalize="none"
-          placeholder="Email"
-          placeholderTextColor={colors.muted}
-          style={styles.input}
+          autoComplete="email"
+          placeholder="you@example.com"
+          placeholderTextColor={themeColors.muted}
+          style={[
+            authInputStyles.input,
+            { backgroundColor: themeColors.bg, borderColor: themeColors.border, color: themeColors.text },
+          ]}
         />
+      </View>
+
+      {/* Password Field */}
+      <View style={authInputStyles.inputContainer}>
+        <Text style={[authInputStyles.inputLabel, { color: themeColors.muted }]}>Password</Text>
         <TextInput
           value={password}
-          onChangeText={(value) => {
-            setPassword(value);
-            clearError();
-          }}
+          onChangeText={handlePasswordChange}
           secureTextEntry
-          placeholder="Password (min 6 characters)"
-          placeholderTextColor={colors.muted}
-          style={styles.inputCompact}
+          autoComplete="new-password"
+          placeholder="Min. 6 characters"
+          placeholderTextColor={themeColors.muted}
+          style={[
+            authInputStyles.input,
+            { backgroundColor: themeColors.bg, borderColor: themeColors.border, color: themeColors.text },
+          ]}
         />
-
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-        <Pressable style={[styles.primaryBtn, !canSubmit && styles.disabledBtn]} onPress={submit}>
-          <Text style={styles.primaryText}>{loading ? "Creating..." : "Sign up"}</Text>
-        </Pressable>
-
-        <Pressable style={styles.linkWrap} onPress={() => router.push("/(auth)/login" as never)}>
-          <Text style={styles.linkText}>Already have an account? Login</Text>
-        </Pressable>
       </View>
-    </ScreenContainer>
+    </AuthCardLayout>
   );
 }
 
-const styles = StyleSheet.create({
-  wrap: {
-    paddingTop: spacing.xxxl,
-  },
-  title: {
-    color: defaultColors.text,
-    fontSize: typography.heading,
-    fontWeight: typography.weightSemibold,
-  },
-  subtitle: {
-    marginTop: spacing.xs,
-    marginBottom: spacing.xl,
-    color: defaultColors.muted,
-    fontSize: typography.body,
-  },
-  input: {
-    borderRadius: radii.lg,
-    backgroundColor: defaultColors.surface,
-    color: defaultColors.text,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  inputCompact: {
-    marginTop: spacing.sm,
-    borderRadius: radii.lg,
-    backgroundColor: defaultColors.surface,
-    color: defaultColors.text,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  errorText: {
-    marginTop: spacing.sm,
-    color: defaultColors.negative,
-    fontSize: typography.caption,
-  },
-  primaryBtn: {
-    marginTop: spacing.lg,
-    borderRadius: radii.lg,
-    backgroundColor: defaultColors.accent,
-    alignItems: "center",
-    paddingVertical: spacing.md,
-  },
-  disabledBtn: {
-    opacity: 0.6,
-  },
-  primaryText: {
-    color: defaultColors.bg,
-    fontWeight: typography.weightSemibold,
-  },
-  linkWrap: {
-    marginTop: spacing.lg,
-    alignItems: "center",
-  },
-  linkText: {
-    color: defaultColors.accent,
-    fontSize: typography.caption,
-  },
-});

@@ -3,8 +3,12 @@ import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { TourTarget, useOnboardingTour } from "../../src/components/OnboardingTourProvider";
 import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { SegmentedControl } from "../../src/components/SegmentedControl";
+import { UserMenu } from "../../src/components/UserMenu";
+import { AccountsSection } from "./accounts";
 import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { radii, spacing, typography, useTheme, type ThemeColors } from "../../src/theme";
@@ -60,7 +64,7 @@ export default function SettingsScreen() {
   // ── Reporting currency ───────────────────────────────────────────────────
   const setReportingCurrency = (currency: Currency) => {
     updateSettings({ reportingCurrency: currency });
-    flash(`Reporting currency set to ${currency}.`);
+    flash(`Display currency set to ${currency}.`);
   };
 
   // ── Export ───────────────────────────────────────────────────────────────
@@ -176,6 +180,8 @@ export default function SettingsScreen() {
     flash("Signed out.");
   };
 
+  const { startTour } = useOnboardingTour();
+
   const closeGuide = () => {
     setShowGuide(false);
     if (!settings.onboardingTipsSeen) {
@@ -184,20 +190,33 @@ export default function SettingsScreen() {
   };
 
   const showGuideNextLaunch = () => {
-    updateSettings({ onboardingTipsSeen: false });
-    flash("Guide will auto-open next time you open the app.");
+    // Reset both the static guide and spotlight tour flags
+    updateSettings({ onboardingTipsSeen: false, spotlightTourSeen: false });
+    flash("Guide and tour will show next time you open the app.");
+  };
+
+  const startTourNow = () => {
+    startTour();
   };
 
   return (
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
+        <View style={styles.headerRow}>
+          <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
+          <UserMenu />
+        </View>
 
         {statusMsg ? (
           <View style={[styles.statusCard, { backgroundColor: colors.surface }]}>
             <Text style={[styles.statusText, { color: colors.accent }]}>{statusMsg}</Text>
           </View>
         ) : null}
+
+        {/* ── Accounts (primary management task) ────────────────────── */}
+        <View style={styles.accountsSectionWrap}>
+          <AccountsSection />
+        </View>
 
         {/* ── Exchange rate ────────────────────────────────────────── */}
         <SectionLabel colors={colors}>Exchange Rate</SectionLabel>
@@ -224,114 +243,102 @@ export default function SettingsScreen() {
           {rateError ? <Text style={[styles.errorText, { color: colors.negative }]}>{rateError}</Text> : null}
         </View>
 
-        {/* ── Reporting currency ───────────────────────────────────── */}
-        <SectionLabel colors={colors}>Reporting Currency</SectionLabel>
-        <View style={styles.currencyRow}>
-          {(["INR", "USD"] as Currency[]).map((c) => {
-            const active = settings.reportingCurrency === c;
-            return (
-              <Pressable key={c} onPress={() => setReportingCurrency(c)} style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}>
-                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{c}</Text>
-              </Pressable>
-            );
-          })}
+        {/* ── Display currency ─────────────────────────────────────── */}
+        <SectionLabel colors={colors}>Display Currency</SectionLabel>
+        <Text style={[styles.hintText, { color: colors.muted }]}>
+          Currency used to display portfolio values across the app. Saved on this device.
+        </Text>
+        <View style={styles.controlRow}>
+          <SegmentedControl
+            options={[
+              { value: "INR", label: "₹ INR" },
+              { value: "USD", label: "$ USD" },
+            ]}
+            value={settings.reportingCurrency}
+            onChange={(c) => setReportingCurrency(c as Currency)}
+          />
         </View>
 
         {/* ── Allocation settings ──────────────────────────────────── */}
         <SectionLabel colors={colors}>Allocation Basis</SectionLabel>
-        <View style={styles.currencyRow}>
-          {(["CURRENT_VALUE", "INVESTED_VALUE"] as AllocationBasis[]).map((basis) => {
-            const active = settings.allocationBasis === basis;
-            const label = basis === "CURRENT_VALUE" ? "Current Value" : "Invested Value";
-            return (
-              <Pressable
-                key={basis}
-                onPress={() => updateSettings({ allocationBasis: basis })}
-                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
-              >
-                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
-              </Pressable>
-            );
-          })}
+        <View style={styles.controlRow}>
+          <SegmentedControl
+            options={[
+              { value: "CURRENT_VALUE", label: "Current" },
+              { value: "INVESTED_VALUE", label: "Invested" },
+            ]}
+            value={settings.allocationBasis}
+            onChange={(basis) => updateSettings({ allocationBasis: basis as AllocationBasis })}
+          />
         </View>
 
         <SectionLabel colors={colors}>Cash in Allocation</SectionLabel>
-        <View style={styles.currencyRow}>
-          {([true, false] as const).map((include) => {
-            const active = settings.allocationIncludeCash === include;
-            const label = include ? "Include Cash" : "Exclude Cash";
-            return (
-              <Pressable
-                key={String(include)}
-                onPress={() => updateSettings({ allocationIncludeCash: include })}
-                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
-              >
-                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
-              </Pressable>
-            );
-          })}
+        <View style={styles.controlRow}>
+          <SegmentedControl
+            options={[
+              { value: "true", label: "Include" },
+              { value: "false", label: "Exclude" },
+            ]}
+            value={String(settings.allocationIncludeCash)}
+            onChange={(v) => updateSettings({ allocationIncludeCash: v === "true" })}
+          />
         </View>
 
         <SectionLabel colors={colors}>History Retention</SectionLabel>
-        <View style={styles.currencyRowWrap}>
-          {([
-            ["6M", "6 Months"],
-            ["1Y", "1 Year"],
-            ["2Y", "2 Years"],
-            ["ALL", "All"],
-          ] as const).map(([value, label]) => {
-            const active = (settings.timelineRetention ?? "1Y") === value;
-            return (
-              <Pressable
-                key={value}
-                onPress={() => updateSettings({ timelineRetention: value as TimelineRetention })}
-                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
-              >
-                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
-              </Pressable>
-            );
-          })}
+        <View style={styles.controlRow}>
+          <SegmentedControl
+            options={[
+              { value: "6M", label: "6M" },
+              { value: "1Y", label: "1Y" },
+              { value: "2Y", label: "2Y" },
+              { value: "ALL", label: "All" },
+            ]}
+            value={settings.timelineRetention ?? "1Y"}
+            onChange={(v) => updateSettings({ timelineRetention: v as TimelineRetention })}
+          />
         </View>
 
         {/* ── Theme ────────────────────────────────────────────────── */}
         <SectionLabel colors={colors}>Theme</SectionLabel>
-        <View style={styles.currencyRowWrap}>
-          {([
-            ["light", "Light"],
-            ["dark", "Dark"],
-            ["system", "System"],
-          ] as const).map(([value, label]) => {
-            const active = (settings.themeMode ?? "dark") === value;
-            return (
-              <Pressable
-                key={value}
-                onPress={() => updateSettings({ themeMode: value as ThemeMode })}
-                style={[styles.currencyPill, { backgroundColor: active ? colors.accent : colors.surface }]}
-              >
-                <Text style={[styles.currencyPillText, { color: active ? colors.bg : colors.muted }]}>{label}</Text>
-              </Pressable>
-            );
-          })}
+        <View style={styles.controlRow}>
+          <SegmentedControl
+            options={[
+              { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
+              { value: "system", label: "System" },
+            ]}
+            value={settings.themeMode ?? "dark"}
+            onChange={(v) => updateSettings({ themeMode: v as ThemeMode })}
+          />
         </View>
 
         {/* ── Help ─────────────────────────────────────────────────── */}
-        <SectionLabel colors={colors}>Help</SectionLabel>
-        <View style={styles.cardList}>
-          <Pressable onPress={() => setShowGuide(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Portfolio Guide</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Understand metrics, filters, and how to input holdings</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>?</Text>
-          </Pressable>
-          <Pressable onPress={showGuideNextLaunch} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Show Guide on Next Launch</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Useful when sharing the app with someone new</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>↻</Text>
-          </Pressable>
-        </View>
+        <TourTarget tourKey="settings">
+          <SectionLabel colors={colors}>Help</SectionLabel>
+          <View style={styles.cardList}>
+            <Pressable onPress={startTourNow} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
+              <View>
+                <Text style={[styles.actionTitle, { color: colors.text }]}>Start Guided Tour</Text>
+                <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Walk through key features of the app step by step</Text>
+              </View>
+              <Text style={{ color: colors.muted }}>▶</Text>
+            </Pressable>
+            <Pressable onPress={() => setShowGuide(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
+              <View>
+                <Text style={[styles.actionTitle, { color: colors.text }]}>Portfolio Guide</Text>
+                <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Understand metrics, filters, and how to input holdings</Text>
+              </View>
+              <Text style={{ color: colors.muted }}>?</Text>
+            </Pressable>
+            <Pressable onPress={showGuideNextLaunch} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
+              <View>
+                <Text style={[styles.actionTitle, { color: colors.text }]}>Show Guide on Next Launch</Text>
+                <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Useful when sharing the app with someone new</Text>
+              </View>
+              <Text style={{ color: colors.muted }}>↻</Text>
+            </Pressable>
+          </View>
+        </TourTarget>
 
         {/* ── Data ─────────────────────────────────────────────────── */}
         <SectionLabel colors={colors}>Data</SectionLabel>
@@ -410,8 +417,13 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 40,
   },
-  title: {
+  headerRow: {
     marginBottom: spacing.xxl,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  title: {
     fontSize: typography.heading,
     fontWeight: typography.weightSemibold,
   },
@@ -423,6 +435,9 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: typography.body,
+  },
+  accountsSectionWrap: {
+    marginBottom: spacing.xl,
   },
   sectionLabel: {
     marginBottom: spacing.md,
@@ -465,24 +480,15 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     fontSize: typography.caption,
   },
-  currencyRow: {
-    marginBottom: spacing.xxl,
+  controlRow: {
+    marginBottom: spacing.xl,
     flexDirection: "row",
-    gap: spacing.sm,
+    alignItems: "flex-start",
   },
-  currencyRowWrap: {
-    marginBottom: spacing.xxl,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  currencyPill: {
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
-  },
-  currencyPillText: {
-    fontWeight: typography.weightSemibold,
+  hintText: {
+    fontSize: typography.caption,
+    marginBottom: spacing.sm,
+    lineHeight: 16,
   },
   cardList: {
     marginBottom: spacing.sm,

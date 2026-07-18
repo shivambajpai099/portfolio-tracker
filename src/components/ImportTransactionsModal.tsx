@@ -44,6 +44,7 @@ interface ImportTransactionsModalProps {
   onComplete: (result: ImportCompleteResult) => void;
   setAccountTransactions: (accountId: string, transactions: Transaction[]) => void;
   updateAccount?: (accountId: string, updates: Partial<Account>) => void;
+  updateMarketPrices?: (prices: Record<string, number>) => void;
   /** Pre-select an account when opening the modal */
   preSelectedAccountId?: string;
 }
@@ -63,6 +64,7 @@ export function ImportTransactionsModal({
   onComplete,
   setAccountTransactions,
   updateAccount,
+  updateMarketPrices,
   preSelectedAccountId,
 }: ImportTransactionsModalProps) {
   // Step state
@@ -271,6 +273,15 @@ export function ImportTransactionsModal({
       // Replace all transactions for this account
       setAccountTransactions(selectedAccountId, transactions);
 
+      // Save fetched prices to store for transaction-derived holdings
+      if (updateMarketPrices && priceMap.size > 0) {
+        const pricesRecord: Record<string, number> = {};
+        for (const [symbol, data] of priceMap.entries()) {
+          pricesRecord[symbol] = data.price;
+        }
+        updateMarketPrices(pricesRecord);
+      }
+
       // Update account metadata
       if (updateAccount) {
         updateAccount(selectedAccountId, {
@@ -326,9 +337,18 @@ export function ImportTransactionsModal({
                   style={[styles.sourcePill, isSelected && styles.sourcePillActive]}
                   onPress={() => setSelectedParserId(parser.id)}
                 >
-                  <Text style={[styles.sourcePillText, isSelected && styles.sourcePillTextActive]}>
-                    {parser.displayName}
-                  </Text>
+                  <View style={styles.sourcePillContent}>
+                    <Text style={[styles.sourcePillText, isSelected && styles.sourcePillTextActive]}>
+                      {parser.displayName}
+                    </Text>
+                    {parser.recommended && (
+                      <View style={[styles.recommendedBadge, isSelected && styles.recommendedBadgeActive]}>
+                        <Text style={[styles.recommendedBadgeText, isSelected && styles.recommendedBadgeTextActive]}>
+                          Recommended
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                 </Pressable>
               );
             })}
@@ -563,11 +583,12 @@ export function ImportTransactionsModal({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
+      animationType="fade"
+      transparent
       onRequestClose={handleClose}
     >
-      <View style={styles.container}>
+      <View style={styles.overlay}>
+        <View style={styles.container}>
         {/* Progress indicator */}
         <View style={styles.progress}>
           {["upload", "account", "review"].map((s, idx) => (
@@ -586,15 +607,34 @@ export function ImportTransactionsModal({
         {step === "upload" && renderUploadStep()}
         {step === "account" && renderAccountStep()}
         {step === "review" && renderReviewStep()}
+        </View>
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  overlay: {
     flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxl,
+  },
+  container: {
+    width: "100%",
+    maxWidth: 420,
+    maxHeight: "90%",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#262B33",
     backgroundColor: colors.bg,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.5,
+    shadowRadius: 40,
+    elevation: 24,
   },
   progress: {
     flexDirection: "row",
@@ -653,6 +693,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     borderColor: colors.accent,
   },
+  sourcePillContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
   sourcePillText: {
     fontSize: typography.caption,
     color: colors.muted,
@@ -660,6 +705,23 @@ const styles = StyleSheet.create({
   sourcePillTextActive: {
     color: colors.bg,
     fontWeight: typography.weightSemibold,
+  },
+  recommendedBadge: {
+    backgroundColor: `${colors.positive}22`,
+    borderRadius: radii.sm,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 1,
+  },
+  recommendedBadgeActive: {
+    backgroundColor: `${colors.bg}33`,
+  },
+  recommendedBadgeText: {
+    fontSize: 9,
+    fontWeight: typography.weightSemibold,
+    color: colors.positive,
+  },
+  recommendedBadgeTextActive: {
+    color: colors.bg,
   },
   sourceHint: {
     fontSize: typography.caption,
@@ -694,12 +756,13 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginTop: "auto",
     paddingTop: spacing.lg,
+    justifyContent: "flex-end",
   },
   primaryButton: {
-    flex: 1,
     backgroundColor: colors.accent,
     borderRadius: radii.md,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
     alignItems: "center",
   },
   primaryButtonText: {
@@ -708,10 +771,10 @@ const styles = StyleSheet.create({
     fontWeight: typography.weightSemibold,
   },
   secondaryButton: {
-    flex: 1,
     backgroundColor: colors.surface,
     borderRadius: radii.md,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
     alignItems: "center",
   },
   secondaryButtonText: {

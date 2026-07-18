@@ -1,3 +1,5 @@
+import { Platform } from "react-native";
+
 export const typography = {
   title: 28,
   heading: 22,
@@ -9,5 +11,6 @@ export const typography = {
   weightMedium: "500",
   weightSemibold: "600",
   weightBold: "700",
+  mono: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }) as string,
 } as const;
 

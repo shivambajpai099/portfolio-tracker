@@ -8,6 +8,7 @@
 import type { Currency, Holding } from "../../types/portfolio";
 import type { Transaction, ParsedTransaction, TransactionParseResult } from "../../types/transaction";
 import { deriveHoldingsFromTransactions } from "../portfolio/fifoCalculator";
+import { applyCorporateActions } from "../portfolio/corporateActions";
 import type { EnrichedHolding, TransactionImportReviewData, SkippedRow } from "./types";
 
 /**
@@ -53,7 +54,7 @@ export const createTransactionsFromParseResult = (
 ): Transaction[] => {
   const currency = parseResult.currency || "USD";
 
-  return parseResult.transactions.map((parsed) => {
+  const transactions = parseResult.transactions.map((parsed) => {
     const priceData = priceMap?.get(parsed.symbol.toUpperCase());
     return createTransactionFromParsed(
       parsed,
@@ -62,6 +63,10 @@ export const createTransactionsFromParseResult = (
       priceData?.companyName || parsed.companyName
     );
   });
+
+  // Reconcile corporate actions (bonus/demerger/rename) that credit shares
+  // without a broker order row — prevents false FIFO short-sell warnings.
+  return applyCorporateActions(transactions);
 };
 
 /**

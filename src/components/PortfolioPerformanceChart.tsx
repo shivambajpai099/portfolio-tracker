@@ -1,9 +1,25 @@
-import { useMemo, useState } from "react";
-import { Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
-import { LineChart } from "react-native-chart-kit";
-import { colors, radii, spacing, typography, useTheme } from "../theme";
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  LayoutChangeEvent,
+  PanResponder,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import Svg, {
+  Circle,
+  Defs,
+  G,
+  Line,
+  LinearGradient,
+  Path,
+  Stop,
+  Text as SvgText,
+} from "react-native-svg";
+import { radii, spacing, typography, useTheme } from "../theme";
 import type { Currency } from "../types/portfolio";
-import { formatMoney, formatCompact, formatCompactGainLoss } from "../utils/format";
+import { formatMoney, formatCompactAxis } from "../utils/format";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -13,6 +29,10 @@ export interface PortfolioHistoryPoint {
   date: string;
   investedAmount: number;
   currentValue: number;
+  /** Optional: cash balance at this point */
+  cashBalance?: number;
+  /** Optional: number of holdings at this point */
+  holdingsCount?: number;
 }
 
 export type TimeRangeView = "monthly" | "quarterly" | "yearly";
@@ -37,15 +57,49 @@ interface PortfolioPerformanceChartProps {
 // ---------------------------------------------------------------------------
 
 const CHART_HEIGHT = 220;
+const MIN_CHART_WIDTH = 280;
+const PADDING_LEFT = 48;
+const PADDING_RIGHT = 16;
+const PADDING_TOP = 24;
+const PADDING_BOTTOM = 28;
+const Y_AXIS_SECTIONS = 4;
+const Y_AXIS_PADDING_PERCENT = 0.075; // 7.5% padding top and bottom
+
 const INVESTED_COLOR = "#6366F1"; // Indigo
 const CURRENT_VALUE_COLOR = "#22C55E"; // Green
+const GRID_COLOR = "#1E2128";
+const TOOLTIP_BG = "#1A1D24";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Formats a date string based on the time range view.
+ * Formats a date string with year context.
+ */
+const formatDateWithYear = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return dateStr;
+  const month = date.toLocaleDateString(undefined, { month: "short" });
+  const year = date.getFullYear().toString().slice(-2);
+  return `${month} '${year}`;
+};
+
+/**
+ * Formats a full date for tooltips
+ */
+const formatFullDate = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return dateStr;
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+};
+
+/**
+ * Formats a date string based on the time range view (for exports/tests).
  */
 export const formatDateLabel = (dateStr: string, view: TimeRangeView): string => {
   const date = new Date(dateStr);
@@ -117,21 +171,104 @@ export const projectDataToCoords = (
 };
 
 /**
- * Formats large numbers for Y-axis labels (e.g., 100000 -> 100L)
- * Uses Indian numbering notation: k (thousands), L (lakhs), Cr (crores)
+ * Build a smooth line path (straight segments between points)
  */
-const formatYAxisLabel = (value: string): string => {
-  const num = parseFloat(value);
-  if (num >= 10000000) {
-    return `${(num / 10000000).toFixed(1)}Cr`;
+const buildLinePath = (coords: Array<{ x: number; y: number }>): string => {
+  if (coords.length === 0) return "";
+  return coords.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ");
+};
+
+/**
+ * Build a step-line path (horizontal then vertical between points)
+ * This is used for invested values that should only change on transactions
+ */
+const buildStepPath = (coords: Array<{ x: number; y: number }>): string => {
+  if (coords.length === 0) return "";
+  if (coords.length === 1) return `M ${coords[0].x.toFixed(2)} ${coords[0].y.toFixed(2)}`;
+  
+  let path = `M ${coords[0].x.toFixed(2)} ${coords[0].y.toFixed(2)}`;
+  for (let i = 1; i < coords.length; i++) {
+    // Horizontal line to new x, then vertical to new y
+    path += ` H ${coords[i].x.toFixed(2)} V ${coords[i].y.toFixed(2)}`;
   }
-  if (num >= 100000) {
-    return `${(num / 100000).toFixed(1)}L`;
+  return path;
+};
+
+/**
+ * Build area path under a line for gradient fill
+ */
+const buildAreaPath = (
+  coords: Array<{ x: number; y: number }>,
+  baseY: number,
+  isStep: boolean = false
+): string => {
+  if (coords.length === 0) return "";
+  
+  let linePath: string;
+  if (isStep) {
+    linePath = buildStepPath(coords);
+  } else {
+    linePath = buildLinePath(coords);
   }
-  if (num >= 1000) {
-    return `${(num / 1000).toFixed(0)}k`;
+  
+  const lastX = coords[coords.length - 1].x;
+  const firstX = coords[0].x;
+  
+  return `${linePath} L ${lastX.toFixed(2)} ${baseY.toFixed(2)} L ${firstX.toFixed(2)} ${baseY.toFixed(2)} Z`;
+};
+
+/**
+ * Get evenly distributed label indices for X-axis
+ */
+const getLabelIndices = (dataLength: number, maxLabels: number = 5): number[] => {
+  if (dataLength <= maxLabels) {
+    return Array.from({ length: dataLength }, (_, i) => i);
   }
-  return num.toFixed(0);
+  
+  const indices: number[] = [];
+  const step = (dataLength - 1) / (maxLabels - 1);
+  
+  for (let i = 0; i < maxLabels; i++) {
+    indices.push(Math.round(i * step));
+  }
+  
+  return indices;
+};
+
+/**
+ * Returns a "nice" rounded step (1, 2, 2.5 or 5 × 10^n) for the given raw step
+ * so axis intervals fall on clean, human-friendly values.
+ */
+const niceStep = (rawStep: number): number => {
+  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const normalized = rawStep / magnitude;
+  let niceNormalized: number;
+  if (normalized <= 1) niceNormalized = 1;
+  else if (normalized <= 2) niceNormalized = 2;
+  else if (normalized <= 2.5) niceNormalized = 2.5;
+  else if (normalized <= 5) niceNormalized = 5;
+  else niceNormalized = 10;
+  return niceNormalized * magnitude;
+};
+
+/**
+ * Calculate nice Y-axis values
+ */
+const calculateYAxisValues = (
+  minValue: number,
+  maxValue: number,
+  sections: number
+): number[] => {
+  const range = maxValue - minValue;
+  const step = range / sections;
+  
+  const values: number[] = [];
+  for (let i = 0; i <= sections; i++) {
+    values.push(minValue + step * i);
+  }
+  
+  return values;
 };
 
 // ---------------------------------------------------------------------------
@@ -141,66 +278,219 @@ const formatYAxisLabel = (value: string): string => {
 export function PortfolioPerformanceChart({
   data,
   currency,
-  view = "monthly",
-  onViewChange,
   isLoading = false,
   error = null,
 }: PortfolioPerformanceChartProps) {
   const { colors: themeColors } = useTheme();
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+  
+  // Animation values
+  const hoverOpacity = useRef(new Animated.Value(0)).current;
+  const investedOpacity = useRef(new Animated.Value(1)).current;
 
-  // Get screen width for responsive chart
-  const screenWidth = Dimensions.get("window").width;
-  const chartWidth = Math.min(screenWidth - spacing.md * 2, 400);
+  // Handle container layout
+  const handleLayout = useCallback((e: LayoutChangeEvent) => {
+    setContainerWidth(e.nativeEvent.layout.width);
+  }, []);
 
-  // Selected point data
-  const selectedPoint = useMemo(() => {
-    if (selectedIndex === null || selectedIndex >= data.length) {
-      return data[data.length - 1] ?? null;
-    }
-    return data[selectedIndex];
-  }, [data, selectedIndex]);
+  // Calculate chart dimensions
+  const chartWidth = Math.max(containerWidth - spacing.md * 2, MIN_CHART_WIDTH);
+  const drawableWidth = chartWidth - PADDING_LEFT - PADDING_RIGHT;
+  const drawableHeight = CHART_HEIGHT - PADDING_TOP - PADDING_BOTTOM;
 
-  const gainLoss = useMemo(() => {
-    if (!selectedPoint) return null;
-    return calcGainLoss(selectedPoint);
-  }, [selectedPoint]);
-
-  // Prepare chart data
-  const chartData = useMemo(() => {
+  // Calculate Y-axis bounds with padding
+  const yAxisBounds = useMemo(() => {
     if (data.length === 0) {
+      return { min: 0, max: 100, range: 100, paddedMin: 0, paddedMax: 100 };
+    }
+
+    const allValues = data.flatMap((p) => [p.investedAmount, p.currentValue]);
+    const rawMin = Math.min(...allValues);
+    const rawMax = Math.max(...allValues);
+    const rawRange = rawMax - rawMin || 1;
+
+    // Add padding to prevent clipping
+    const padding = rawRange * Y_AXIS_PADDING_PERCENT;
+    const roughMin = Math.max(0, rawMin - padding);
+    const roughMax = rawMax + padding;
+
+    // Snap bounds to a "nice" step so axis labels land on clean, evenly
+    // spaced values (e.g. ₹1L, ₹2L, ₹3L) instead of oddly rounded numbers.
+    const step = niceStep((roughMax - roughMin) / Y_AXIS_SECTIONS);
+    const paddedMin = Math.max(0, Math.floor(roughMin / step) * step);
+    const paddedMax = Math.ceil(roughMax / step) * step;
+
+    return {
+      min: rawMin,
+      max: rawMax,
+      range: rawRange,
+      paddedMin,
+      paddedMax,
+    };
+  }, [data]);
+
+  // Project data points to SVG coordinates
+  const projectedData = useMemo(() => {
+    if (data.length === 0 || drawableWidth <= 0) {
       return {
-        labels: [],
-        datasets: [{ data: [0] }],
+        invested: [] as Array<{ x: number; y: number; point: PortfolioHistoryPoint }>,
+        current: [] as Array<{ x: number; y: number; point: PortfolioHistoryPoint }>,
       };
     }
 
-    // Limit labels to avoid crowding
-    const maxLabels = 6;
-    const step = Math.ceil(data.length / maxLabels);
-    const labels = data.map((point, index) => 
-      index % step === 0 || index === data.length - 1 
-        ? formatDateLabel(point.date, view) 
-        : ""
-    );
+    const { paddedMin, paddedMax } = yAxisBounds;
+    const valueRange = paddedMax - paddedMin || 1;
+
+    const projectPoint = (value: number, index: number) => {
+      const x = PADDING_LEFT + (data.length === 1 ? drawableWidth / 2 : (index / (data.length - 1)) * drawableWidth);
+      const normalized = (value - paddedMin) / valueRange;
+      const y = CHART_HEIGHT - PADDING_BOTTOM - normalized * drawableHeight;
+      return { x, y };
+    };
 
     return {
-      labels,
-      datasets: [
-        {
-          data: data.map((p) => p.investedAmount),
-          color: () => INVESTED_COLOR,
-          strokeWidth: 2,
-        },
-        {
-          data: data.map((p) => p.currentValue),
-          color: () => CURRENT_VALUE_COLOR,
-          strokeWidth: 2,
-        },
-      ],
-      legend: ["Invested", "Current Value"],
+      invested: data.map((point, index) => ({
+        ...projectPoint(point.investedAmount, index),
+        point,
+      })),
+      current: data.map((point, index) => ({
+        ...projectPoint(point.currentValue, index),
+        point,
+      })),
     };
-  }, [data, view]);
+  }, [data, drawableWidth, drawableHeight, yAxisBounds]);
+
+  // Y-axis labels
+  const yAxisLabels = useMemo(() => {
+    const { paddedMin, paddedMax } = yAxisBounds;
+    const values = calculateYAxisValues(paddedMin, paddedMax, Y_AXIS_SECTIONS);
+    const valueRange = paddedMax - paddedMin || 1;
+    
+    return values.map((value) => {
+      const normalized = (value - paddedMin) / valueRange;
+      const y = CHART_HEIGHT - PADDING_BOTTOM - normalized * drawableHeight;
+      return { value, y, label: formatCompactAxis(value, currency) };
+    });
+  }, [yAxisBounds, drawableHeight, currency]);
+
+  // X-axis labels
+  const xAxisLabels = useMemo(() => {
+    if (data.length === 0) return [];
+    
+    const indices = getLabelIndices(data.length, 5);
+    return indices.map((index) => {
+      const x = PADDING_LEFT + (data.length === 1 ? drawableWidth / 2 : (index / (data.length - 1)) * drawableWidth);
+      return {
+        x,
+        label: formatDateWithYear(data[index].date),
+      };
+    });
+  }, [data, drawableWidth]);
+
+  // SVG paths
+  const paths = useMemo(() => {
+    const investedCoords = projectedData.invested.map((p) => ({ x: p.x, y: p.y }));
+    const currentCoords = projectedData.current.map((p) => ({ x: p.x, y: p.y }));
+    const baseY = CHART_HEIGHT - PADDING_BOTTOM;
+
+    return {
+      investedLine: buildStepPath(investedCoords),
+      currentLine: buildLinePath(currentCoords),
+      currentArea: buildAreaPath(currentCoords, baseY, false),
+    };
+  }, [projectedData]);
+
+  // Handle touch/hover
+  const findNearestPoint = useCallback(
+    (touchX: number): number | null => {
+      if (projectedData.current.length === 0) return null;
+      
+      let nearestIndex = 0;
+      let nearestDistance = Infinity;
+      
+      for (let i = 0; i < projectedData.current.length; i++) {
+        const distance = Math.abs(projectedData.current[i].x - touchX);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = i;
+        }
+      }
+      
+      return nearestIndex;
+    },
+    [projectedData]
+  );
+
+  const handleHoverStart = useCallback(
+    (x: number, y: number) => {
+      const index = findNearestPoint(x);
+      if (index !== null) {
+        setHoveredIndex(index);
+        setTooltipPosition({ x, y });
+        
+        Animated.parallel([
+          Animated.timing(hoverOpacity, {
+            toValue: 1,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(investedOpacity, {
+            toValue: 0.5,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+    },
+    [findNearestPoint, hoverOpacity, investedOpacity]
+  );
+
+  const handleHoverEnd = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(hoverOpacity, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }),
+      Animated.timing(investedOpacity, {
+        toValue: 1,
+        duration: 150,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setHoveredIndex(null);
+      setTooltipPosition(null);
+    });
+  }, [hoverOpacity, investedOpacity]);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt) => {
+          const { locationX, locationY } = evt.nativeEvent;
+          handleHoverStart(locationX, locationY);
+        },
+        onPanResponderMove: (evt) => {
+          const { locationX, locationY } = evt.nativeEvent;
+          const index = findNearestPoint(locationX);
+          if (index !== null && index !== hoveredIndex) {
+            setHoveredIndex(index);
+            setTooltipPosition({ x: locationX, y: locationY });
+          }
+        },
+        onPanResponderRelease: handleHoverEnd,
+        onPanResponderTerminate: handleHoverEnd,
+      }),
+    [handleHoverStart, handleHoverEnd, findNearestPoint, hoveredIndex]
+  );
+
+  // Hovered point data
+  const hoveredPoint = hoveredIndex !== null ? data[hoveredIndex] : null;
+  const hoveredGainLoss = hoveredPoint ? calcGainLoss(hoveredPoint) : null;
 
   // Loading state
   if (isLoading) {
@@ -239,121 +529,260 @@ export function PortfolioPerformanceChart({
     );
   }
 
-  const chartConfig = {
-    backgroundColor: themeColors.surface,
-    backgroundGradientFrom: themeColors.surface,
-    backgroundGradientTo: themeColors.surface,
-    decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-    labelColor: () => themeColors.muted,
-    style: {
-      borderRadius: radii.md,
-    },
-    propsForDots: {
-      r: "4",
-      strokeWidth: "2",
-    },
-    propsForLabels: {
-      fontSize: typography.micro,
-    },
-    formatYLabel: formatYAxisLabel,
-  };
-
   return (
-    <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
-      {/* Header with title and view selector */}
+    <View
+      style={[styles.card, { backgroundColor: themeColors.surface }]}
+      onLayout={handleLayout}
+    >
+      {/* Header */}
       <View style={styles.headerRow}>
-        <Text style={[styles.cardTitle, { color: themeColors.text }]}>Portfolio Performance</Text>
-        {onViewChange && (
-          <View style={styles.viewSelector}>
-            {(["monthly", "quarterly", "yearly"] as TimeRangeView[]).map((v) => {
-              const active = view === v;
-              return (
-                <Pressable
-                  key={v}
-                  onPress={() => onViewChange(v)}
-                  style={[
-                    styles.viewOption,
-                    active && { backgroundColor: themeColors.accent },
-                  ]}
-                >
-                  <Text style={[styles.viewOptionText, { color: active ? themeColors.bg : themeColors.muted }]}>
-                    {v === "monthly" ? "Mon" : v === "quarterly" ? "Qtr" : "Year"}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
+        <View style={styles.headerLeft}>
+          <Text style={[styles.cardTitle, { color: themeColors.text }]}>Portfolio Performance</Text>
+        </View>
       </View>
 
-      {/* Tooltip showing selected point data */}
-      {selectedPoint && (
-        <View style={styles.tooltip}>
-          <Text style={[styles.tooltipDate, { color: themeColors.muted }]}>
-            {formatDateLabel(selectedPoint.date, view)}
-          </Text>
-          <View style={styles.tooltipRow}>
-            <View style={[styles.tooltipDot, { backgroundColor: INVESTED_COLOR }]} />
-            <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Invested:</Text>
-            <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
-              {formatCompact(selectedPoint.investedAmount, currency)}
-            </Text>
-          </View>
-          <View style={styles.tooltipRow}>
-            <View style={[styles.tooltipDot, { backgroundColor: CURRENT_VALUE_COLOR }]} />
-            <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Current:</Text>
-            <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
-              {formatCompact(selectedPoint.currentValue, currency)}
-            </Text>
-          </View>
-          {gainLoss && (
-            <View style={styles.tooltipRow}>
-              <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Gain/Loss:</Text>
-              <Text
-                style={[
-                  styles.tooltipValue,
-                  { color: gainLoss.absolute >= 0 ? themeColors.positive : themeColors.negative },
-                ]}
-              >
-                {formatCompactGainLoss(gainLoss.absolute, currency)} ({gainLoss.percentage >= 0 ? "+" : ""}
-                {gainLoss.percentage.toFixed(2)}%)
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
 
       {/* Chart */}
-      <View style={styles.chartContainer}>
-        <LineChart
-          data={chartData}
-          width={chartWidth}
-          height={CHART_HEIGHT}
-          chartConfig={chartConfig}
-          bezier
-          withInnerLines={false}
-          withOuterLines
-          withVerticalLines={false}
-          withHorizontalLines
-          withVerticalLabels
-          withHorizontalLabels
-          fromZero={false}
-          segments={4}
-          onDataPointClick={({ index }) => setSelectedIndex(index)}
-          style={styles.chart}
-        />
+      <View style={styles.chartContainer} {...panResponder.panHandlers}>
+        <Svg width={chartWidth} height={CHART_HEIGHT}>
+          <Defs>
+            <LinearGradient id="currentValueFill" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor={CURRENT_VALUE_COLOR} stopOpacity={0.25} />
+              <Stop offset="100%" stopColor={CURRENT_VALUE_COLOR} stopOpacity={0.02} />
+            </LinearGradient>
+          </Defs>
+
+          {/* Grid lines */}
+          {yAxisLabels.map((label, i) => (
+            <Line
+              key={`grid-${i}`}
+              x1={PADDING_LEFT}
+              y1={label.y}
+              x2={chartWidth - PADDING_RIGHT}
+              y2={label.y}
+              stroke={GRID_COLOR}
+              strokeWidth={0.5}
+              strokeDasharray={i === 0 ? undefined : "4,4"}
+            />
+          ))}
+
+          {/* Y-axis labels */}
+          {yAxisLabels.map((label, i) => (
+            <SvgText
+              key={`y-label-${i}`}
+              x={PADDING_LEFT - 8}
+              y={label.y + 4}
+              fontSize={10}
+              fill={themeColors.muted}
+              textAnchor="end"
+            >
+              {label.label}
+            </SvgText>
+          ))}
+
+          {/* Current Value area fill */}
+          {paths.currentArea && (
+            <Path d={paths.currentArea} fill="url(#currentValueFill)" />
+          )}
+
+          {/* Invested line (step) */}
+          <Path
+            d={paths.investedLine}
+            fill="none"
+            stroke={INVESTED_COLOR}
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity={hoveredIndex !== null ? 0.5 : 1}
+          />
+
+          {/* Current Value line */}
+          <Path
+            d={paths.currentLine}
+            fill="none"
+            stroke={CURRENT_VALUE_COLOR}
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+
+          {/* Hover vertical guide */}
+          {hoveredIndex !== null && projectedData.current[hoveredIndex] && (
+            <Line
+              x1={projectedData.current[hoveredIndex].x}
+              y1={PADDING_TOP}
+              x2={projectedData.current[hoveredIndex].x}
+              y2={CHART_HEIGHT - PADDING_BOTTOM}
+              stroke={themeColors.border}
+              strokeWidth={1}
+              strokeDasharray="4,4"
+            />
+          )}
+
+          {/* Hover point markers */}
+          {hoveredIndex !== null && (
+            <G>
+              {/* Invested point */}
+              {projectedData.invested[hoveredIndex] && (
+                <Circle
+                  cx={projectedData.invested[hoveredIndex].x}
+                  cy={projectedData.invested[hoveredIndex].y}
+                  r={5}
+                  fill={INVESTED_COLOR}
+                  stroke={themeColors.surface}
+                  strokeWidth={2}
+                />
+              )}
+              {/* Current value point */}
+              {projectedData.current[hoveredIndex] && (
+                <Circle
+                  cx={projectedData.current[hoveredIndex].x}
+                  cy={projectedData.current[hoveredIndex].y}
+                  r={6}
+                  fill={CURRENT_VALUE_COLOR}
+                  stroke={themeColors.surface}
+                  strokeWidth={2}
+                />
+              )}
+            </G>
+          )}
+
+          {/* X-axis labels */}
+          {xAxisLabels.map((label, i) => (
+            <SvgText
+              key={`x-label-${i}`}
+              x={label.x}
+              y={CHART_HEIGHT - 8}
+              fontSize={10}
+              fill={themeColors.muted}
+              textAnchor="middle"
+            >
+              {label.label}
+            </SvgText>
+          ))}
+        </Svg>
+
+        {/* Tooltip */}
+        {hoveredPoint && tooltipPosition && (
+          <Animated.View
+            style={[
+              styles.tooltip,
+              {
+                backgroundColor: TOOLTIP_BG,
+                borderColor: themeColors.border,
+                opacity: hoverOpacity,
+                left: Math.min(
+                  Math.max(tooltipPosition.x - 90, spacing.sm),
+                  chartWidth - 180 - spacing.sm
+                ),
+                top: Math.max(tooltipPosition.y - 140, spacing.sm),
+              },
+            ]}
+          >
+            <Text style={[styles.tooltipDate, { color: themeColors.text }]}>
+              {formatFullDate(hoveredPoint.date)}
+            </Text>
+            
+            <View style={styles.tooltipDivider} />
+            
+            <View style={styles.tooltipRow}>
+              <View style={[styles.tooltipDot, { backgroundColor: CURRENT_VALUE_COLOR }]} />
+              <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Portfolio Value</Text>
+              <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
+                {formatMoney(hoveredPoint.currentValue, currency)}
+              </Text>
+            </View>
+            
+            <View style={styles.tooltipRow}>
+              <View style={[styles.tooltipDot, { backgroundColor: INVESTED_COLOR }]} />
+              <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Invested</Text>
+              <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
+                {formatMoney(hoveredPoint.investedAmount, currency)}
+              </Text>
+            </View>
+            
+            {hoveredGainLoss && (
+              <View style={styles.tooltipRow}>
+                <View style={[styles.tooltipDot, { backgroundColor: "transparent" }]} />
+                <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Gain/Loss</Text>
+                <Text
+                  style={[
+                    styles.tooltipValue,
+                    {
+                      color: hoveredGainLoss.absolute >= 0
+                        ? themeColors.positive
+                        : themeColors.negative,
+                    },
+                  ]}
+                >
+                  {hoveredGainLoss.absolute >= 0 ? "+" : ""}
+                  {formatMoney(hoveredGainLoss.absolute, currency)}
+                </Text>
+              </View>
+            )}
+            
+            {hoveredGainLoss && (
+              <View style={styles.tooltipRow}>
+                <View style={[styles.tooltipDot, { backgroundColor: "transparent" }]} />
+                <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Return</Text>
+                <Text
+                  style={[
+                    styles.tooltipValue,
+                    {
+                      color: hoveredGainLoss.percentage >= 0
+                        ? themeColors.positive
+                        : themeColors.negative,
+                    },
+                  ]}
+                >
+                  {hoveredGainLoss.percentage >= 0 ? "+" : ""}
+                  {hoveredGainLoss.percentage.toFixed(2)}%
+                </Text>
+              </View>
+            )}
+            
+            {hoveredPoint.cashBalance !== undefined && (
+              <View style={styles.tooltipRow}>
+                <View style={[styles.tooltipDot, { backgroundColor: "transparent" }]} />
+                <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Cash</Text>
+                <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
+                  {formatMoney(hoveredPoint.cashBalance, currency)}
+                </Text>
+              </View>
+            )}
+            
+            {hoveredPoint.holdingsCount !== undefined && (
+              <View style={styles.tooltipRow}>
+                <View style={[styles.tooltipDot, { backgroundColor: "transparent" }]} />
+                <Text style={[styles.tooltipLabel, { color: themeColors.muted }]}>Holdings</Text>
+                <Text style={[styles.tooltipValue, { color: themeColors.text }]}>
+                  {hoveredPoint.holdingsCount}
+                </Text>
+              </View>
+            )}
+          </Animated.View>
+        )}
       </View>
 
       {/* Legend */}
       <View style={styles.legend}>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: INVESTED_COLOR }]} />
-          <Text style={[styles.legendText, { color: themeColors.text }]}>Invested</Text>
+          <View style={[styles.legendLine, { backgroundColor: CURRENT_VALUE_COLOR }]} />
+          <Text style={[styles.legendText, { color: themeColors.text }]}>Current Value</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: CURRENT_VALUE_COLOR }]} />
-          <Text style={[styles.legendText, { color: themeColors.text }]}>Current Value</Text>
+          <Svg width={16} height={8}>
+            <Path
+              d="M 0 6 H 6 V 2 H 16"
+              fill="none"
+              stroke={INVESTED_COLOR}
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </Svg>
+          <View style={{ width: spacing.xs }} />
+          <Text style={[styles.legendText, { color: themeColors.text }]}>Invested</Text>
         </View>
       </View>
     </View>
@@ -368,89 +797,108 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: radii.lg,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   headerRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  headerLeft: {
+    flex: 1,
   },
   cardTitle: {
     fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
+    fontWeight: "600",
+  },
+  dateRange: {
+    fontSize: typography.caption,
+    marginTop: 2,
+  },
+  subtitle: {
+    fontSize: typography.caption,
+    marginBottom: spacing.sm,
   },
   viewSelector: {
     flexDirection: "row",
-    backgroundColor: colors.bg,
     borderRadius: radii.sm,
     padding: 2,
   },
   viewOption: {
     paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
+    paddingVertical: spacing.xs,
     borderRadius: radii.sm - 1,
+    minWidth: 28,
+    alignItems: "center",
   },
   viewOptionText: {
-    fontSize: typography.micro,
-    fontWeight: typography.weightMedium,
+    fontSize: typography.caption,
+    fontWeight: "600",
+  },
+  chartContainer: {
+    position: "relative",
+    marginHorizontal: -spacing.md,
   },
   tooltip: {
-    marginBottom: spacing.sm,
-    padding: spacing.sm,
-    backgroundColor: colors.bg,
+    position: "absolute",
     borderRadius: radii.sm,
+    padding: spacing.sm,
+    borderWidth: 1,
+    minWidth: 180,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
   },
   tooltipDate: {
     fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
+    fontWeight: "600",
+    marginBottom: spacing.xs,
+  },
+  tooltipDivider: {
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.1)",
     marginBottom: spacing.xs,
   },
   tooltipRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.xs,
-    marginTop: 2,
+    marginTop: 3,
   },
   tooltipDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: spacing.xs,
   },
   tooltipLabel: {
     fontSize: typography.micro,
-    minWidth: 55,
+    flex: 1,
   },
   tooltipValue: {
     fontSize: typography.micro,
-    fontWeight: typography.weightMedium,
-    fontVariant: ["tabular-nums"],
-  },
-  chartContainer: {
-    alignItems: "center",
-    marginHorizontal: -spacing.md,
-  },
-  chart: {
-    borderRadius: radii.md,
+    fontWeight: "600",
   },
   legend: {
     flexDirection: "row",
     justifyContent: "center",
+    alignItems: "center",
     gap: spacing.lg,
-    marginTop: spacing.md,
-    paddingTop: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    marginTop: spacing.sm,
+    paddingTop: spacing.xs,
   },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.xs,
   },
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  legendLine: {
+    width: 16,
+    height: 3,
+    borderRadius: 1.5,
+    marginRight: spacing.xs,
   },
   legendText: {
     fontSize: typography.caption,
@@ -462,7 +910,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
+    fontWeight: "600",
     marginBottom: spacing.sm,
   },
   emptyText: {

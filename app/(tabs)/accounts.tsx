@@ -1,8 +1,12 @@
 import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
+import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
+import { TourTarget } from "../../src/components/OnboardingTourProvider";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { SegmentedControl } from "../../src/components/SegmentedControl";
 import { calcPortfolioTotals, convert } from "../../src/features/portfolio/calculations";
+import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { accountSupportsHoldings, type Account, type AccountType, type CashHolding, type Currency } from "../../src/types/portfolio";
@@ -39,11 +43,12 @@ const formatDate = (isoString: string | undefined): string | null => {
   }
 };
 
-export default function AccountsScreen() {
+export function AccountsSection() {
   const { colors } = useTheme();
-  const holdings = usePortfolioStore((state) => state.holdings);
+  const manualHoldings = usePortfolioStore((state) => state.holdings);
   const cashHoldings = usePortfolioStore((state) => state.cashHoldings);
   const accounts = usePortfolioStore((state) => state.accounts);
+  const transactions = usePortfolioStore((state) => state.transactions);
   const fxRates = usePortfolioStore((state) => state.fxRates);
   const settings = usePortfolioStore((state) => state.settings);
   const addAccount = usePortfolioStore((state) => state.addAccount);
@@ -54,6 +59,18 @@ export default function AccountsScreen() {
   const removeCashHolding = usePortfolioStore((state) => state.removeCashHolding);
   const addHolding = usePortfolioStore((state) => state.addHolding);
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
+  const marketPrices = usePortfolioStore((state) => state.marketPrices);
+  const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
+  const updateMarketPrices = usePortfolioStore((state) => state.updateMarketPrices);
+
+  // Convert marketPrices record to Map for selectAllHoldings
+  const priceMap = useMemo(() => new Map(Object.entries(marketPrices)), [marketPrices]);
+
+  // Combine manual holdings + derived holdings from transaction-sourced accounts
+  const holdings = useMemo(
+    () => selectAllHoldings(manualHoldings, transactions, accounts, priceMap),
+    [manualHoldings, transactions, accounts, priceMap]
+  );
 
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
@@ -62,7 +79,11 @@ export default function AccountsScreen() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
   const [deleteCashTarget, setDeleteCashTarget] = useState<CashHolding | null>(null);
   const [menuOpenForAccount, setMenuOpenForAccount] = useState<string | null>(null);
+  const [menuOpenForCash, setMenuOpenForCash] = useState<string | null>(null);
   const [importForAccountId, setImportForAccountId] = useState<string | null>(null);
+  const [importMenuForAccountId, setImportMenuForAccountId] = useState<string | null>(null);
+  const [isImportTransactionsVisible, setIsImportTransactionsVisible] = useState(false);
+  const [importTransactionsAccountId, setImportTransactionsAccountId] = useState<string | null>(null);
 
   // cash inline-edit: key = cashHolding.id, value = draft string
   const [cashEditValues, setCashEditValues] = useState<Record<string, string>>({});
@@ -114,7 +135,7 @@ export default function AccountsScreen() {
     }
 
     // Calculate gain/loss for each account
-    for (const [id, metric] of map) {
+    for (const [_id, metric] of map) {
       metric.gainLoss = metric.currentValue - metric.investedValue;
       metric.gainLossPct = metric.investedValue === 0 ? 0 : (metric.gainLoss / metric.investedValue) * 100;
     }
@@ -281,15 +302,17 @@ export default function AccountsScreen() {
   };
 
   return (
-    <ScreenContainer>
+    <>
       <View style={styles.headerRow}>
         <Text style={[styles.headerTitle, { color: colors.text }]}>Accounts</Text>
-        <Pressable style={[styles.addBtn, { backgroundColor: colors.accent }]} onPress={openAddModal}>
-          <Text style={[styles.addBtnText, { color: colors.bg }]}>Add</Text>
-        </Pressable>
+        <TourTarget tourKey="accounts-add">
+          <Pressable style={[styles.addBtn, { backgroundColor: colors.accent }]} onPress={openAddModal}>
+            <Text style={[styles.addBtnText, { color: colors.bg }]}>Add</Text>
+          </Pressable>
+        </TourTarget>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} scrollEnabled={false}>
         <View style={styles.listWrap}>
           {/* Summary Total Block */}
           {accounts.length > 0 && (
@@ -337,8 +360,8 @@ export default function AccountsScreen() {
               <Text style={[styles.emptyTitle, { color: colors.text }]}>No accounts yet</Text>
               <Text style={[styles.emptyBody, { color: colors.muted }]}>Your portfolio is empty because there is no account to place holdings or cash in.</Text>
               <Text style={[styles.emptyBody, { color: colors.muted }]}>Add your first account to get started.</Text>
-              <Pressable style={[styles.emptyPrimaryBtn, { backgroundColor: colors.accent }]} onPress={openAddModal}>
-                <Text style={[styles.emptyPrimaryBtnText, { color: colors.bg }]}>Add Account</Text>
+              <Pressable style={[styles.emptyPrimaryBtn, { backgroundColor: colors.accent }]} onPress={() => setIsFormVisible(true)}>
+                <Text style={[styles.emptyPrimaryBtnText, { color: colors.bg }]}>Add your first account</Text>
               </Pressable>
             </View>
           ) : null}
@@ -349,10 +372,12 @@ export default function AccountsScreen() {
             const isBroker = accountSupportsHoldings(account.type);
             const isMenuOpen = menuOpenForAccount === account.id;
             const lastUpdatedLabel = getLastUpdatedLabel(account);
+            const gainLoss = metrics?.gainLoss ?? 0;
+            const gainLossPct = metrics?.gainLossPct ?? 0;
 
             return (
               <View key={account.id} style={[styles.card, { backgroundColor: colors.surface }]}>
-                {/* Account header */}
+                {/* Account header with values */}
                 <View style={styles.cardHeader}>
                   <View style={styles.cardHeaderLeft}>
                     <Text style={[styles.accountName, { color: colors.text }]}>{account.name}</Text>
@@ -364,37 +389,25 @@ export default function AccountsScreen() {
                       <Text style={[styles.lastUpdatedText, { color: colors.muted }]}>{lastUpdatedLabel}</Text>
                     ) : null}
                   </View>
-                  <View style={styles.cardHeaderRight}>
-                    <Text style={[styles.metricSmallLabel, { color: colors.muted }]}>Current</Text>
-                    <Text style={[styles.metricSmallValue, { color: colors.text }]}>
-                      {formatMoney(metrics?.currentValue ?? 0, account.baseCurrency)}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Invested and Gain/Loss row */}
-                <View style={styles.metricsRow}>
-                  <Text style={[styles.investedText, { color: colors.muted }]}>
-                    Invested {formatMoney(metrics?.investedValue ?? 0, account.baseCurrency)}
-                  </Text>
-                  <View style={styles.gainLossRow}>
-                    <Text style={[
-                      styles.gainLossText,
-                      { color: (metrics?.gainLoss ?? 0) >= 0 ? colors.positive : colors.negative },
-                    ]}>
-                      {(metrics?.gainLoss ?? 0) >= 0 ? "+" : ""}
-                      {formatMoney(metrics?.gainLoss ?? 0, account.baseCurrency)}
-                    </Text>
-                    <View style={[
-                      styles.gainBadgeSmall,
-                      { backgroundColor: (metrics?.gainLoss ?? 0) >= 0 ? `${colors.positive}22` : `${colors.negative}22` },
-                    ]}>
+                  
+                  {/* Two-column values matching Holdings row style */}
+                  <View style={styles.valuesColumns}>
+                    <View style={styles.valueColumn}>
+                      <Text style={[styles.valueColumnLabel, { color: colors.muted }]}>Invested</Text>
+                      <Text style={[styles.valueColumnAmount, { color: colors.text }]}>
+                        {formatMoney(metrics?.investedValue ?? 0, account.baseCurrency)}
+                      </Text>
+                    </View>
+                    <View style={styles.valueColumnRight}>
+                      <Text style={[styles.valueColumnLabel, { color: colors.muted }]}>Current</Text>
+                      <Text style={[styles.valueColumnAmount, { color: colors.text }]}>
+                        {formatMoney(metrics?.currentValue ?? 0, account.baseCurrency)}
+                      </Text>
                       <Text style={[
-                        styles.gainBadgeTextSmall,
-                        { color: (metrics?.gainLoss ?? 0) >= 0 ? colors.positive : colors.negative },
+                        styles.gainLossUnder,
+                        { color: gainLoss >= 0 ? colors.positive : colors.negative },
                       ]}>
-                        {(metrics?.gainLossPct ?? 0) >= 0 ? "+" : ""}
-                        {(metrics?.gainLossPct ?? 0).toFixed(2)}%
+                        {gainLoss >= 0 ? "+" : ""}{gainLossPct.toFixed(2)}%
                       </Text>
                     </View>
                   </View>
@@ -406,6 +419,7 @@ export default function AccountsScreen() {
                     <Text style={[styles.sectionLabel, { color: colors.muted }]}>Cash</Text>
                     {cash.map((c) => {
                       const isEditing = Boolean(cashEditActive[c.id]);
+                      const isCashMenuOpen = menuOpenForCash === c.id;
                       return (
                         <View key={c.id} style={styles.cashRow}>
                           <Text style={[styles.cashCurrency, { color: colors.muted }]}>{c.currency}</Text>
@@ -425,12 +439,39 @@ export default function AccountsScreen() {
                                 <Text style={[styles.cashValue, { color: colors.text }]}>{formatMoney(c.balance, c.currency)}</Text>
                               </Pressable>
                             )}
-                            <Pressable 
-                              style={styles.cashRemoveBtn}
-                              onPress={() => setDeleteCashTarget(c)}
-                            >
-                              <Text style={[styles.cashRemoveText, { color: colors.negative }]}>Remove</Text>
-                            </Pressable>
+                            
+                            {/* Kebab menu for cash row */}
+                            <View style={styles.cashMenuContainer}>
+                              <Pressable 
+                                style={styles.cashMenuBtn}
+                                onPress={() => setMenuOpenForCash(isCashMenuOpen ? null : c.id)}
+                              >
+                                <Text style={[styles.cashMenuIcon, { color: colors.muted }]}>⋮</Text>
+                              </Pressable>
+                              
+                              {isCashMenuOpen && (
+                                <View style={[styles.cashMenu, { backgroundColor: colors.bg, borderColor: colors.border }]}>
+                                  <Pressable 
+                                    style={styles.menuItem} 
+                                    onPress={() => {
+                                      setMenuOpenForCash(null);
+                                      startEditCash(c);
+                                    }}
+                                  >
+                                    <Text style={[styles.menuItemText, { color: colors.text }]}>Edit</Text>
+                                  </Pressable>
+                                  <Pressable 
+                                    style={styles.menuItem} 
+                                    onPress={() => {
+                                      setMenuOpenForCash(null);
+                                      setDeleteCashTarget(c);
+                                    }}
+                                  >
+                                    <Text style={[styles.menuItemTextDanger, { color: colors.negative }]}>Remove</Text>
+                                  </Pressable>
+                                </View>
+                              )}
+                            </View>
                           </View>
                         </View>
                       );
@@ -457,13 +498,13 @@ export default function AccountsScreen() {
                       );
                     })}
                     
-                    {/* Import Holdings button for broker accounts */}
+                    {/* Import button for broker accounts - opens menu */}
                     {isBroker && (
                       <Pressable 
                         style={[styles.importBtn, { backgroundColor: colors.accent }]}
-                        onPress={() => openImportForAccount(account.id)}
+                        onPress={() => setImportMenuForAccountId(account.id)}
                       >
-                        <Text style={[styles.importBtnText, { color: colors.bg }]}>Import Holdings</Text>
+                        <Text style={[styles.importBtnText, { color: colors.bg }]}>Import ▾</Text>
                       </Pressable>
                     )}
                   </View>
@@ -504,88 +545,128 @@ export default function AccountsScreen() {
       {/* Add/Edit Account Modal */}
       <Modal visible={isFormVisible} transparent animationType="fade" onRequestClose={closeFormModal}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>{editingAccountId ? "Edit Account" : "Add Account"}</Text>
+          <View style={styles.modalCard}>
+            {/* Header */}
+            <View style={styles.modalHeaderRow}>
+              <View style={styles.modalHeaderLeft}>
+                <View style={styles.modalIconBadge}>
+                  <Text style={styles.modalIconEmoji}>🏦</Text>
+                </View>
+                <Text style={styles.modalTitle}>{editingAccountId ? "Edit Account" : "Add Account"}</Text>
+              </View>
+              <Pressable style={styles.modalCloseBtn} onPress={closeFormModal}>
+                <Text style={styles.modalCloseBtnText}>✕</Text>
+              </Pressable>
+            </View>
 
+            <Text style={styles.modalFieldLabel}>Account Name</Text>
             <TextInput
               value={draft.name}
               onChangeText={(value) => setDraft((prev) => ({ ...prev, name: value }))}
-              placeholder="Account name"
-              placeholderTextColor={colors.muted}
-              style={[styles.modalInput, { backgroundColor: colors.bg, color: colors.text }]}
+              placeholder="e.g. US-Core, India-Growth"
+              placeholderTextColor="#8A94A3"
+              style={styles.modalFieldInput}
             />
+            
+            <Text style={styles.modalFieldLabel}>Owner</Text>
             <TextInput
               value={draft.owner}
               onChangeText={(value) => setDraft((prev) => ({ ...prev, owner: value }))}
-              placeholder="Owner"
-              placeholderTextColor={colors.muted}
-              style={[styles.modalInputCompact, { backgroundColor: colors.bg, color: colors.text }]}
+              placeholder="e.g. John Doe"
+              placeholderTextColor="#8A94A3"
+              style={styles.modalFieldInput}
             />
 
-            <Text style={[styles.modalLabel, { color: colors.muted }]}>Type</Text>
-            <View style={styles.pillRow}>
-              {(["BROKER", "SAVINGS"] as AccountType[]).map((type) => {
-                const active = draft.type === type;
-                return (
-                  <Pressable
-                    key={type}
-                    style={[styles.pill, { backgroundColor: active ? colors.accent : colors.bg }]}
-                    onPress={() => setDraft((prev) => ({ ...prev, type }))}
-                  >
-                    <Text style={[styles.pillText, { color: active ? colors.bg : colors.muted }]}>{type}</Text>
-                  </Pressable>
-                );
-              })}
+            {/* Two-column row for Type and Currency */}
+            <View style={styles.modalTwoColumnRow}>
+              <View style={styles.modalColumnHalf}>
+                <Text style={styles.modalFieldLabel}>Type</Text>
+                <View style={styles.modalSegmentedWrap}>
+                  <SegmentedControl
+                    options={[
+                      { value: "BROKER", label: "Broker" },
+                      { value: "SAVINGS", label: "Savings" },
+                    ]}
+                    value={draft.type}
+                    onChange={(type) => setDraft((prev) => ({ ...prev, type: type as AccountType }))}
+                  />
+                </View>
+              </View>
+              <View style={styles.modalColumnHalf}>
+                <Text style={styles.modalFieldLabel}>Currency</Text>
+                <View style={styles.modalSegmentedWrap}>
+                  <SegmentedControl
+                    options={[
+                      { value: "INR", label: "INR" },
+                      { value: "USD", label: "USD" },
+                    ]}
+                    value={draft.baseCurrency}
+                    onChange={(currency) => setDraft((prev) => ({ ...prev, baseCurrency: currency as Currency }))}
+                  />
+                </View>
+              </View>
             </View>
 
             {draft.type === "BROKER" && (
-              <TextInput
-                value={draft.broker}
-                onChangeText={(value) => setDraft((prev) => ({ ...prev, broker: value }))}
-                placeholder="Broker"
-                placeholderTextColor={colors.muted}
-                style={[styles.modalInputCompact, { backgroundColor: colors.bg, color: colors.text }]}
-              />
-            )}
-
-            <Text style={[styles.modalLabel, { color: colors.muted }]}>Currency</Text>
-            <View style={styles.pillRow}>
-              {(["INR", "USD"] as Currency[]).map((currency) => {
-                const active = draft.baseCurrency === currency;
-                return (
-                  <Pressable
-                    key={currency}
-                    style={[styles.pill, { backgroundColor: active ? colors.accent : colors.bg }]}
-                    onPress={() => setDraft((prev) => ({ ...prev, baseCurrency: currency }))}
-                  >
-                    <Text style={[styles.pillText, { color: active ? colors.bg : colors.muted }]}>{currency}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {draft.type === "SAVINGS" && !editingAccountId && (
               <>
-                <Text style={[styles.modalLabel, { color: colors.muted }]}>Initial Balance</Text>
+                <Text style={styles.modalFieldLabel}>Broker</Text>
                 <TextInput
-                  value={savingsInitialBalance}
-                  onChangeText={setSavingsInitialBalance}
-                  placeholder="0.00"
-                  placeholderTextColor={colors.muted}
-                  keyboardType="decimal-pad"
-                  style={[styles.modalInputCompact, { backgroundColor: colors.bg, color: colors.text }]}
+                  value={draft.broker}
+                  onChangeText={(value) => setDraft((prev) => ({ ...prev, broker: value }))}
+                  placeholder="e.g. INDMoney, Groww, Zerodha"
+                  placeholderTextColor="#8A94A3"
+                  style={styles.modalFieldInput}
                 />
               </>
             )}
 
-            <View style={styles.modalActions}>
-              <Pressable style={styles.ghostBtn} onPress={closeFormModal}>
-                <Text style={{ color: colors.muted }}>Cancel</Text>
-              </Pressable>
-              <Pressable style={[styles.primaryBtn, { backgroundColor: colors.accent }]} onPress={submitForm}>
-                <Text style={[styles.primaryText, { color: colors.text }]}>Save</Text>
-              </Pressable>
-            </View>
+            {draft.type === "SAVINGS" && !editingAccountId && (
+              <>
+                <Text style={styles.modalFieldLabel}>Initial Balance</Text>
+                <TextInput
+                  value={savingsInitialBalance}
+                  onChangeText={setSavingsInitialBalance}
+                  placeholder="0.00"
+                  placeholderTextColor="#8A94A3"
+                  keyboardType="decimal-pad"
+                  style={styles.modalFieldInput}
+                />
+              </>
+            )}
+
+            {/* Save button */}
+            {(() => {
+              const trimmedName = draft.name.trim();
+              const trimmedOwner = draft.owner.trim();
+              const trimmedBroker = draft.broker.trim();
+              const isSavings = draft.type === "SAVINGS";
+              const canSave = trimmedName && trimmedOwner && (isSavings || trimmedBroker);
+              
+              // Compute helper message
+              let helperMessage: string | null = null;
+              if (!canSave) {
+                if (!trimmedName) helperMessage = "Enter an account name to continue";
+                else if (!trimmedOwner) helperMessage = "Enter an owner name to continue";
+                else if (!isSavings && !trimmedBroker) helperMessage = "Enter a broker name to continue";
+              }
+              
+              return (
+                <>
+                  <Pressable
+                    style={[styles.modalSaveBtn, !canSave && styles.modalSaveBtnDisabled]}
+                    onPress={submitForm}
+                    disabled={!canSave}
+                  >
+                    <Text style={[styles.modalSaveText, !canSave && styles.modalSaveTextDisabled]}>
+                      Save Account
+                    </Text>
+                  </Pressable>
+                  {helperMessage && (
+                    <Text style={styles.modalDisabledHelper}>{helperMessage}</Text>
+                  )}
+                </>
+              );
+            })()}
           </View>
         </View>
       </Modal>
@@ -645,6 +726,68 @@ export default function AccountsScreen() {
         updateAccount={updateAccount}
         preSelectedAccountId={importForAccountId ?? undefined}
       />
+
+      {/* Import Transactions Modal */}
+      <ImportTransactionsModal
+        visible={isImportTransactionsVisible}
+        accounts={brokerAccounts}
+        onClose={() => {
+          setIsImportTransactionsVisible(false);
+          setImportTransactionsAccountId(null);
+        }}
+        onComplete={(result) => {
+          console.log(`Imported ${result.transactionCount} transactions, ${result.derivedHoldingCount} derived holdings to ${result.accountName}`);
+        }}
+        setAccountTransactions={setAccountTransactions}
+        updateAccount={updateAccount}
+        updateMarketPrices={updateMarketPrices}
+        preSelectedAccountId={importTransactionsAccountId ?? undefined}
+      />
+
+      {/* Import Menu Modal */}
+      <Modal visible={Boolean(importMenuForAccountId)} transparent animationType="fade" onRequestClose={() => setImportMenuForAccountId(null)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setImportMenuForAccountId(null)}>
+          <View style={styles.importMenuCard}>
+            <Text style={styles.importMenuTitle}>Import Data</Text>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                const accountId = importMenuForAccountId;
+                setImportMenuForAccountId(null);
+                setImportForAccountId(accountId);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Import Holdings</Text>
+              <Text style={styles.importMenuItemDesc}>Import current holdings snapshot from your broker</Text>
+            </Pressable>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                const accountId = importMenuForAccountId;
+                setImportMenuForAccountId(null);
+                setImportTransactionsAccountId(accountId);
+                setIsImportTransactionsVisible(true);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Import Transactions</Text>
+              <Text style={styles.importMenuItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
+            </Pressable>
+            <Pressable style={styles.importMenuCancel} onPress={() => setImportMenuForAccountId(null)}>
+              <Text style={styles.importMenuCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+    </>
+  );
+}
+
+export default function AccountsScreen() {
+  return (
+    <ScreenContainer>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <AccountsSection />
+      </ScrollView>
     </ScreenContainer>
   );
 }
@@ -769,13 +912,34 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
+    gap: spacing.md,
   },
   cardHeaderLeft: {
     flex: 1,
-    paddingRight: spacing.md,
+    minWidth: 100,
   },
-  cardHeaderRight: {
+  valuesColumns: {
+    flexDirection: "row",
+    gap: spacing.lg,
+  },
+  valueColumn: {
     alignItems: "flex-end",
+  },
+  valueColumnRight: {
+    alignItems: "flex-end",
+  },
+  valueColumnLabel: {
+    fontSize: typography.micro,
+    marginBottom: 2,
+  },
+  valueColumnAmount: {
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+    fontVariant: ["tabular-nums"],
+  },
+  gainLossUnder: {
+    fontSize: typography.micro,
+    marginTop: 2,
   },
   accountName: {
     fontSize: typography.subheading,
@@ -789,42 +953,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: typography.micro,
     fontStyle: "italic",
-  },
-  metricSmallLabel: {
-    fontSize: typography.caption,
-  },
-  metricSmallValue: {
-    fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
-  },
-  metricsRow: {
-    marginTop: spacing.sm,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: spacing.xs,
-  },
-  investedText: {
-    fontSize: typography.caption,
-  },
-  gainLossRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-  },
-  gainLossText: {
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
-  },
-  gainBadgeSmall: {
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.xs,
-    paddingVertical: 1,
-  },
-  gainBadgeTextSmall: {
-    fontSize: typography.micro,
-    fontWeight: typography.weightMedium,
   },
   // Cash section
   cashSection: {
@@ -869,12 +997,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
-  cashRemoveBtn: {
+  cashMenuContainer: {
+    position: "relative",
+  },
+  cashMenuBtn: {
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
-  cashRemoveText: {
-    fontSize: typography.micro,
+  cashMenuIcon: {
+    fontSize: 16,
+    fontWeight: typography.weightSemibold,
+  },
+  cashMenu: {
+    position: "absolute",
+    top: 24,
+    right: 0,
+    minWidth: 80,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    zIndex: 100,
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
   },
   // Actions container
   actionsContainer: {
@@ -947,18 +1093,117 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.7)",
+    backgroundColor: "rgba(0,0,0,0.6)",
     paddingHorizontal: spacing.xl,
   },
   modalCard: {
     width: "100%",
-    borderRadius: radii.xl,
+    maxWidth: 400,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#262B33",
+    backgroundColor: "#12161C",
     padding: spacing.xl,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.5,
+    shadowRadius: 40,
+    elevation: 24,
+  },
+  modalHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.lg,
+  },
+  modalHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  modalIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "#16323A",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalIconEmoji: {
+    fontSize: 16,
   },
   modalTitle: {
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#F2F4F8",
   },
+  modalCloseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: "#1A1F26",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalCloseBtnText: {
+    color: "#8A94A3",
+    fontSize: 14,
+  },
+  modalFieldLabel: {
+    marginTop: spacing.lg,
+    marginBottom: 6,
+    color: "#8A94A3",
+    fontSize: 12,
+  },
+  modalFieldInput: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#262B33",
+    backgroundColor: "#0E1116",
+    color: "#F2F4F8",
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    fontSize: 14,
+  },
+  modalTwoColumnRow: {
+    flexDirection: "row",
+    gap: 14,
+  },
+  modalColumnHalf: {
+    flex: 1,
+  },
+  modalSegmentedWrap: {
+    marginTop: 0,
+  },
+  modalSaveBtn: {
+    marginTop: spacing.xxl,
+    borderRadius: 10,
+    backgroundColor: "#5FD4EB",
+    paddingVertical: 12,
+    paddingHorizontal: spacing.xl,
+    alignItems: "center",
+    alignSelf: "flex-end",
+  },
+  modalSaveBtnDisabled: {
+    backgroundColor: "#1A1F26",
+    borderWidth: 1,
+    borderColor: "#262B33",
+  },
+  modalSaveText: {
+    color: "#0B0C10",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  modalSaveTextDisabled: {
+    color: "#5A6472",
+  },
+  modalDisabledHelper: {
+    marginTop: spacing.sm,
+    color: "#8A94A3",
+    fontSize: 11,
+    textAlign: "right",
+  },
+  // Legacy modal styles for delete confirmations
   modalInput: {
     marginTop: spacing.lg,
     borderRadius: radii.lg,
@@ -975,19 +1220,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     fontSize: typography.caption,
   },
-  pillRow: {
+  controlRow: {
     marginTop: spacing.sm,
-    flexDirection: "row",
-    gap: spacing.xs,
-  },
-  pill: {
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  pillText: {
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
   },
   modalActions: {
     marginTop: spacing.xxl,
@@ -1015,5 +1249,45 @@ const styles = StyleSheet.create({
   modalDangerText: {
     marginTop: spacing.sm,
     fontSize: typography.body,
+  },
+  // Import menu styles
+  importMenuCard: {
+    width: "100%",
+    maxWidth: 400,
+    borderRadius: radii.xl,
+    backgroundColor: defaultColors.surface,
+    padding: spacing.lg,
+  },
+  importMenuTitle: {
+    color: defaultColors.text,
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.md,
+  },
+  importMenuItem: {
+    backgroundColor: defaultColors.bg,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  importMenuItemTitle: {
+    color: defaultColors.text,
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.xs,
+  },
+  importMenuItemDesc: {
+    color: defaultColors.muted,
+    fontSize: typography.caption,
+  },
+  importMenuCancel: {
+    marginTop: spacing.sm,
+    alignItems: "center",
+    paddingVertical: spacing.md,
+  },
+  importMenuCancelText: {
+    color: defaultColors.muted,
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
   },
 });

@@ -260,7 +260,7 @@ export default function PortfolioTimelineScreen() {
             <Text style={styles.emptyText}>
               Add your first holding to start building your portfolio's story.
             </Text>
-            <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+            <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/" as never)}>
               <Text style={styles.emptyBtnText}>Go to Holdings</Text>
             </Pressable>
           </View>
@@ -315,7 +315,7 @@ export default function PortfolioTimelineScreen() {
                   <Text style={styles.emptyText}>
                     Monthly summaries appear once you have activity that spans at least a full calendar month. Keep your holdings and prices up to date to unlock best/worst performer breakdowns and a narrative summary.
                   </Text>
-                  <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+                  <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/" as never)}>
                     <Text style={styles.emptyBtnText}>Update Holdings</Text>
                   </Pressable>
                 </View>

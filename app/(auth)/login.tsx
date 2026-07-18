@@ -1,16 +1,16 @@
-import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { AuthCardLayout, authInputStyles } from "../../src/components/AuthCardLayout";
 import { useAuthStore } from "../../src/store/authStore";
-import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
+import { typography, useTheme } from "../../src/theme";
 
 export default function LoginScreen() {
-  const { colors } = useTheme();
-  const router = useRouter();
+  const { colors: themeColors } = useTheme();
   const signIn = useAuthStore((state) => state.signIn);
+  const signInGoogle = useAuthStore((state) => state.signInGoogle);
   const clearError = useAuthStore((state) => state.clearError);
   const loading = useAuthStore((state) => state.loading);
+  const googleLoading = useAuthStore((state) => state.googleLoading);
   const error = useAuthStore((state) => state.error);
 
   const [email, setEmail] = useState("");
@@ -18,111 +18,87 @@ export default function LoginScreen() {
 
   const canSubmit = email.trim().length > 0 && password.length >= 6 && !loading;
 
-  const submit = async () => {
+  const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
     await signIn(email.trim(), password);
-  };
+  }, [canSubmit, email, password, signIn]);
+
+  const handleGoogleSignIn = useCallback(async () => {
+    await signInGoogle();
+  }, [signInGoogle]);
+
+  const handleEmailChange = useCallback((value: string) => {
+    setEmail(value);
+    clearError();
+  }, [clearError]);
+
+  const handlePasswordChange = useCallback((value: string) => {
+    setPassword(value);
+    clearError();
+  }, [clearError]);
 
   return (
-    <ScreenContainer>
-      <View style={styles.wrap}>
-        <Text style={styles.title}>Login</Text>
-        <Text style={styles.subtitle}>Sign in to access your portfolio workspace.</Text>
-
+    <AuthCardLayout
+      heading="Welcome back"
+      subtext="Sign in to access your portfolio workspace."
+      submitLabel="Sign in"
+      submitDisabled={!canSubmit}
+      submitLoading={loading}
+      onSubmit={handleSubmit}
+      onGoogleSignIn={handleGoogleSignIn}
+      googleLoading={googleLoading}
+      footerText="Don't have an account?"
+      footerLinkLabel="Sign up"
+      footerLinkHref="/(auth)/signup"
+      error={error}
+    >
+      {/* Email Field */}
+      <View style={authInputStyles.inputContainer}>
+        <Text style={[authInputStyles.inputLabel, { color: themeColors.muted }]}>Email</Text>
         <TextInput
           value={email}
-          onChangeText={(value) => {
-            setEmail(value);
-            clearError();
-          }}
+          onChangeText={handleEmailChange}
           keyboardType="email-address"
           autoCapitalize="none"
-          placeholder="Email"
-          placeholderTextColor={colors.muted}
-          style={styles.input}
+          autoComplete="email"
+          placeholder="you@example.com"
+          placeholderTextColor={themeColors.muted}
+          style={[
+            authInputStyles.input,
+            { backgroundColor: themeColors.bg, borderColor: themeColors.border, color: themeColors.text },
+          ]}
         />
+      </View>
+
+      {/* Password Field */}
+      <View style={authInputStyles.inputContainer}>
+        <View style={authInputStyles.labelRow}>
+          <Text style={[authInputStyles.inputLabel, { color: themeColors.muted }]}>Password</Text>
+          <Pressable>
+            <Text style={[styles.forgotLink, { color: themeColors.accent }]}>Forgot?</Text>
+          </Pressable>
+        </View>
         <TextInput
           value={password}
-          onChangeText={(value) => {
-            setPassword(value);
-            clearError();
-          }}
+          onChangeText={handlePasswordChange}
           secureTextEntry
-          placeholder="Password"
-          placeholderTextColor={colors.muted}
-          style={styles.inputCompact}
+          autoComplete="password"
+          placeholder="••••••••"
+          placeholderTextColor={themeColors.muted}
+          style={[
+            authInputStyles.input,
+            { backgroundColor: themeColors.bg, borderColor: themeColors.border, color: themeColors.text },
+          ]}
         />
-
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-        <Pressable style={[styles.primaryBtn, !canSubmit && styles.disabledBtn]} onPress={submit}>
-          <Text style={styles.primaryText}>{loading ? "Signing in..." : "Login"}</Text>
-        </Pressable>
-
-        <Pressable style={styles.linkWrap} onPress={() => router.push("/(auth)/signup" as never)}>
-          <Text style={styles.linkText}>No account? Create one</Text>
-        </Pressable>
       </View>
-    </ScreenContainer>
+    </AuthCardLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    paddingTop: spacing.xxxl,
-  },
-  title: {
-    color: defaultColors.text,
-    fontSize: typography.heading,
-    fontWeight: typography.weightSemibold,
-  },
-  subtitle: {
-    marginTop: spacing.xs,
-    marginBottom: spacing.xl,
-    color: defaultColors.muted,
-    fontSize: typography.body,
-  },
-  input: {
-    borderRadius: radii.lg,
-    backgroundColor: defaultColors.surface,
-    color: defaultColors.text,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  inputCompact: {
-    marginTop: spacing.sm,
-    borderRadius: radii.lg,
-    backgroundColor: defaultColors.surface,
-    color: defaultColors.text,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  errorText: {
-    marginTop: spacing.sm,
-    color: defaultColors.negative,
+  forgotLink: {
     fontSize: typography.caption,
-  },
-  primaryBtn: {
-    marginTop: spacing.lg,
-    borderRadius: radii.lg,
-    backgroundColor: defaultColors.accent,
-    alignItems: "center",
-    paddingVertical: spacing.md,
-  },
-  disabledBtn: {
-    opacity: 0.6,
-  },
-  primaryText: {
-    color: defaultColors.bg,
-    fontWeight: typography.weightSemibold,
-  },
-  linkWrap: {
-    marginTop: spacing.lg,
-    alignItems: "center",
-  },
-  linkText: {
-    color: defaultColors.accent,
-    fontSize: typography.caption,
+    fontWeight: "500",
   },
 });
 

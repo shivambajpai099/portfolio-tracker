@@ -158,7 +158,7 @@ export default function PortfolioDriftScreen() {
             <Text style={styles.emptyText}>
               Add a holding or update a price to record your first data point. Every change you make automatically builds up your history.
             </Text>
-            <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+            <Pressable style={styles.emptyBtn} onPress={() => router.push("/(tabs)/" as never)}>
               <Text style={styles.emptyBtnText}>Go to Holdings</Text>
             </Pressable>
           </View>

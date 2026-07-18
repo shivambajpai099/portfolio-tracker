@@ -12,6 +12,7 @@ import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { calcTransactionAnalytics } from "../../src/features/portfolio/transactionAnalytics";
 import { getAllRealizations } from "../../src/features/portfolio/fifoCalculator";
+import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { formatMoney } from "../../src/utils/format";
 import type { Currency } from "../../src/types/portfolio";
 
@@ -53,10 +54,21 @@ const signedMoney = (value: number, rc: Currency): string => {
 export default function TransactionInsightsScreen() {
   useTheme(); // Keep theme context active
   const transactions = usePortfolioStore((s) => s.transactions);
-  const holdings = usePortfolioStore((s) => s.holdings);
+  const manualHoldings = usePortfolioStore((s) => s.holdings);
+  const accounts = usePortfolioStore((s) => s.accounts);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
+  const marketPrices = usePortfolioStore((s) => s.marketPrices);
   const rc = settings.reportingCurrency;
+
+  // Convert marketPrices record to Map for selectAllHoldings
+  const priceMap = useMemo(() => new Map(Object.entries(marketPrices)), [marketPrices]);
+
+  // Combine manual holdings + derived holdings from transaction-sourced accounts
+  const holdings = useMemo(
+    () => selectAllHoldings(manualHoldings, transactions, accounts, priceMap),
+    [manualHoldings, transactions, accounts, priceMap]
+  );
 
   const [expandedSection, setExpandedSection] = useState<TopLevelSection>(null);
   const [expandedSubSection, setExpandedSubSection] = useState<SubSection>(null);

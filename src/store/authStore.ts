@@ -4,6 +4,7 @@ import {
   type AuthUser,
   getInitialSession,
   signInWithEmail,
+  signInWithGoogle,
   signOutSession,
   signUpWithEmail,
 } from "../features/auth/authService";
@@ -12,12 +13,14 @@ import { supabase } from "../features/auth/supabaseClient";
 interface AuthState {
   initialized: boolean;
   loading: boolean;
+  googleLoading: boolean;
   session: AuthSession | null;
   user: AuthUser | null;
   error: string | null;
   initialize: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string) => Promise<boolean>;
+  signInGoogle: () => Promise<boolean>;
   signOut: () => Promise<boolean>;
   clearError: () => void;
 }
@@ -27,6 +30,7 @@ let authSubscriptionCleanup: (() => void) | null = null;
 export const useAuthStore = create<AuthState>((set, get) => ({
   initialized: false,
   loading: false,
+  googleLoading: false,
   session: null,
   user: null,
   error: null,
@@ -83,6 +87,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       user: result.user,
     });
     return !result.error;
+  },
+
+  signInGoogle: async () => {
+    set({ googleLoading: true, error: null });
+    const result = await signInWithGoogle();
+    // On web, the page will redirect, so we don't need to update state
+    // On native, the auth state change listener will handle the session update
+    if (result.error) {
+      set({ googleLoading: false, error: result.error });
+      return false;
+    }
+    // Keep loading state for web redirect
+    return true;
   },
 
   signOut: async () => {

@@ -41,16 +41,27 @@ const generateDerivedHoldingId = (accountId: string, symbol: string): string => 
 
 /**
  * Sort transactions by date (ascending) for FIFO processing.
+ *
+ * Within the SAME trading day, BUYs are processed before SELLs. Intraday
+ * (MIS / same-day square-off) trades routinely execute the SELL leg before
+ * the BUY leg within a session; a strict timestamp order would flag those as
+ * "exceeds available shares" even though the position nets out by market
+ * close. Ordering same-day BUYs first tolerates this while still catching
+ * genuine overselling that carries past a trading day.
  */
 const sortTransactionsByDate = (transactions: Transaction[]): Transaction[] => {
+  const dayOf = (iso: string): string => iso.slice(0, 10);
   return [...transactions].sort((a, b) => {
-    const dateA = new Date(a.transactionDate).getTime();
-    const dateB = new Date(b.transactionDate).getTime();
-    if (dateA !== dateB) return dateA - dateB;
-    // For same date, process BUYs before SELLs
+    const dayA = dayOf(a.transactionDate);
+    const dayB = dayOf(b.transactionDate);
+    if (dayA !== dayB) {
+      return new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime();
+    }
+    // Same calendar day: process BUYs before SELLs (intraday tolerance)
     if (a.type === "BUY" && b.type === "SELL") return -1;
     if (a.type === "SELL" && b.type === "BUY") return 1;
-    return 0;
+    // Same day and same type: preserve chronological order
+    return new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime();
   });
 };
 
@@ -234,7 +245,17 @@ export const deriveHoldingsFromTransactions = (
     }
 
     const averagePrice = calculateAverageCostBasis(position.openLots);
-    const marketPrice = priceMap?.get(position.symbol) ?? averagePrice;
+    
+    // Try multiple key formats for price lookup
+    // Symbols may be stored with or without .NS/.BO suffix
+    const symbol = position.symbol;
+    const normalizedSymbol = symbol.replace(/\.(NS|BO)$/i, "");
+    const marketPrice = 
+      priceMap?.get(symbol) ?? 
+      priceMap?.get(normalizedSymbol) ?? 
+      priceMap?.get(`${normalizedSymbol}.NS`) ?? 
+      priceMap?.get(`${normalizedSymbol}.BO`) ?? 
+      averagePrice;
 
     holdings.push({
       id: generateDerivedHoldingId(accountId, position.symbol),

@@ -8,7 +8,7 @@
  */
 
 import type { HoldingsSourceParser, TransactionSourceParser, SourceParser } from "./types";
-import { indmoneyParser, vestedTransactionsParser, indmoneyTransactionsParser } from "./parsers";
+import { indmoneyParser, indmoneyTransactionsParser, growwOrderHistoryParser } from "./parsers";
 
 /**
  * All registered holdings parsers, keyed by their ID.
@@ -25,8 +25,8 @@ const holdingsParsers: Record<string, HoldingsSourceParser> = {
  * All registered transaction parsers, keyed by their ID.
  */
 const transactionParsers: Record<string, TransactionSourceParser> = {
-  [vestedTransactionsParser.id]: vestedTransactionsParser,
   [indmoneyTransactionsParser.id]: indmoneyTransactionsParser,
+  [growwOrderHistoryParser.id]: growwOrderHistoryParser,
   // Future parsers:
   // [schwabTransactionsParser.id]: schwabTransactionsParser,
 };
@@ -124,4 +124,4 @@ export const getAllSupportedExtensions = (): string[] => {
   return Array.from(extensions);
 };
 
-export { indmoneyParser, vestedTransactionsParser, indmoneyTransactionsParser };
+export { indmoneyParser, indmoneyTransactionsParser, growwOrderHistoryParser };

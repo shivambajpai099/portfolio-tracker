@@ -23,6 +23,7 @@ interface SupabaseLikeClient {
     getSession: () => Promise<{ data: { session: { user: { id: string; email?: string | null } | null } | null }; error: { message: string } | null }>;
     signInWithPassword: (input: { email: string; password: string }) => Promise<{ data: { session: { user: { id: string; email?: string | null } | null } | null; user: { id: string; email?: string | null } | null }; error: { message: string } | null }>;
     signUp: (input: { email: string; password: string }) => Promise<{ data: { session: { user: { id: string; email?: string | null } | null } | null; user: { id: string; email?: string | null } | null }; error: { message: string } | null }>;
+    signInWithOAuth: (input: { provider: string; options?: { redirectTo?: string } }) => Promise<{ data: { url?: string | null; provider?: string } | null; error: { message: string } | null }>;
     signOut: () => Promise<{ error: { message: string } | null }>;
     onAuthStateChange: (callback: (event: unknown, session: { user: { id: string; email?: string | null } | null } | null) => void) => { data: { subscription: AuthSubscription } };
   };
@@ -94,6 +95,7 @@ const createNoopClient = (): SupabaseLikeClient => ({
     getSession: async () => ({ data: { session: null }, error: noopError }),
     signInWithPassword: async () => ({ data: { session: null, user: null }, error: noopError }),
     signUp: async () => ({ data: { session: null, user: null }, error: noopError }),
+    signInWithOAuth: async () => ({ data: null, error: noopError }),
     signOut: async () => ({ error: noopError }),
     onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => undefined } } }),
   },

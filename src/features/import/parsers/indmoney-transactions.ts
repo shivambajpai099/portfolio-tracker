@@ -415,7 +415,7 @@ const parseExcelFile = async (fileUri: string): Promise<TransactionParseResult> 
  */
 export const indmoneyTransactionsParser: TransactionSourceParser = {
   id: "indmoney-transactions",
-  displayName: "INDMoney Transactions",
+  displayName: "INDMoney (transactions)",
   supportedExtensions: [".xlsx", ".xls"],
   description: "Transaction history (ORDER_BOOK) from INDMoney app",
   parserType: "transactions",

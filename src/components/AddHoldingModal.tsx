@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { PortfolioGuideModal } from "./PortfolioGuideModal";
+import { SegmentedControl } from "./SegmentedControl";
 import { fetchLivePrices, searchTickerSuggestions } from "../services/yahooFinanceService";
-import { colors, radii, spacing, typography } from "../theme";
+import { colors, spacing } from "../theme";
 import type { TickerSuggestion } from "../types/marketData";
 import { accountSupportsHoldings, type Account, type Currency } from "../types/portfolio";
 
@@ -55,6 +56,14 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   const [errorText, setErrorText] = useState("");
   const [suggestions, setSuggestions] = useState<SelectedTicker[]>([]);
   const [showGuide, setShowGuide] = useState(false);
+  const searchInputRef = useRef<TextInput>(null);
+
+  // Auto-focus the ticker field when the modal opens.
+  useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(() => searchInputRef.current?.focus(), 150);
+    return () => clearTimeout(t);
+  }, [visible]);
 
   // Custom symbol mode - allows entering tickers not found in search
   const [customMode, setCustomMode] = useState(false);
@@ -111,7 +120,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
         .finally(() => {
           setIsLoading(false);
         });
-    }, 350);
+    }, 100);
 
     return () => {
       clearTimeout(timeoutId);
@@ -165,6 +174,30 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
   }, [accountId, quantity, averagePrice, holdingAccounts, customSymbol, customCompanyName]);
 
   const canSubmit = customMode ? canSubmitCustom : canSubmitSearch;
+
+  // Compute helper message for disabled Save button
+  const disabledHelperMessage = useMemo(() => {
+    if (canSubmit) return null;
+    
+    const missing: string[] = [];
+    const qty = parseNumber(quantity);
+    const avg = parseNumber(averagePrice);
+    const hasValidAccount = holdingAccounts.some((account) => account.id === accountId);
+    
+    if (customMode) {
+      if (!customSymbol.trim()) missing.push("ticker symbol");
+      if (!customCompanyName.trim()) missing.push("company name");
+    } else {
+      if (!selected) missing.push("ticker");
+    }
+    
+    if (!hasValidAccount) missing.push("account");
+    if (!(qty > 0)) missing.push("quantity");
+    if (!(avg > 0)) missing.push("average price");
+    
+    if (missing.length === 0) return null;
+    return `Enter ${missing.join(" and ")} to continue`;
+  }, [canSubmit, customMode, selected, customSymbol, customCompanyName, accountId, quantity, averagePrice, holdingAccounts]);
 
   const resetState = () => {
     setQuery("");
@@ -288,17 +321,29 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
       <View style={styles.overlay}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.modalCard}>
-            <View style={styles.titleRow}>
-              <Text style={styles.title}>Add Holding</Text>
-              <Pressable style={styles.helpBtn} onPress={() => setShowGuide(true)}>
-                <Text style={styles.helpBtnText}>How to fill</Text>
+            {/* Header */}
+            <View style={styles.headerRow}>
+              <View style={styles.headerLeft}>
+                <View style={styles.iconBadge}>
+                  <Text style={styles.iconEmoji}>📈</Text>
+                </View>
+                <Text style={styles.title}>Add Holding</Text>
+              </View>
+              <Pressable style={styles.closeBtn} onPress={handleClose}>
+                <Text style={styles.closeBtnText}>✕</Text>
               </Pressable>
             </View>
+
+            {/* How to fill button */}
+            <Pressable style={styles.helpBtn} onPress={() => setShowGuide(true)}>
+              <Text style={styles.helpBtnText}>How to fill</Text>
+            </Pressable>
 
             {!customMode ? (
               <>
                 <Text style={styles.label}>Search Ticker</Text>
                 <TextInput
+                  ref={searchInputRef}
                   value={query}
                   onChangeText={(value) => {
                     setQuery(value);
@@ -339,11 +384,16 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
                 {/* Show "Can't find ticker?" link when search returns no results and query has content */}
                 {!isLoading && suggestions.length === 0 && query.trim().length >= 2 && !selected ? (
-                  <Pressable style={styles.customModeLink} onPress={handleSwitchToCustomMode}>
-                    <Text style={styles.customModeLinkText}>
-                      Can't find your ticker? Enter manually →
-                    </Text>
-                  </Pressable>
+                  <>
+                    {!errorText ? (
+                      <Text style={styles.emptyResultsText}>No results for "{query.trim()}"</Text>
+                    ) : null}
+                    <Pressable style={styles.customModeLink} onPress={handleSwitchToCustomMode}>
+                      <Text style={styles.customModeLinkText}>
+                        Can't find your ticker? Enter manually →
+                      </Text>
+                    </Pressable>
+                  </>
                 ) : null}
 
                 {selected ? (
@@ -376,28 +426,25 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
                   style={styles.input}
                 />
 
+                <Text style={styles.label}>Company Name</Text>
                 <TextInput
                   value={customCompanyName}
                   onChangeText={setCustomCompanyName}
-                  placeholder="Company name (e.g. Dataram Corporation)"
+                  placeholder="e.g. Dataram Corporation"
                   placeholderTextColor={colors.muted}
-                  style={styles.inputCompact}
+                  style={styles.input}
                 />
 
                 <Text style={styles.label}>Currency</Text>
-                <View style={styles.pillRow}>
-                  {(["USD", "INR"] as Currency[]).map((curr) => {
-                    const active = customCurrency === curr;
-                    return (
-                      <Pressable
-                        key={curr}
-                        style={[styles.pill, active && styles.pillActive]}
-                        onPress={() => setCustomCurrency(curr)}
-                      >
-                        <Text style={[styles.pillText, active && styles.pillTextActive]}>{curr}</Text>
-                      </Pressable>
-                    );
-                  })}
+                <View style={styles.segmentedWrap}>
+                  <SegmentedControl
+                    options={[
+                      { value: "USD", label: "USD" },
+                      { value: "INR", label: "INR" },
+                    ]}
+                    value={customCurrency}
+                    onChange={(v) => setCustomCurrency(v as Currency)}
+                  />
                 </View>
 
                 <View style={styles.customWarning}>
@@ -412,55 +459,86 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
             {holdingAccounts.length === 0 ? (
               <Text style={styles.errorText}>Create a BROKER account before adding holdings.</Text>
             ) : (
-              <View style={styles.pillRow}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.accountChipRow}
+                keyboardShouldPersistTaps="handled"
+              >
                 {holdingAccounts.map((account) => {
                   const active = accountId === account.id;
                   return (
                     <Pressable
                       key={account.id}
-                      style={[styles.pill, active && styles.pillActive]}
+                      style={[styles.accountChip, active && styles.accountChipActive]}
                       onPress={() => setAccountId(account.id)}
                     >
-                      <Text style={[styles.pillText, active && styles.pillTextActive]}>{account.name}</Text>
+                      <Text
+                        style={[styles.accountChipText, active && styles.accountChipTextActive]}
+                        numberOfLines={1}
+                      >
+                        {account.name}
+                      </Text>
                     </Pressable>
                   );
                 })}
-              </View>
+              </ScrollView>
             )}
 
-            <TextInput
-              value={quantity}
-              onChangeText={setQuantity}
-              placeholder="Quantity"
-              placeholderTextColor={colors.muted}
-              keyboardType="decimal-pad"
-              style={styles.inputCompact}
-            />
-            <Text style={styles.inputHint}>Quantity = total units you currently own (for example, 12.5).</Text>
-            <TextInput
-              value={averagePrice}
-              onChangeText={setAveragePrice}
-              placeholder="Average buy price"
-              placeholderTextColor={colors.muted}
-              keyboardType="decimal-pad"
-              style={styles.inputCompact}
-            />
-            <Text style={styles.inputHint}>Average buy price = weighted cost per unit in the same currency as the ticker.</Text>
+            {/* Two-column row for Quantity and Average Price */}
+            <View style={styles.twoColumnRow}>
+              <View style={styles.columnHalf}>
+                <Text style={styles.label}>Quantity</Text>
+                <TextInput
+                  value={quantity}
+                  onChangeText={setQuantity}
+                  placeholder="e.g. 12.5"
+                  placeholderTextColor={colors.muted}
+                  keyboardType="decimal-pad"
+                  style={styles.input}
+                />
+              </View>
+              <View style={styles.columnHalf}>
+                <Text style={styles.label}>Average Price</Text>
+                <TextInput
+                  value={averagePrice}
+                  onChangeText={setAveragePrice}
+                  placeholder="e.g. 150.00"
+                  placeholderTextColor={colors.muted}
+                  keyboardType="decimal-pad"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+            <Text style={styles.inputHint}>Total units owned and weighted cost per unit in ticker currency.</Text>
 
-            <View style={styles.actionsRow}>
-              <Pressable style={styles.cancelBtn} onPress={handleClose}>
+            {/* Action buttons */}
+            <View style={styles.actionRow}>
+              <Pressable style={styles.cancelBtn} onPress={handleClose} disabled={isSaving}>
                 <Text style={styles.cancelText}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[styles.saveBtn, (!canSubmit || isSaving) && styles.saveBtnDisabled]}
+                style={[
+                  styles.saveBtn,
+                  (!canSubmit || isSaving) && styles.saveBtnDisabled,
+                ]}
                 onPress={handleCreate}
                 disabled={!canSubmit || isSaving}
               >
-                <Text style={[styles.saveText, (!canSubmit || isSaving) && styles.saveTextDisabled]}>
-                  {isSaving ? "Saving..." : "Save"}
-                </Text>
+                {isSaving ? (
+                  <ActivityIndicator color={colors.bg} size="small" />
+                ) : (
+                  <Text style={[styles.saveText, !canSubmit && styles.saveTextDisabled]}>
+                    Save Holding
+                  </Text>
+                )}
               </Pressable>
             </View>
+            
+            {/* Helper message for disabled state */}
+            {disabledHelperMessage && !isSaving ? (
+              <Text style={styles.disabledHelper}>{disabledHelperMessage}</Text>
+            ) : null}
           </View>
         </ScrollView>
       </View>
@@ -472,8 +550,8 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    paddingHorizontal: spacing.xl,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xxl,
   },
   scrollContent: {
@@ -482,60 +560,100 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     width: "100%",
-    borderRadius: radii.xl,
-    backgroundColor: colors.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#262B33",
+    backgroundColor: "#12161C",
     padding: spacing.xl,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.5,
+    shadowRadius: 40,
+    elevation: 24,
   },
-  title: {
-    color: colors.text,
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
-  },
-  titleRow: {
+  headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    marginBottom: spacing.md,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  iconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "#16323A",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconEmoji: {
+    fontSize: 16,
+  },
+  title: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  closeBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: "#1A1F26",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  closeBtnText: {
+    color: "#8A94A3",
+    fontSize: 14,
   },
   helpBtn: {
-    borderRadius: radii.md,
-    backgroundColor: colors.bg,
+    alignSelf: "flex-start",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#262B33",
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
+    marginBottom: spacing.md,
   },
   helpBtnText: {
-    color: colors.muted,
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
+    color: "#8A94A3",
+    fontSize: 12,
   },
   label: {
     marginTop: spacing.lg,
-    color: colors.muted,
-    fontSize: typography.body,
+    marginBottom: 6,
+    color: "#8A94A3",
+    fontSize: 12,
   },
   input: {
-    marginTop: spacing.sm,
-    borderRadius: radii.md,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#252932",
-    backgroundColor: colors.bg,
+    borderColor: "#262B33",
+    backgroundColor: "#0E1116",
     color: colors.text,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-  },
-  inputCompact: {
-    marginTop: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: "#252932",
-    backgroundColor: colors.bg,
-    color: colors.text,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    fontSize: 14,
   },
   inputHint: {
     marginTop: spacing.xs,
-    color: colors.muted,
-    fontSize: typography.micro,
+    color: "#8A94A3",
+    fontSize: 11,
+  },
+  segmentedWrap: {
+    marginTop: 0,
+  },
+  twoColumnRow: {
+    flexDirection: "row",
+    gap: 14,
+    marginTop: spacing.sm,
+  },
+  columnHalf: {
+    flex: 1,
   },
   loadingRow: {
     marginTop: spacing.md,
@@ -544,100 +662,128 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   mutedText: {
-    color: colors.muted,
-    fontSize: typography.body,
+    color: "#8A94A3",
+    fontSize: 14,
   },
   errorText: {
     marginTop: spacing.md,
     color: colors.negative,
-    fontSize: typography.body,
+    fontSize: 14,
   },
   suggestionsWrap: {
     marginTop: spacing.md,
     maxHeight: 160,
-    borderRadius: radii.md,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#252932",
-    backgroundColor: colors.bg,
+    borderColor: "#262B33",
+    backgroundColor: "#0E1116",
   },
   suggestionItem: {
     borderBottomWidth: 1,
-    borderBottomColor: "#1E2128",
-    paddingHorizontal: spacing.md,
+    borderBottomColor: "#262B33",
+    paddingHorizontal: 13,
     paddingVertical: spacing.sm,
   },
   suggestionSymbol: {
     color: colors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
+    fontSize: 14,
+    fontWeight: "600",
   },
   suggestionMeta: {
-    color: colors.muted,
-    fontSize: typography.caption,
+    color: "#8A94A3",
+    fontSize: 12,
   },
   selectedCard: {
     marginTop: spacing.lg,
-    borderRadius: radii.md,
-    backgroundColor: colors.bg,
+    borderRadius: 10,
+    backgroundColor: "#0E1116",
     padding: spacing.md,
   },
   selectedSymbol: {
     color: colors.text,
-    fontSize: typography.body,
+    fontSize: 14,
+    fontWeight: "600",
   },
-  pillRow: {
-    marginTop: spacing.sm,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
+  saveBtn: {
+    borderRadius: 10,
+    backgroundColor: "#5FD4EB",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+    minWidth: 120,
   },
-  pill: {
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    backgroundColor: colors.bg,
+  saveBtnDisabled: {
+    backgroundColor: "#1A1F26",
+    borderWidth: 1,
+    borderColor: "#262B33",
   },
-  pillActive: {
-    backgroundColor: colors.accent,
-  },
-  pillText: {
-    color: colors.text,
-    fontSize: typography.body,
-  },
-  pillTextActive: {
-    color: colors.bg,
-  },
-  actionsRow: {
+  actionRow: {
     marginTop: spacing.xxl,
     flexDirection: "row",
     justifyContent: "flex-end",
-    gap: spacing.sm,
+    alignItems: "center",
+    gap: spacing.lg,
   },
   cancelBtn: {
-    borderRadius: radii.md,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.muted,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    borderColor: "#262B33",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
   },
   cancelText: {
-    color: colors.muted,
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "600",
   },
-  saveBtn: {
-    borderRadius: radii.md,
+  emptyResultsText: {
+    marginTop: spacing.md,
+    color: "#8A94A3",
+    fontSize: 14,
+  },
+  accountChipRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingVertical: 2,
+  },
+  accountChip: {
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: "#262B33",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    maxWidth: 160,
+  },
+  accountChipActive: {
+    borderColor: colors.accent,
     backgroundColor: colors.accent,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
   },
-  saveBtnDisabled: {
-    backgroundColor: "#39414F",
+  accountChipText: {
+    color: colors.text,
+    fontSize: 13,
+  },
+  accountChipTextActive: {
+    color: "#FFFFFF",
+    fontWeight: "600",
   },
   saveText: {
-    color: colors.bg,
-    fontWeight: typography.weightSemibold,
+    color: "#0B0C10",
+    fontSize: 14,
+    fontWeight: "600",
   },
   saveTextDisabled: {
-    color: colors.muted,
+    color: "#5A6472",
+  },
+  disabledHelper: {
+    marginTop: spacing.sm,
+    color: "#8A94A3",
+    fontSize: 11,
+    textAlign: "right",
   },
   // Custom mode styles
   customModeLink: {
@@ -646,7 +792,7 @@ const styles = StyleSheet.create({
   },
   customModeLinkText: {
     color: colors.accent,
-    fontSize: typography.caption,
+    fontSize: 12,
   },
   customModeHeader: {
     flexDirection: "row",
@@ -655,18 +801,18 @@ const styles = StyleSheet.create({
   },
   backToSearchText: {
     color: colors.accent,
-    fontSize: typography.caption,
+    fontSize: 12,
     marginTop: spacing.lg,
   },
   customWarning: {
     marginTop: spacing.md,
     backgroundColor: `${colors.warning}22`,
-    borderRadius: radii.md,
+    borderRadius: 10,
     padding: spacing.md,
   },
   customWarningText: {
     color: colors.warning,
-    fontSize: typography.caption,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 18,
   },
 });

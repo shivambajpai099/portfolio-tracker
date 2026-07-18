@@ -1,6 +1,22 @@
 import type { Account, CashHolding, FxRates, Holding, PortfolioSettings } from "../../types/portfolio";
 
-export const seedAccounts: Account[] = [
+/**
+ * Whether to seed dummy/sample data for new users.
+ * Set EXPO_PUBLIC_SEED_DEMO_DATA=true in .env to enable demo data (useful for development/testing).
+ * By default, new users start with empty portfolios.
+ */
+const shouldSeedDemoData = (): boolean => {
+  try {
+    // Check for Expo public env var
+    const envValue = process.env.EXPO_PUBLIC_SEED_DEMO_DATA;
+    return envValue === "true";
+  } catch {
+    return false;
+  }
+};
+
+// Demo accounts for development/testing purposes
+const demoAccounts: Account[] = [
   {
     id: "acc-1",
     name: "Primary Investments",
@@ -27,7 +43,8 @@ export const seedAccounts: Account[] = [
   },
 ];
 
-export const seedHoldings: Holding[] = [
+// Demo holdings for development/testing purposes
+const demoHoldings: Holding[] = [
   {
     id: "h-1",
     accountId: "acc-1",
@@ -70,11 +87,8 @@ export const seedHoldings: Holding[] = [
   },
 ];
 
-export const seedFxRates: FxRates = {
-  USDINR: 83.2,
-};
-
-export const seedCashHoldings: CashHolding[] = [
+// Demo cash holdings for development/testing purposes
+const demoCashHoldings: CashHolding[] = [
   {
     id: "c-1",
     accountId: "acc-1",
@@ -89,12 +103,22 @@ export const seedCashHoldings: CashHolding[] = [
   },
 ];
 
+// Export seed data based on environment configuration
+export const seedAccounts: Account[] = shouldSeedDemoData() ? demoAccounts : [];
+export const seedHoldings: Holding[] = shouldSeedDemoData() ? demoHoldings : [];
+export const seedCashHoldings: CashHolding[] = shouldSeedDemoData() ? demoCashHoldings : [];
+
+export const seedFxRates: FxRates = {
+  USDINR: 83.2,
+};
+
 export const seedSettings: PortfolioSettings = {
   reportingCurrency: "INR",
   includeFamilyAccounts: true,
   allocationBasis: "CURRENT_VALUE",
   allocationIncludeCash: true,
   onboardingTipsSeen: false,
+  spotlightTourSeen: false,
   timelineRetention: "1Y",
   themeMode: "dark",
 };

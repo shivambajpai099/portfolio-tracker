@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { PortfolioSnapshotData } from "../features/portfolio/cloudSnapshot";
 import { calcSymbolAllocations, convert, holdingCost } from "../features/portfolio/calculations";
+import { deriveHoldingsFromTransactions } from "../features/portfolio/fifoCalculator";
 import { exposureBySymbol, holdingMarketValue, toINR, toUSD } from "../features/portfolio/selectors";
 import { seedAccounts, seedCashHoldings, seedFxRates, seedHoldings, seedSettings } from "../features/portfolio/mockData";
 import type {
@@ -22,6 +23,7 @@ const normalizeSettings = (settings: Partial<PortfolioSettings> | undefined): Po
   ...seedSettings,
   ...(settings ?? {}),
   onboardingTipsSeen: Boolean(settings?.onboardingTipsSeen),
+  spotlightTourSeen: Boolean(settings?.spotlightTourSeen),
 });
 
 const DRIFT_SNAPSHOT_LIMIT = 500;
@@ -29,6 +31,40 @@ const DRIFT_SNAPSHOT_LIMIT = 500;
 const isIndiaHolding = (holding: Holding): boolean => {
   const symbol = holding.symbol.toUpperCase();
   return holding.currency === "INR" || symbol.endsWith(".NS") || symbol.endsWith(".BO");
+};
+
+/**
+ * Get all holdings by combining manual holdings with derived holdings from transaction-sourced accounts.
+ * This is used internally for building allocation snapshots.
+ */
+const getAllHoldings = (
+  manualHoldings: Holding[],
+  transactions: Transaction[],
+  accounts: Account[],
+  priceMap?: Map<string, number>
+): Holding[] => {
+  const allHoldings: Holding[] = [];
+  const transactionAccountIds = new Set<string>();
+
+  // Identify which accounts are transaction-sourced
+  for (const account of accounts) {
+    if (account.dataSource === "transactions") {
+      transactionAccountIds.add(account.id);
+    }
+  }
+
+  // Always include all manual holdings (regardless of account type)
+  for (const holding of manualHoldings) {
+    allHoldings.push(holding);
+  }
+
+  // Also add derived holdings for transaction accounts
+  for (const accountId of transactionAccountIds) {
+    const { holdings } = deriveHoldingsFromTransactions(transactions, accountId, priceMap);
+    allHoldings.push(...holdings);
+  }
+
+  return allHoldings;
 };
 
 const buildAllocationSnapshot = (
@@ -160,6 +196,8 @@ interface PortfolioState {
   allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
   fxRates: FxRates;
+  /** Cached market prices for symbols (used for transaction-derived holdings) */
+  marketPrices: Record<string, number>;
   snapshotUpdatedAt: string;
   hydrated: boolean;
   setHydrated: (value: boolean) => void;
@@ -183,6 +221,9 @@ interface PortfolioState {
   setAccountTransactions: (accountId: string, transactions: Transaction[]) => void;
   removeTransactionsByAccount: (accountId: string) => void;
   clearTransactions: () => void;
+
+  /** Update cached market prices for symbols */
+  updateMarketPrices: (prices: Record<string, number>) => void;
 
   updateSettings: (updates: Partial<PortfolioSettings>) => void;
   updateFxRates: (rates: FxRates) => void;
@@ -211,6 +252,7 @@ export const usePortfolioStore = create<PortfolioState>()(
       ],
       settings: seedSettings,
       fxRates: seedFxRates,
+      marketPrices: {},
       snapshotUpdatedAt: new Date().toISOString(),
       hydrated: false,
       setHydrated: (value: boolean) => set({ hydrated: value }),
@@ -272,13 +314,18 @@ export const usePortfolioStore = create<PortfolioState>()(
           const now = new Date().toISOString();
           const holdings = state.holdings.filter((holding) => holding.accountId !== accountId);
           const cashHoldings = state.cashHoldings.filter((cashHolding) => cashHolding.accountId !== accountId);
+          const accounts = state.accounts.filter((account) => account.id !== accountId);
+          const transactions = state.transactions.filter((tx) => tx.accountId !== accountId);
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(holdings, transactions, accounts, priceMap);
           return {
-            accounts: state.accounts.filter((account) => account.id !== accountId),
+            accounts,
             holdings,
             cashHoldings,
+            transactions,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,
-              buildAllocationSnapshot(holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              buildAllocationSnapshot(allHoldings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
               state.settings.timelineRetention
             ),
             snapshotUpdatedAt: now,
@@ -289,11 +336,13 @@ export const usePortfolioStore = create<PortfolioState>()(
         set((state) => {
           const now = new Date().toISOString();
           const holdings = [...state.holdings, holding];
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(holdings, state.transactions, state.accounts, priceMap);
           return {
             holdings,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,
-              buildAllocationSnapshot(holdings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              buildAllocationSnapshot(allHoldings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
               state.settings.timelineRetention
             ),
             snapshotUpdatedAt: now,
@@ -305,11 +354,13 @@ export const usePortfolioStore = create<PortfolioState>()(
           const holdings = state.holdings.map((holding) =>
             holding.id === holdingId ? { ...holding, ...updates } : holding
           );
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(holdings, state.transactions, state.accounts, priceMap);
           return {
             holdings,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,
-              buildAllocationSnapshot(holdings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              buildAllocationSnapshot(allHoldings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
               state.settings.timelineRetention
             ),
             snapshotUpdatedAt: now,
@@ -319,11 +370,13 @@ export const usePortfolioStore = create<PortfolioState>()(
         set((state) => {
           const now = new Date().toISOString();
           const holdings = state.holdings.filter((holding) => holding.id !== holdingId);
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(holdings, state.transactions, state.accounts, priceMap);
           return {
             holdings,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,
-              buildAllocationSnapshot(holdings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              buildAllocationSnapshot(allHoldings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
               state.settings.timelineRetention
             ),
             snapshotUpdatedAt: now,
@@ -334,11 +387,13 @@ export const usePortfolioStore = create<PortfolioState>()(
         set((state) => {
           const now = new Date().toISOString();
           const cashHoldings = [...state.cashHoldings, cashHolding];
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(state.holdings, state.transactions, state.accounts, priceMap);
           return {
             cashHoldings,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,
-              buildAllocationSnapshot(state.holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              buildAllocationSnapshot(allHoldings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
               state.settings.timelineRetention
             ),
             snapshotUpdatedAt: now,
@@ -350,11 +405,13 @@ export const usePortfolioStore = create<PortfolioState>()(
           const cashHoldings = state.cashHoldings.map((cashHolding) =>
             cashHolding.id === cashHoldingId ? { ...cashHolding, ...updates } : cashHolding
           );
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(state.holdings, state.transactions, state.accounts, priceMap);
           return {
             cashHoldings,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,
-              buildAllocationSnapshot(state.holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              buildAllocationSnapshot(allHoldings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
               state.settings.timelineRetention
             ),
             snapshotUpdatedAt: now,
@@ -364,11 +421,13 @@ export const usePortfolioStore = create<PortfolioState>()(
         set((state) => {
           const now = new Date().toISOString();
           const cashHoldings = state.cashHoldings.filter((cashHolding) => cashHolding.id !== cashHoldingId);
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(state.holdings, state.transactions, state.accounts, priceMap);
           return {
             cashHoldings,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,
-              buildAllocationSnapshot(state.holdings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              buildAllocationSnapshot(allHoldings, cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
               state.settings.timelineRetention
             ),
             snapshotUpdatedAt: now,
@@ -377,31 +436,72 @@ export const usePortfolioStore = create<PortfolioState>()(
 
       // Transaction mutations
       addTransactions: (newTransactions: Transaction[]) =>
-        set((state) => ({
-          transactions: [...state.transactions, ...newTransactions],
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const transactions = [...state.transactions, ...newTransactions];
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(state.holdings, transactions, state.accounts, priceMap);
+          return {
+            transactions,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(allHoldings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
 
       setAccountTransactions: (accountId: string, newTransactions: Transaction[]) =>
         set((state) => {
+          const now = new Date().toISOString();
           // Remove existing transactions for this account, then add new ones
           const otherTransactions = state.transactions.filter((tx) => tx.accountId !== accountId);
+          const transactions = [...otherTransactions, ...newTransactions];
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(state.holdings, transactions, state.accounts, priceMap);
           return {
-            transactions: [...otherTransactions, ...newTransactions],
-            snapshotUpdatedAt: new Date().toISOString(),
+            transactions,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(allHoldings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
           };
         }),
 
       removeTransactionsByAccount: (accountId: string) =>
-        set((state) => ({
-          transactions: state.transactions.filter((tx) => tx.accountId !== accountId),
-          snapshotUpdatedAt: new Date().toISOString(),
-        })),
+        set((state) => {
+          const now = new Date().toISOString();
+          const transactions = state.transactions.filter((tx) => tx.accountId !== accountId);
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(state.holdings, transactions, state.accounts, priceMap);
+          return {
+            transactions,
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(allHoldings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
+        }),
 
       clearTransactions: () =>
-        set({
-          transactions: [],
-          snapshotUpdatedAt: new Date().toISOString(),
+        set((state) => {
+          const now = new Date().toISOString();
+          const priceMap = new Map(Object.entries(state.marketPrices));
+          const allHoldings = getAllHoldings(state.holdings, [], state.accounts, priceMap);
+          return {
+            transactions: [],
+            allocationSnapshots: appendAllocationSnapshot(
+              state.allocationSnapshots,
+              buildAllocationSnapshot(allHoldings, state.cashHoldings, state.fxRates, state.settings.reportingCurrency, now),
+              state.settings.timelineRetention
+            ),
+            snapshotUpdatedAt: now,
+          };
         }),
 
       updateSettings: (updates: Partial<PortfolioSettings>) =>
@@ -420,6 +520,10 @@ export const usePortfolioStore = create<PortfolioState>()(
           };
         }),
       updateFxRates: (rates: FxRates) => set({ fxRates: rates, snapshotUpdatedAt: new Date().toISOString() }),
+      updateMarketPrices: (prices: Record<string, number>) =>
+        set((state) => ({
+          marketPrices: { ...state.marketPrices, ...prices },
+        })),
       clearAllData: () =>
         set({
           accounts: [],
@@ -429,12 +533,15 @@ export const usePortfolioStore = create<PortfolioState>()(
           allocationSnapshots: [],
           settings: seedSettings,
           fxRates: seedFxRates,
+          marketPrices: {},
           snapshotUpdatedAt: new Date().toISOString(),
         }),
 
       totalValueInINR: () => {
-        const { holdings, cashHoldings, fxRates } = get();
-        const holdingsValue = holdings.reduce((sum: number, item: Holding) => {
+        const { holdings, transactions, accounts, cashHoldings, fxRates, marketPrices } = get();
+        const priceMap = new Map(Object.entries(marketPrices));
+        const allHoldings = getAllHoldings(holdings, transactions, accounts, priceMap);
+        const holdingsValue = allHoldings.reduce((sum: number, item: Holding) => {
           return sum + toINR(holdingMarketValue(item), item.currency, fxRates);
         }, 0);
         const cashValue = cashHoldings.reduce((sum: number, item) => {
@@ -443,8 +550,10 @@ export const usePortfolioStore = create<PortfolioState>()(
         return holdingsValue + cashValue;
       },
       totalValueInUSD: () => {
-        const { holdings, cashHoldings, fxRates } = get();
-        const holdingsValue = holdings.reduce((sum: number, item: Holding) => {
+        const { holdings, transactions, accounts, cashHoldings, fxRates, marketPrices } = get();
+        const priceMap = new Map(Object.entries(marketPrices));
+        const allHoldings = getAllHoldings(holdings, transactions, accounts, priceMap);
+        const holdingsValue = allHoldings.reduce((sum: number, item: Holding) => {
           return sum + toUSD(holdingMarketValue(item), item.currency, fxRates);
         }, 0);
         const cashValue = cashHoldings.reduce((sum: number, item) => {
@@ -453,8 +562,10 @@ export const usePortfolioStore = create<PortfolioState>()(
         return holdingsValue + cashValue;
       },
       exposure: () => {
-        const { holdings, fxRates } = get();
-        return exposureBySymbol(holdings, fxRates.USDINR);
+        const { holdings, transactions, accounts, fxRates, marketPrices } = get();
+        const priceMap = new Map(Object.entries(marketPrices));
+        const allHoldings = getAllHoldings(holdings, transactions, accounts, priceMap);
+        return exposureBySymbol(allHoldings, fxRates.USDINR);
       },
     }),
     {
@@ -468,6 +579,7 @@ export const usePortfolioStore = create<PortfolioState>()(
         allocationSnapshots: state.allocationSnapshots,
         settings: state.settings,
         fxRates: state.fxRates,
+        marketPrices: state.marketPrices,
         snapshotUpdatedAt: state.snapshotUpdatedAt,
       }),
       onRehydrateStorage: () => (state: PortfolioState | undefined) => {

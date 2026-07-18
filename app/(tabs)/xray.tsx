@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { calcSymbolAllocations, convert, holdingMarketValue } from "../../src/features/portfolio/calculations";
+import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
 import type { Holding } from "../../src/types/portfolio";
@@ -67,10 +68,22 @@ const riskColor = (level: RiskLevel): string => {
 
 export default function PortfolioXRayScreen() {
   const router = useRouter();
-  const holdings = usePortfolioStore((s) => s.holdings);
+  const manualHoldings = usePortfolioStore((s) => s.holdings);
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
+  const accounts = usePortfolioStore((s) => s.accounts);
+  const transactions = usePortfolioStore((s) => s.transactions);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
+  const marketPrices = usePortfolioStore((s) => s.marketPrices);
+
+  // Convert marketPrices record to Map for selectAllHoldings
+  const priceMap = useMemo(() => new Map(Object.entries(marketPrices)), [marketPrices]);
+
+  // Combine manual holdings + derived holdings from transaction-sourced accounts
+  const holdings = useMemo(
+    () => selectAllHoldings(manualHoldings, transactions, accounts, priceMap),
+    [manualHoldings, transactions, accounts, priceMap]
+  );
 
   const rc = settings.reportingCurrency;
 
@@ -200,7 +213,7 @@ export default function PortfolioXRayScreen() {
             <Text style={styles.emptyTitle}>No holdings to analyze yet</Text>
             <Text style={styles.emptyText}>X-Ray insights are missing because there are no holdings in your portfolio.</Text>
             <Text style={styles.emptyText}>Add your first holding to see concentration, geography, and sector analysis.</Text>
-            <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/holdings" as never)}>
+            <Pressable style={styles.emptyPrimaryBtn} onPress={() => router.push("/(tabs)/" as never)}>
               <Text style={styles.emptyPrimaryBtnText}>Add Holding</Text>
             </Pressable>
           </View>

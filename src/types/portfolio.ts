@@ -92,6 +92,8 @@ export interface PortfolioSettings {
   allocationIncludeCash: boolean;
   /** True after the onboarding tips modal has been shown once. */
   onboardingTipsSeen: boolean;
+  /** True after the spotlight onboarding tour has been completed or skipped. */
+  spotlightTourSeen?: boolean;
   /** User-defined target allocation for rebalancing suggestions. */
   targetAllocation?: TargetAllocation | null;
   /** How long to retain historical allocation/timeline snapshots. */

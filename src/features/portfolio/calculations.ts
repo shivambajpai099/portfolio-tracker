@@ -206,6 +206,136 @@ export const calcGeographicSplit = (
   };
 };
 
-// Rebalancing/deploy-cash and snapshot/concentration helpers were removed with the Overview cleanup.
+// ---------------------------------------------------------------------------
+// Per-Holding Performance History (Approach A: Transaction-dates only)
+// ---------------------------------------------------------------------------
 
+export interface HoldingPerformancePoint {
+  /** ISO date string */
+  date: string;
+  /** Total cost basis (invested) at this point */
+  invested: number;
+  /** Current market value at this point (shares_held × market_price) */
+  current: number;
+}
+
+export interface HoldingPerformanceHistory {
+  /** Data points at each transaction date + today */
+  points: HoldingPerformancePoint[];
+  /** Currency of the values */
+  currency: Currency;
+  /** Symbol this history is for */
+  symbol: string;
+}
+
+/**
+ * Transaction input for performance calculation.
+ * Requires transactionDate, type, quantity, and pricePerShare.
+ */
+export interface PerformanceTransaction {
+  transactionDate: string;
+  type: "BUY" | "SELL";
+  quantity: number;
+  pricePerShare: number;
+}
+
+/**
+ * Calculates the performance history (invested vs current) for a single holding
+ * based on its transaction history.
+ * 
+ * Uses average cost basis method:
+ * - BUY: shares_held += qty, total_cost_basis += qty * price_paid
+ * - SELL: reduce total_cost_basis by qty_sold * (total_cost_basis / shares_held),
+ *         then reduce shares_held by qty_sold
+ * 
+ * At each transaction date, records:
+ * - invested = total_cost_basis
+ * - current = shares_held × market_price_at_that_date
+ * 
+ * For Approach A, we use pricePerShare as the market price at transaction date
+ * (since we don't have historical market prices stored separately).
+ * 
+ * Finally, adds today's point using the current market price.
+ * 
+ * @param transactions - All transactions for this symbol, will be sorted by date
+ * @param currentMarketPrice - Today's market price for the final data point
+ * @param symbol - The ticker symbol
+ * @param currency - The currency of the holding
+ * @returns HoldingPerformanceHistory with points at each transaction date + today
+ */
+export const calcHoldingPerformanceHistory = (
+  transactions: PerformanceTransaction[],
+  currentMarketPrice: number,
+  symbol: string,
+  currency: Currency
+): HoldingPerformanceHistory => {
+  if (transactions.length === 0) {
+    return { points: [], currency, symbol };
+  }
+
+  // Sort transactions by date ascending
+  const sortedTxs = [...transactions].sort(
+    (a, b) => new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()
+  );
+
+  const points: HoldingPerformancePoint[] = [];
+  let sharesHeld = 0;
+  let totalCostBasis = 0;
+
+  for (const tx of sortedTxs) {
+    if (tx.type === "BUY") {
+      sharesHeld += tx.quantity;
+      totalCostBasis += tx.quantity * tx.pricePerShare;
+    } else if (tx.type === "SELL") {
+      if (sharesHeld > 0) {
+        const avgCost = totalCostBasis / sharesHeld;
+        // Reduce cost basis by avg cost of shares sold, NOT by sale proceeds
+        totalCostBasis -= tx.quantity * avgCost;
+        sharesHeld -= tx.quantity;
+        
+        // Prevent floating point errors from making values negative
+        if (sharesHeld < 0.0001) {
+          sharesHeld = 0;
+          totalCostBasis = 0;
+        }
+        if (totalCostBasis < 0) {
+          totalCostBasis = 0;
+        }
+      }
+    }
+
+    // For Approach A, use pricePerShare as the market price at transaction date
+    // This is the best available approximation without historical price data
+    const marketPriceAtDate = tx.pricePerShare;
+
+    points.push({
+      date: tx.transactionDate,
+      invested: totalCostBasis,
+      current: sharesHeld * marketPriceAtDate,
+    });
+  }
+
+  // Add today's point using current market price (if we still have shares)
+  const today = new Date().toISOString().split("T")[0] + "T00:00:00.000Z";
+  const lastTxDate = sortedTxs[sortedTxs.length - 1].transactionDate.split("T")[0];
+  const todayDateOnly = today.split("T")[0];
+
+  // Only add today's point if it's different from the last transaction date
+  if (lastTxDate !== todayDateOnly) {
+    points.push({
+      date: today,
+      invested: totalCostBasis,
+      current: sharesHeld * currentMarketPrice,
+    });
+  } else {
+    // Update the last point with current market price
+    if (points.length > 0) {
+      points[points.length - 1].current = sharesHeld * currentMarketPrice;
+    }
+  }
+
+  return { points, currency, symbol };
+};
+
+// Rebalancing/deploy-cash and snapshot/concentration helpers were removed with the Overview cleanup.
 

@@ -211,6 +211,8 @@ export interface TransactionSourceParser {
   description: string;
   /** Parser type discriminator */
   parserType: "transactions";
+  /** Whether this parser is recommended (shown with badge in UI) */
+  recommended?: boolean;
 
   /**
    * Parse a file and extract transaction data.

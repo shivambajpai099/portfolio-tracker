@@ -1,168 +1,97 @@
 import { useMemo, useState } from "react";
-import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { TourTarget } from "../../src/components/OnboardingTourProvider";
 import { PortfolioPerformanceChart, type PortfolioHistoryPoint, type TimeRangeView } from "../../src/components/PortfolioPerformanceChart";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
-import { TickerImage } from "../../src/components/TickerImage";
+import { UserMenu } from "../../src/components/UserMenu";
+import { CurrencyToggle } from "../../src/components/CurrencyToggle";
+import { AddAccountModal, type AddAccountInput } from "../../src/components/AddAccountModal";
+import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
+import { HoldingsSection } from "./holdings";
 import {
   calcPortfolioTotals,
-  calcSymbolAllocations,
   convert,
 } from "../../src/features/portfolio/calculations";
+import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { radii, spacing, typography, useTheme } from "../../src/theme";
-import type { Currency } from "../../src/types/portfolio";
-import { formatMoney, formatCompact, formatCompactGainLoss } from "../../src/utils/format";
-
-type GeoFilter = "ALL" | "INDIA" | "US";
-
-const TICKER_PALETTE = [
-  "#67E8F9",
-  "#6366F1",
-  "#F59E0B",
-  "#22C55E",
-  "#EC4899",
-  "#3B82F6",
-  "#A78BFA",
-  "#F97316",
-  "#14B8A6",
-  "#E879F9",
-];
-
-const CASH_COLOR = "#374151";
-
-// Number of positions to show before "X more positions" row
-const VISIBLE_POSITIONS = 5;
-
-/**
- * Deterministic color assignment based on ticker symbol hash.
- * Ensures consistent colors across renders and reorderings.
- */
-const getTickerColor = (symbol: string): string => {
-  let hash = 0;
-  for (let i = 0; i < symbol.length; i++) {
-    hash = symbol.charCodeAt(i) + ((hash << 5) - hash);
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  const index = Math.abs(hash) % TICKER_PALETTE.length;
-  return TICKER_PALETTE[index];
-};
-
-/**
- * Custom toggle switch component (no external dependency).
- */
-function ToggleSwitch({
-  value,
-  onValueChange,
-  disabled = false,
-}: {
-  value: boolean;
-  onValueChange: (val: boolean) => void;
-  disabled?: boolean;
-}) {
-  const { colors } = useTheme();
-  
-  return (
-    <Pressable
-      onPress={() => !disabled && onValueChange(!value)}
-      style={[
-        styles.toggleTrack,
-        { backgroundColor: value ? colors.accent : colors.surface },
-      ]}
-      accessibilityRole="switch"
-      accessibilityState={{ checked: value }}
-    >
-      <View
-        style={[
-          styles.toggleKnob,
-          {
-            backgroundColor: value ? colors.bg : colors.muted,
-            transform: [{ translateX: value ? 14 : 2 }],
-          },
-        ]}
-      />
-    </Pressable>
-  );
-}
+import { accountSupportsHoldings, type Currency } from "../../src/types/portfolio";
+import { formatMoney } from "../../src/utils/format";
 
 export default function DashboardScreen() {
   const { colors } = useTheme();
-  const router = useRouter();
-  const holdings = usePortfolioStore((s) => s.holdings);
+  const manualHoldings = usePortfolioStore((s) => s.holdings);
   const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
   const accounts = usePortfolioStore((s) => s.accounts);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
-  const updateSettings = usePortfolioStore((s) => s.updateSettings);
   const transactions = usePortfolioStore((s) => s.transactions);
+  const marketPrices = usePortfolioStore((s) => s.marketPrices);
+  const addAccount = usePortfolioStore((s) => s.addAccount);
+  const addCashHolding = usePortfolioStore((s) => s.addCashHolding);
+  const updateAccount = usePortfolioStore((s) => s.updateAccount);
+  const setAccountTransactions = usePortfolioStore((s) => s.setAccountTransactions);
+  const updateMarketPrices = usePortfolioStore((s) => s.updateMarketPrices);
 
-  const [geoFilter, setGeoFilter] = useState<GeoFilter>("ALL");
-  const [expanded, setExpanded] = useState(false);
+  // Convert marketPrices record to Map for selectAllHoldings
+  const priceMap = useMemo(() => new Map(Object.entries(marketPrices)), [marketPrices]);
+
+  // Combine manual holdings + derived holdings from transaction-sourced accounts
+  const holdings = useMemo(
+    () => selectAllHoldings(manualHoldings, transactions, accounts, priceMap),
+    [manualHoldings, transactions, accounts, priceMap]
+  );
+
   const [performanceView, setPerformanceView] = useState<TimeRangeView>("monthly");
+
+  // Onboarding flow: add first account from the portfolio page, then import.
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [importAccountId, setImportAccountId] = useState<string | null>(null);
+
+  const handleCreateAccount = (input: AddAccountInput) => {
+    const timestamp = new Date().toISOString();
+    const accountId = `acc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    addAccount({
+      id: accountId,
+      name: input.name,
+      owner: input.owner,
+      broker: input.broker,
+      type: input.type,
+      baseCurrency: input.baseCurrency,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    if (input.type === "SAVINGS") {
+      addCashHolding({
+        id: `cash-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        accountId,
+        currency: input.baseCurrency,
+        balance: input.savingsInitialBalance ?? 0,
+        updatedAt: timestamp,
+      });
+    }
+
+    setShowAddAccount(false);
+
+    // After adding a broker account, open the import flow right away so the
+    // new user can bring in their transactions.
+    if (accountSupportsHoldings(input.type)) {
+      setImportAccountId(accountId);
+    }
+  };
 
   const rc: Currency = settings.reportingCurrency;
 
-  const filteredHoldings = useMemo(() => {
-    if (geoFilter === "ALL") return holdings;
-    return holdings.filter((h) => {
-      const isIndia = h.currency === "INR" || h.symbol.endsWith(".NS") || h.symbol.endsWith(".BO");
-      return geoFilter === "INDIA" ? isIndia : !isIndia;
-    });
-  }, [holdings, geoFilter]);
-
-  const filteredCashHoldings = useMemo(() => {
-    if (geoFilter === "ALL") return cashHoldings;
-    return cashHoldings.filter((cash) => (geoFilter === "INDIA" ? cash.currency === "INR" : cash.currency === "USD"));
-  }, [cashHoldings, geoFilter]);
-
   const totalsCashHoldings = useMemo(
-    () => (settings.allocationIncludeCash ? filteredCashHoldings : []),
-    [settings.allocationIncludeCash, filteredCashHoldings]
+    () => (settings.allocationIncludeCash ? cashHoldings : []),
+    [settings.allocationIncludeCash, cashHoldings]
   );
 
   const totals = useMemo(
-    () => calcPortfolioTotals(filteredHoldings, totalsCashHoldings, fxRates, rc),
-    [filteredHoldings, totalsCashHoldings, fxRates, rc]
+    () => calcPortfolioTotals(holdings, totalsCashHoldings, fxRates, rc),
+    [holdings, totalsCashHoldings, fxRates, rc]
   );
-  const allocations = useMemo(
-    () => calcSymbolAllocations(filteredHoldings, filteredCashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash),
-    [filteredHoldings, filteredCashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash]
-  );
-  const rankedAllocations = useMemo(() => {
-    return [...allocations].sort((a, b) => {
-      if (b.allocationPct !== a.allocationPct) {
-        return b.allocationPct - a.allocationPct;
-      }
-
-      const aBasisValue = settings.allocationBasis === "INVESTED_VALUE" ? a.investedValue : a.currentValue;
-      const bBasisValue = settings.allocationBasis === "INVESTED_VALUE" ? b.investedValue : b.currentValue;
-      if (bBasisValue !== aBasisValue) {
-        return bBasisValue - aBasisValue;
-      }
-
-      return a.symbol.localeCompare(b.symbol);
-    });
-  }, [allocations, settings.allocationBasis]);
-
-  const cashValueRC = useMemo(
-    () => filteredCashHoldings.reduce((sum, c) => sum + convert(c.balance, c.currency, rc, fxRates), 0),
-    [filteredCashHoldings, rc, fxRates]
-  );
-
-  const cashAllocationPct = useMemo(() => {
-    if (!settings.allocationIncludeCash || cashValueRC === 0) return 0;
-    const symbolsTotal = rankedAllocations.reduce((sum, a) => sum + a.allocationPct, 0);
-    return Math.max(0, 100 - symbolsTotal);
-  }, [rankedAllocations, settings.allocationIncludeCash, cashValueRC]);
-
-  // Determine which holdings to display based on expanded state
-  const visibleAllocations = useMemo(() => {
-    if (expanded) return rankedAllocations;
-    return rankedAllocations.slice(0, VISIBLE_POSITIONS);
-  }, [rankedAllocations, expanded]);
-
-  const hiddenCount = rankedAllocations.length - VISIBLE_POSITIONS;
-  const showMoreRow = !expanded && hiddenCount > 0;
 
   // Build performance chart data from transactions
   const performanceData = useMemo((): PortfolioHistoryPoint[] => {
@@ -235,77 +164,95 @@ export default function DashboardScreen() {
     });
   }, [transactions, performanceView, rc, fxRates, totals.currentValue]);
 
+  // State A: No accounts at all — show centered empty state only
+  const hasNoAccounts = accounts.length === 0;
+
+  const onboardingModals = (
+    <>
+      <AddAccountModal
+        visible={showAddAccount}
+        onClose={() => setShowAddAccount(false)}
+        onCreate={handleCreateAccount}
+      />
+      <ImportTransactionsModal
+        visible={importAccountId !== null}
+        accounts={accounts}
+        preSelectedAccountId={importAccountId ?? undefined}
+        onClose={() => setImportAccountId(null)}
+        onComplete={() => setImportAccountId(null)}
+        setAccountTransactions={setAccountTransactions}
+        updateAccount={updateAccount}
+        updateMarketPrices={updateMarketPrices}
+      />
+    </>
+  );
+
+  // Render State A — no accounts
+  if (hasNoAccounts) {
+    return (
+      <ScreenContainer>
+        <View style={styles.noAccountsContainer}>
+          <Text style={[styles.headerTitle, { color: colors.text, marginBottom: spacing.xxxl }]}>Portfolio</Text>
+          <View style={styles.noAccountsContent}>
+            <View style={[styles.noAccountsIconWrap, { backgroundColor: colors.surface }]}>
+              <Text style={styles.noAccountsIcon}>📊</Text>
+            </View>
+            <Text style={[styles.noAccountsTitle, { color: colors.text }]}>Nothing to track yet</Text>
+            <Text style={[styles.noAccountsBody, { color: colors.muted }]}>
+              Create an account first, then add holdings to see your dashboard come alive.
+            </Text>
+            <TourTarget tourKey="accounts-add">
+              <Pressable
+                style={[styles.noAccountsBtn, { backgroundColor: colors.accent }]}
+                onPress={() => setShowAddAccount(true)}
+              >
+                <Text style={[styles.noAccountsBtnText, { color: colors.bg }]}>Add your first account</Text>
+              </Pressable>
+            </TourTarget>
+          </View>
+        </View>
+        {onboardingModals}
+      </ScreenContainer>
+    );
+  }
+
+  // Render State B and normal state — has at least one account
   return (
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.headerRow}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Portfolio</Text>
           <View style={styles.headerControls}>
-            {/* Currency toggle */}
-            <View style={[styles.currencyToggle, { backgroundColor: colors.surface }]}>
-              {(["INR", "USD"] as Currency[]).map((c) => {
-                const active = rc === c;
-                return (
-                  <Pressable
-                    key={c}
-                    onPress={() => updateSettings({ reportingCurrency: c })}
-                    style={[styles.currencyOption, active && { backgroundColor: colors.accent }]}
-                  >
-                    <Text style={[styles.currencyText, { color: active ? colors.bg : colors.muted }]}>
-                      {c === "INR" ? "₹" : "$"}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            {/* Geo filter */}
-            <View style={styles.filterRow}>
-              {(["ALL", "INDIA", "US"] as GeoFilter[]).map((f) => {
-                const active = geoFilter === f;
-                return (
-                  <Pressable key={f} onPress={() => setGeoFilter(f)} style={[styles.filterPill, { backgroundColor: active ? colors.accent : colors.surface }]}>
-                    <Text style={[styles.filterText, { color: active ? colors.bg : colors.muted }]}>{f}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+            <CurrencyToggle />
+            <UserMenu />
           </View>
         </View>
 
-        {accounts.length === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No accounts yet</Text>
-            <Text style={[styles.emptyBody, { color: colors.muted }]}>There is nothing to track because you have not added an account yet.</Text>
-            <Text style={[styles.emptyBody, { color: colors.muted }]}>Create an account first, then add holdings to see your dashboard come alive.</Text>
-            <Pressable style={[styles.emptyPrimaryBtn, { backgroundColor: colors.accent }]} onPress={() => router.push("/(tabs)/accounts" as never)}>
-              <Text style={[styles.emptyPrimaryBtnText, { color: colors.bg }]}>Add Account</Text>
-            </Pressable>
-          </View>
-        ) : null}
 
-        <View style={styles.heroSection}>
-          <Text style={[styles.heroLabel, { color: colors.muted }]}>Total Portfolio Value</Text>
-          <Text style={[styles.heroValue, { color: colors.text }]}>{formatMoney(totals.currentValue, rc)}</Text>
+        <TourTarget tourKey="overview">
+          <View style={styles.heroSection}>
+            <Text style={[styles.heroLabel, { color: colors.muted }]}>Total Portfolio Value</Text>
+            <Text style={[styles.heroValue, { color: colors.text }]}>{formatMoney(totals.currentValue, rc)}</Text>
 
-          <View style={styles.heroStatsWrap}>
-            <View style={styles.heroStatRow}>
-              <Text style={[styles.heroStatKey, { color: colors.muted }]}>Invested</Text>
-              <Text style={[styles.heroStatValue, { color: colors.text }]}>{formatMoney(totals.investedValue, rc)}</Text>
-            </View>
+            <View style={styles.heroStatsWrap}>
+              <View style={styles.heroStatRow}>
+                <Text style={[styles.heroStatKey, { color: colors.muted }]}>Invested</Text>
+                <Text style={[styles.heroStatValue, { color: colors.text }]}>{formatMoney(totals.investedValue, rc)}</Text>
+              </View>
 
-            <View style={styles.heroStatRow}>
-              <Text style={[styles.heroStatKey, { color: colors.muted }]}>Gain/Loss</Text>
-              <Text style={[
-                styles.heroStatGain,
-                { color: totals.gainLoss >= 0 ? colors.positive : colors.negative },
-              ]}>
-                {totals.gainLoss >= 0 ? "+" : ""}
-                {formatMoney(totals.gainLoss, rc)}
-              </Text>
-              <View style={[
-                styles.gainBadge,
-                { backgroundColor: totals.gainLoss >= 0 ? `${colors.positive}22` : `${colors.negative}22` },
-              ]}>
+              <View style={styles.heroStatRow}>
+                <Text style={[styles.heroStatKey, { color: colors.muted }]}>Gain/Loss</Text>
+                <Text style={[
+                  styles.heroStatGain,
+                  { color: totals.gainLoss >= 0 ? colors.positive : colors.negative },
+                ]}>
+                  {totals.gainLoss >= 0 ? "+" : ""}
+                  {formatMoney(totals.gainLoss, rc)}
+                </Text>
+                <View style={[
+                  styles.gainBadge,
+                  { backgroundColor: totals.gainLoss >= 0 ? `${colors.positive}22` : `${colors.negative}22` },
+                ]}>
                 <Text style={[
                   styles.gainBadgeText,
                   { color: totals.gainLoss >= 0 ? colors.positive : colors.negative },
@@ -317,6 +264,7 @@ export default function DashboardScreen() {
             </View>
           </View>
         </View>
+        </TourTarget>
 
         {/* Portfolio Performance Chart */}
         {accounts.length > 0 && (
@@ -324,151 +272,16 @@ export default function DashboardScreen() {
             <PortfolioPerformanceChart
               data={performanceData}
               currency={rc}
-              view={performanceView}
-              onViewChange={setPerformanceView}
             />
           </View>
         )}
 
-        <View style={styles.sectionGap}>
-          <Text style={[styles.sectionLabel, { color: colors.muted }]}>Allocations</Text>
 
-          {/* Compact allocation filter controls */}
-          <View style={styles.allocationControls}>
-            {/* Basis segmented control */}
-            <View style={[styles.segmentedControl, { backgroundColor: colors.surface }]}>
-              {([
-                ["CURRENT_VALUE", "Current"],
-                ["INVESTED_VALUE", "Invested"],
-              ] as const).map(([basis, label]) => {
-                const active = settings.allocationBasis === basis;
-                return (
-                  <Pressable
-                    key={basis}
-                    onPress={() => updateSettings({ allocationBasis: basis })}
-                    style={[
-                      styles.segmentedOption,
-                      active && { backgroundColor: colors.accent },
-                    ]}
-                  >
-                    <Text style={[
-                      styles.segmentedText,
-                      { color: active ? colors.bg : colors.muted },
-                    ]}>
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {/* Include cash toggle */}
-            <View style={styles.toggleRow}>
-              <Text style={[styles.toggleLabel, { color: colors.muted }]}>Include cash</Text>
-              <ToggleSwitch
-                value={settings.allocationIncludeCash}
-                onValueChange={(val) => updateSettings({ allocationIncludeCash: val })}
-              />
-            </View>
-          </View>
-
-
-          {/* Holdings list */}
-          <View style={styles.allocList}>
-            {visibleAllocations.map((item) => {
-              const tickerColor = getTickerColor(item.symbol);
-              const gainPositive = item.gainLossPct >= 0;
-              const displayValue = settings.allocationBasis === "INVESTED_VALUE" ? item.investedValue : item.currentValue;
-              return (
-                <View key={item.symbol} style={[styles.holdingRow, { borderBottomColor: colors.border }]}>
-                  <View style={styles.holdingLeft}>
-                    <TickerImage symbol={item.symbol} size={28} fallbackColor={tickerColor} />
-                    <View style={styles.holdingInfo}>
-                      <View style={styles.holdingTickerRow}>
-                        <Text style={[styles.holdingTicker, { color: colors.text }]}>{item.symbol}</Text>
-                        <View style={[styles.allocationBadge, { backgroundColor: `${tickerColor}1F`, borderColor: `${tickerColor}55` }]}>
-                          <Text style={[styles.allocationBadgeText, { color: tickerColor }]}>
-                            {item.allocationPct.toFixed(1)}%
-                          </Text>
-                        </View>
-                      </View>
-                      <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
-                        {item.companyName}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.holdingRight}>
-                    <Text style={[styles.holdingValue, { color: colors.text }]}>
-                      {formatCompact(displayValue, rc)}
-                    </Text>
-                    <Text style={[styles.holdingGain, { color: gainPositive ? colors.positive : colors.negative }]}>
-                      {gainPositive ? "+" : ""}{item.gainLossPct.toFixed(2)}% · {formatCompactGainLoss(item.gainLoss, rc)}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
-
-            {/* Cash row — shown when cash is included */}
-            {cashAllocationPct > 0 && (expanded || rankedAllocations.length <= VISIBLE_POSITIONS) ? (
-              <View style={[styles.holdingRow, { borderBottomColor: colors.border }]}>
-                <View style={styles.holdingLeft}>
-                  <View style={styles.cashDotContainer}>
-                    <View style={[styles.holdingDot, { backgroundColor: CASH_COLOR }]} />
-                  </View>
-                  <View style={styles.holdingInfo}>
-                    <View style={styles.holdingTickerRow}>
-                      <Text style={[styles.holdingTicker, { color: colors.text }]}>CASH</Text>
-                      <View style={[styles.allocationBadge, { backgroundColor: `${CASH_COLOR}1F`, borderColor: `${CASH_COLOR}55` }]}>
-                        <Text style={[styles.allocationBadgeText, { color: CASH_COLOR }]}>
-                          {cashAllocationPct.toFixed(1)}%
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1}>
-                      Cash &amp; Equivalents
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.holdingRight}>
-                  <Text style={[styles.holdingValue, { color: colors.text }]}>
-                    {formatCompact(cashValueRC, rc)}
-                  </Text>
-                </View>
-              </View>
-            ) : null}
-
-            {/* Show more row */}
-            {showMoreRow ? (
-              <Pressable onPress={() => setExpanded(true)} style={styles.showMoreRow}>
-                <Text style={[styles.showMoreText, { color: colors.muted }]}>
-                  {hiddenCount} more position{hiddenCount > 1 ? "s" : ""}
-                </Text>
-              </Pressable>
-            ) : null}
-
-            {/* Collapse row when expanded */}
-            {expanded && rankedAllocations.length > VISIBLE_POSITIONS ? (
-              <Pressable onPress={() => setExpanded(false)} style={styles.showMoreRow}>
-                <Text style={[styles.showMoreText, { color: colors.muted }]}>
-                  Show less
-                </Text>
-              </Pressable>
-            ) : null}
-
-            {rankedAllocations.length === 0 && cashAllocationPct === 0 ? (
-              <View style={[styles.emptyCard, { backgroundColor: colors.surface }]}>
-                <Text style={[styles.emptyTitle, { color: colors.text }]}>No holdings yet</Text>
-                <Text style={[styles.emptyBody, { color: colors.muted }]}>Your allocation is empty because no investments have been added.</Text>
-                <Text style={[styles.emptyBody, { color: colors.muted }]}>Add your first holding to see allocation breakdown and risk insights.</Text>
-                <Pressable style={[styles.emptyPrimaryBtn, { backgroundColor: colors.accent }]} onPress={() => router.push("/(tabs)/holdings" as never)}>
-                  <Text style={[styles.emptyPrimaryBtnText, { color: colors.bg }]}>Add Holding</Text>
-                </Pressable>
-              </View>
-            ) : null}
-          </View>
-        </View>
+        {/* Holdings — merged from the former standalone Holdings tab */}
+        <View style={[styles.holdingsDivider, { borderTopColor: colors.border }]} />
+        <HoldingsSection />
       </ScrollView>
+      {onboardingModals}
     </ScreenContainer>
   );
 }
@@ -476,6 +289,49 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 48,
+  },
+  // State A — no accounts centered empty state
+  noAccountsContainer: {
+    flex: 1,
+  },
+  noAccountsContent: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingBottom: 80, // offset for visual center accounting for header
+  },
+  noAccountsIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: radii.lg,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.lg,
+  },
+  noAccountsIcon: {
+    fontSize: 28,
+  },
+  noAccountsTitle: {
+    fontSize: typography.subheading,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.xs,
+    textAlign: "center",
+  },
+  noAccountsBody: {
+    fontSize: typography.caption,
+    textAlign: "center",
+    lineHeight: 20,
+    maxWidth: 280,
+    marginBottom: spacing.lg,
+  },
+  noAccountsBtn: {
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm + 2,
+  },
+  noAccountsBtnText: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
   },
   headerRow: {
     marginBottom: spacing.xxxl,
@@ -492,37 +348,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
   },
-  currencyToggle: {
-    flexDirection: "row",
-    borderRadius: radii.sm,
-    padding: 2,
-  },
-  currencyOption: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs - 1,
-    borderRadius: radii.sm - 1,
-    minWidth: 28,
-    alignItems: "center",
-  },
-  currencyText: {
-    fontSize: typography.caption,
-    fontWeight: typography.weightSemibold,
-  },
-  filterRow: {
-    flexDirection: "row",
-    gap: spacing.xs,
-  },
-  filterPill: {
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  filterText: {
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
-  },
   heroSection: {
-    marginBottom: spacing.xxxl,
+    marginBottom: spacing.lg,
   },
   heroLabel: {
     fontSize: typography.caption,
@@ -566,6 +393,10 @@ const styles = StyleSheet.create({
   chartSection: {
     marginBottom: spacing.xxxl,
   },
+  holdingsDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginBottom: spacing.xxxl,
+  },
   sectionGap: {
     marginBottom: spacing.xxxl,
   },
@@ -583,20 +414,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: spacing.md,
-  },
-  segmentedControl: {
-    flexDirection: "row",
-    borderRadius: radii.md,
-    padding: 2,
-  },
-  segmentedOption: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs - 1,
-    borderRadius: radii.sm,
-  },
-  segmentedText: {
-    fontSize: 11,
-    fontWeight: typography.weightMedium,
   },
   toggleRow: {
     flexDirection: "row",
@@ -674,6 +491,7 @@ const styles = StyleSheet.create({
   },
   holdingRight: {
     alignItems: "flex-end",
+    flexShrink: 0,
   },
   holdingValue: {
     fontSize: typography.body,
