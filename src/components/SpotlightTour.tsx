@@ -6,6 +6,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -15,14 +16,22 @@ import { colors, radii, spacing, typography } from "../theme";
 
 /**
  * Preview images for tour steps.
- * Add new images here as: "filename.jpg": require("../../assets/filename.jpg")
- * 
- * Note: The image file must exist in /assets/ folder before uncommenting.
- * Placeholder shown if image is not found.
+ *
+ * The onboarding "overview" step shows a 3-image carousel. Drop the images in
+ * the app's /assets/ folder using these exact filenames, then uncomment the
+ * matching require() lines below:
+ *
+ *   assets/onboarding-1.jpg   → Portfolio dashboard
+ *   assets/onboarding-2.jpg   → Insights / allocation
+ *   assets/onboarding-3.jpg   → Holdings & performance
+ *
+ * A styled placeholder is shown for any image that isn't registered yet, so
+ * the carousel works before the screenshots are added.
  */
 const PREVIEW_IMAGES: Record<string, any> = {
-  // Uncomment when the screenshot is added:
-  // "onboarding-overview-preview.jpg": require("../../assets/onboarding-overview-preview.jpg"),
+  "onboarding-1.jpg": require("../../assets/onboarding-1.jpg"),
+  "onboarding-2.jpg": require("../../assets/onboarding-2.jpg"),
+  "onboarding-3.jpg": require("../../assets/onboarding-3.jpg"),
 };
 
 export interface TourStep {
@@ -38,6 +47,8 @@ export interface TourStep {
   tooltipPosition?: "top" | "bottom" | "left" | "right";
   /** Optional preview image filename (should be in assets folder) */
   previewImage?: string;
+  /** Optional set of preview image filenames rendered as a carousel */
+  previewImages?: string[];
 }
 
 interface SpotlightTourProps {
@@ -54,6 +65,8 @@ interface SpotlightTourProps {
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
 const TOOLTIP_MAX_WIDTH = 320;
+/** Wider card for steps that render the image carousel. */
+const TOOLTIP_PREVIEW_MAX_WIDTH = 460;
 const SPOTLIGHT_PADDING = 8;
 
 export function SpotlightTour({
@@ -67,10 +80,25 @@ export function SpotlightTour({
 }: SpotlightTourProps) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [tooltipLayout, setTooltipLayout] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [tooltipHeight, setTooltipHeight] = useState(160);
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [carouselWidth, setCarouselWidth] = useState(0);
 
   const step = steps[currentStep];
   const isLastStep = currentStep === steps.length - 1;
   const progress = `${currentStep + 1}/${steps.length}`;
+
+  // Steps with a preview carousel use a larger card so the images render big.
+  const hasPreview = Boolean(step?.previewImages?.length || step?.previewImage);
+  const tooltipWidth = Math.min(
+    hasPreview ? TOOLTIP_PREVIEW_MAX_WIDTH : TOOLTIP_MAX_WIDTH,
+    SCREEN_WIDTH - spacing.xl * 2
+  );
+
+  // Reset the carousel to the first slide whenever the step changes.
+  useEffect(() => {
+    setActiveSlide(0);
+  }, [currentStep]);
 
   useEffect(() => {
     if (visible) {
@@ -86,30 +114,40 @@ export function SpotlightTour({
 
   // Calculate tooltip position based on target rect and preferred position
   useEffect(() => {
+
     if (!targetRect) {
-      // Center the tooltip if no target
+      // No anchor for this step: center the card so it still explains clearly.
       setTooltipLayout({
-        x: (SCREEN_WIDTH - TOOLTIP_MAX_WIDTH) / 2,
-        y: SCREEN_HEIGHT / 2 - 80,
+        x: (SCREEN_WIDTH - tooltipWidth) / 2,
+        y: Math.max(spacing.xxl, SCREEN_HEIGHT / 2 - tooltipHeight / 2),
       });
       return;
     }
 
-    const tooltipHeight = 140; // Approximate height
-    const tooltipWidth = Math.min(TOOLTIP_MAX_WIDTH, SCREEN_WIDTH - spacing.xl * 2);
-    const position = step?.tooltipPosition ?? "bottom";
+    const gap = SPOTLIGHT_PADDING + 12;
+    let position = step?.tooltipPosition ?? "bottom";
+
+    // Flip vertically if the preferred side lacks room, so the card stays on
+    // screen and next to the highlighted element instead of overlapping it.
+    const spaceBelow = SCREEN_HEIGHT - (targetRect.y + targetRect.height);
+    const spaceAbove = targetRect.y;
+    if (position === "bottom" && spaceBelow < tooltipHeight + gap && spaceAbove > spaceBelow) {
+      position = "top";
+    } else if (position === "top" && spaceAbove < tooltipHeight + gap && spaceBelow > spaceAbove) {
+      position = "bottom";
+    }
 
     let x = targetRect.x + targetRect.width / 2 - tooltipWidth / 2;
-    let y = targetRect.y + targetRect.height + SPOTLIGHT_PADDING + 12;
+    let y = targetRect.y + targetRect.height + gap;
 
     // Adjust based on position preference
     if (position === "top") {
-      y = targetRect.y - tooltipHeight - SPOTLIGHT_PADDING - 12;
+      y = targetRect.y - tooltipHeight - gap;
     } else if (position === "left") {
-      x = targetRect.x - tooltipWidth - SPOTLIGHT_PADDING - 12;
+      x = targetRect.x - tooltipWidth - gap;
       y = targetRect.y + targetRect.height / 2 - tooltipHeight / 2;
     } else if (position === "right") {
-      x = targetRect.x + targetRect.width + SPOTLIGHT_PADDING + 12;
+      x = targetRect.x + targetRect.width + gap;
       y = targetRect.y + targetRect.height / 2 - tooltipHeight / 2;
     }
 
@@ -118,7 +156,7 @@ export function SpotlightTour({
     y = Math.max(spacing.xxl, Math.min(y, SCREEN_HEIGHT - tooltipHeight - spacing.xxl));
 
     setTooltipLayout({ x, y });
-  }, [targetRect, step?.tooltipPosition]);
+  }, [targetRect, step?.tooltipPosition, tooltipHeight, tooltipWidth]);
 
   if (!visible || !step) {
     return null;
@@ -191,12 +229,17 @@ export function SpotlightTour({
 
         {/* Tooltip card */}
         <View
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            if (h > 0 && Math.abs(h - tooltipHeight) > 1) setTooltipHeight(h);
+          }}
           style={[
             styles.tooltipCard,
             {
               left: tooltipLayout.x,
               top: tooltipLayout.y,
-              maxWidth: TOOLTIP_MAX_WIDTH,
+              maxWidth: tooltipWidth,
+              ...(hasPreview ? { width: tooltipWidth } : null),
             },
           ]}
         >
@@ -207,23 +250,70 @@ export function SpotlightTour({
           <Text style={styles.tooltipTitle}>{step.title}</Text>
           <Text style={styles.tooltipDescription}>{step.description}</Text>
 
-          {/* Preview image if available */}
-          {step.previewImage ? (
-            PREVIEW_IMAGES[step.previewImage] ? (
-              <View style={styles.previewImageContainer}>
-                <Image
-                  source={PREVIEW_IMAGES[step.previewImage]}
-                  style={styles.previewImage}
-                  resizeMode="cover"
-                />
+          {/* Preview carousel (supports multiple images) */}
+          {(() => {
+            const previewList =
+              step.previewImages ?? (step.previewImage ? [step.previewImage] : []);
+            if (previewList.length === 0) return null;
+
+            const slideWidth = carouselWidth || tooltipWidth - spacing.lg * 2;
+            // Keep slides at the source 16:9 aspect ratio so images are shown
+            // in full (no cropping) and scale with the available width.
+            const slideHeight = Math.round(slideWidth * (9 / 16));
+
+            return (
+              <View
+                style={styles.carousel}
+                onLayout={(e) => {
+                  const w = e.nativeEvent.layout.width;
+                  if (w > 0 && Math.abs(w - carouselWidth) > 1) setCarouselWidth(w);
+                }}
+              >
+                <ScrollView
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  onMomentumScrollEnd={(e) => {
+                    const idx = Math.round(
+                      e.nativeEvent.contentOffset.x / Math.max(slideWidth, 1)
+                    );
+                    setActiveSlide(idx);
+                  }}
+                >
+                  {previewList.map((name, i) => (
+                    <View
+                      key={`${name}-${i}`}
+                      style={[styles.carouselSlide, { width: slideWidth, height: slideHeight }]}
+                    >
+                      {PREVIEW_IMAGES[name] ? (
+                        <Image
+                          source={PREVIEW_IMAGES[name]}
+                          style={{ width: slideWidth, height: slideHeight }}
+                          resizeMode="contain"
+                        />
+                      ) : (
+                        <View style={[styles.previewPlaceholder, styles.carouselPlaceholder, { height: slideHeight }]}>
+                          <Text style={styles.previewPlaceholderIcon}>📊</Text>
+                          <Text style={styles.previewPlaceholderText}>Preview {i + 1}</Text>
+                        </View>
+                      )}
+                    </View>
+                  ))}
+                </ScrollView>
+
+                {previewList.length > 1 ? (
+                  <View style={styles.carouselDots}>
+                    {previewList.map((_, i) => (
+                      <View
+                        key={i}
+                        style={[styles.carouselDot, i === activeSlide && styles.carouselDotActive]}
+                      />
+                    ))}
+                  </View>
+                ) : null}
               </View>
-            ) : (
-              <View style={styles.previewPlaceholder}>
-                <Text style={styles.previewPlaceholderIcon}>📊</Text>
-                <Text style={styles.previewPlaceholderText}>Preview coming soon</Text>
-              </View>
-            )
-          ) : null}
+            );
+          })()}
 
           <View style={styles.tooltipActions}>
             <Pressable style={styles.skipBtn} onPress={onSkip}>
@@ -306,16 +396,38 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: spacing.lg,
   },
-  previewImageContainer: {
+  carousel: {
     marginBottom: spacing.lg,
+  },
+  carouselSlide: {
     borderRadius: radii.md,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: colors.border,
+    backgroundColor: colors.bg,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  previewImage: {
-    width: "100%",
-    height: 140,
+  carouselPlaceholder: {
+    marginBottom: 0,
+    borderStyle: "solid",
+  },
+  carouselDots: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  carouselDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.border,
+  },
+  carouselDotActive: {
+    width: 16,
+    backgroundColor: colors.accent,
   },
   previewPlaceholder: {
     marginBottom: spacing.lg,

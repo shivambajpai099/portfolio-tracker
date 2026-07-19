@@ -12,7 +12,7 @@ const ONBOARDING_TOUR_STEPS: TourStep[] = [
     key: "accounts-add",
     title: "Start by adding an account",
     description:
-      "Add your broker accounts (like INDmoney, Groww, Zerodha, or Fidelity) right here to begin tracking your portfolio.",
+      "Add your broker accounts (like INDmoney, Groww, Zerodha, or Fidelity) right here. You can add as many accounts as you like — including SAVINGS accounts to track cash balances — and manage them all from one place.",
     targetTab: "index",
     tooltipPosition: "bottom",
   },
@@ -26,12 +26,12 @@ const ONBOARDING_TOUR_STEPS: TourStep[] = [
   },
   {
     key: "overview",
-    title: "Your portfolio at a glance",
+    title: "Your whole portfolio at a glance",
     description:
-      "See your total value, allocation breakdown, and performance — all in one place. Track how your investments are distributed across stocks and geographies.",
+      "Your holdings from every account are combined into one consolidated view — total value, allocation breakdown, and performance across all accounts and geographies, side by side.",
     targetTab: "index",
     tooltipPosition: "bottom",
-    previewImage: "onboarding-overview-preview.jpg",
+    previewImages: ["onboarding-1.jpg", "onboarding-2.jpg", "onboarding-3.jpg"],
   },
   {
     key: "insights",
@@ -45,7 +45,7 @@ const ONBOARDING_TOUR_STEPS: TourStep[] = [
     key: "settings",
     title: "Customize your experience",
     description:
-      "Set your preferred currency (INR or USD), update exchange rates, and manage your data — export backups or import from another device.",
+      "Set your preferred currency (INR or USD), fetch the live exchange rate, and choose whether uninvested cash from savings accounts is included in your percentage allocation. You can also export or import your data here.",
     targetTab: "settings",
     tooltipPosition: "top",
   },

@@ -1516,7 +1516,6 @@ export interface TransactionAnalytics {
   evolution: PortfolioEvolution;
   behavior: InvestorBehaviorInsights;
   bestWorst: BestWorstInvestments;
-  activity: InvestmentActivityCalendar;
   hasData: boolean;
 }
 
@@ -1539,7 +1538,6 @@ export const calcTransactionAnalytics = (
   const evolution = calcPortfolioEvolution(transactions, fxRates, reportingCurrency);
   const behavior = calcInvestorBehaviorInsights(transactions, fxRates, reportingCurrency);
   const bestWorst = calcBestWorstInvestments(transactions, currentHoldings, realizations, fxRates, reportingCurrency);
-  const activity = calcInvestmentActivityCalendar(transactions, fxRates, reportingCurrency);
 
   return {
     journey,
@@ -1552,7 +1550,6 @@ export const calcTransactionAnalytics = (
     evolution,
     behavior,
     bestWorst,
-    activity,
     hasData,
   };
 };

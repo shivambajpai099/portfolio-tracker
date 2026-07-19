@@ -20,6 +20,8 @@ export interface Transaction {
   id: string;
   accountId: string;
   symbol: string;
+  /** Primary security identifier used for corporate-action matching (preferred over symbol). */
+  isin?: string;
   companyName: string;
   transactionDate: TimestampISO;
   type: TransactionType;
@@ -28,6 +30,12 @@ export interface Transaction {
   fees?: number;
   currency: Currency;
   notes?: string;
+  /**
+   * IDs of corporate actions (e.g. stock splits) already applied to this
+   * transaction. Enables idempotent re-processing — a split is never applied
+   * twice to the same row.
+   */
+  appliedCorporateActions?: string[];
   createdAt: TimestampISO;
   updatedAt?: TimestampISO;
 }
@@ -38,6 +46,7 @@ export interface Transaction {
 export interface CreateTransactionInput {
   accountId: string;
   symbol: string;
+  isin?: string;
   companyName: string;
   transactionDate: TimestampISO;
   type: TransactionType;
@@ -218,6 +227,7 @@ export interface HistoricalPortfolioSnapshot {
  */
 export interface ParsedTransaction {
   symbol: string;
+  isin?: string;
   companyName?: string;
   transactionDate: string;
   type: TransactionType;

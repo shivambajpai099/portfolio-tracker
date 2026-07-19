@@ -1,7 +1,7 @@
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { TourTarget, useOnboardingTour } from "../../src/components/OnboardingTourProvider";
 import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
@@ -9,6 +9,7 @@ import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { SegmentedControl } from "../../src/components/SegmentedControl";
 import { UserMenu } from "../../src/components/UserMenu";
 import { AccountsSection } from "./accounts";
+import { fetchUsdInrRate } from "../../src/services/yahooFinanceService";
 import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { radii, spacing, typography, useTheme, type ThemeColors } from "../../src/theme";
@@ -40,6 +41,8 @@ export default function SettingsScreen() {
 
   const [rateInput, setRateInput] = useState(String(fxRates.USDINR));
   const [rateError, setRateError] = useState("");
+  const [rateLoading, setRateLoading] = useState(false);
+  const [rateSource, setRateSource] = useState<"live" | "manual">("manual");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
@@ -57,9 +60,39 @@ export default function SettingsScreen() {
       return;
     }
     setRateError("");
+    setRateSource("manual");
     updateFxRates({ USDINR: parsed });
     flash("Exchange rate saved.");
   };
+
+  // Fetch the live USD/INR rate and auto-populate it. Users can still edit
+  // the value manually afterwards (this only overwrites on success).
+  const refreshLiveRate = async (announce = true) => {
+    setRateLoading(true);
+    setRateError("");
+    try {
+      const result = await fetchUsdInrRate();
+      if (result.ok) {
+        const rounded = Math.round(result.data * 100) / 100;
+        setRateInput(String(rounded));
+        setRateSource("live");
+        updateFxRates({ USDINR: rounded });
+        if (announce) flash("Live USD/INR rate applied.");
+      } else if (announce) {
+        flash("Could not fetch live rate. Edit manually if needed.");
+      }
+    } catch {
+      if (announce) flash("Could not fetch live rate. Edit manually if needed.");
+    } finally {
+      setRateLoading(false);
+    }
+  };
+
+  // Auto-populate the live rate once when the screen first mounts.
+  useEffect(() => {
+    void refreshLiveRate(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Reporting currency ───────────────────────────────────────────────────
   const setReportingCurrency = (currency: Currency) => {
@@ -218,127 +251,179 @@ export default function SettingsScreen() {
           <AccountsSection />
         </View>
 
-        {/* ── Exchange rate ────────────────────────────────────────── */}
-        <SectionLabel colors={colors}>Exchange Rate</SectionLabel>
-        <View style={styles.sectionWrap}>
-          <Text style={[styles.rateHint, { color: colors.muted }]}>1 USD equals</Text>
-          <View style={styles.rateRow}>
-            <TextInput
-              value={rateInput}
-              onChangeText={(v) => {
-                setRateInput(v);
-                setRateError("");
-              }}
-              onSubmitEditing={commitRate}
-              keyboardType="decimal-pad"
-              returnKeyType="done"
-              style={[styles.rateInput, { backgroundColor: colors.surface, color: colors.text }]}
-              placeholderTextColor={colors.muted}
+        {/* ── Preferences (all display/allocation toggles grouped) ─── */}
+        <TourTarget tourKey="settings">
+          <SectionLabel colors={colors}>Preferences</SectionLabel>
+          <View style={styles.prefGroup}>
+          {/* Display currency */}
+          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.prefTitle, { color: colors.text }]}>Display currency</Text>
+            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
+              Currency used across the app. Saved on this device.
+            </Text>
+            <SegmentedControl
+              options={[
+                { value: "INR", label: "₹ INR" },
+                { value: "USD", label: "$ USD" },
+              ]}
+              value={settings.reportingCurrency}
+              onChange={(c) => setReportingCurrency(c as Currency)}
             />
-            <Text style={[styles.inrText, { color: colors.muted }]}>INR</Text>
-            <Pressable style={[styles.saveBtn, { backgroundColor: colors.accent }]} onPress={commitRate}>
-              <Text style={[styles.saveBtnText, { color: colors.bg }]}>Save</Text>
-            </Pressable>
           </View>
-          {rateError ? <Text style={[styles.errorText, { color: colors.negative }]}>{rateError}</Text> : null}
-        </View>
 
-        {/* ── Display currency ─────────────────────────────────────── */}
-        <SectionLabel colors={colors}>Display Currency</SectionLabel>
-        <Text style={[styles.hintText, { color: colors.muted }]}>
-          Currency used to display portfolio values across the app. Saved on this device.
-        </Text>
-        <View style={styles.controlRow}>
-          <SegmentedControl
-            options={[
-              { value: "INR", label: "₹ INR" },
-              { value: "USD", label: "$ USD" },
-            ]}
-            value={settings.reportingCurrency}
-            onChange={(c) => setReportingCurrency(c as Currency)}
-          />
-        </View>
+          {/* Exchange rate */}
+          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
+            <View style={styles.rateTitleRow}>
+              <Text style={[styles.prefTitle, { color: colors.text }]}>Exchange rate</Text>
+              <Pressable
+                style={styles.rateRefreshBtn}
+                onPress={() => refreshLiveRate(true)}
+                disabled={rateLoading}
+                accessibilityRole="button"
+                accessibilityLabel="Fetch live USD to INR rate"
+              >
+                <Text style={[styles.rateRefreshText, { color: colors.accent }]}>
+                  {rateLoading ? "Fetching…" : "↻ Live rate"}
+                </Text>
+              </Pressable>
+            </View>
+            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
+              {rateSource === "live"
+                ? "1 USD equals (auto-filled from live market rate — edit if needed)"
+                : "1 USD equals (enter manually or fetch the live rate)"}
+            </Text>
+            <View style={styles.rateRow}>
+              <TextInput
+                value={rateInput}
+                onChangeText={(v) => {
+                  setRateInput(v);
+                  setRateError("");
+                  setRateSource("manual");
+                }}
+                onSubmitEditing={commitRate}
+                keyboardType="decimal-pad"
+                returnKeyType="done"
+                style={[styles.rateInput, { backgroundColor: colors.bg, color: colors.text }]}
+                placeholderTextColor={colors.muted}
+              />
+              <Text style={[styles.inrText, { color: colors.muted }]}>INR</Text>
+              <Pressable style={[styles.saveBtn, { backgroundColor: colors.accent }]} onPress={commitRate}>
+                <Text style={[styles.saveBtnText, { color: colors.bg }]}>Save</Text>
+              </Pressable>
+            </View>
+            {rateError ? <Text style={[styles.errorText, { color: colors.negative }]}>{rateError}</Text> : null}
+          </View>
 
-        {/* ── Allocation settings ──────────────────────────────────── */}
-        <SectionLabel colors={colors}>Allocation Basis</SectionLabel>
-        <View style={styles.controlRow}>
-          <SegmentedControl
-            options={[
-              { value: "CURRENT_VALUE", label: "Current" },
-              { value: "INVESTED_VALUE", label: "Invested" },
-            ]}
-            value={settings.allocationBasis}
-            onChange={(basis) => updateSettings({ allocationBasis: basis as AllocationBasis })}
-          />
-        </View>
+          {/* Allocation basis */}
+          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.prefTitle, { color: colors.text }]}>Allocation basis</Text>
+            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
+              Base allocation percentages on current or invested value.
+            </Text>
+            <SegmentedControl
+              options={[
+                { value: "CURRENT_VALUE", label: "Current" },
+                { value: "INVESTED_VALUE", label: "Invested" },
+              ]}
+              value={settings.allocationBasis}
+              onChange={(basis) => updateSettings({ allocationBasis: basis as AllocationBasis })}
+            />
+          </View>
 
-        <SectionLabel colors={colors}>Cash in Allocation</SectionLabel>
-        <View style={styles.controlRow}>
-          <SegmentedControl
-            options={[
-              { value: "true", label: "Include" },
-              { value: "false", label: "Exclude" },
-            ]}
-            value={String(settings.allocationIncludeCash)}
-            onChange={(v) => updateSettings({ allocationIncludeCash: v === "true" })}
-          />
-        </View>
+          {/* Cash in allocation */}
+          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.prefTitle, { color: colors.text }]}>Cash in allocation</Text>
+            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
+              Include uninvested cash when computing allocations.
+            </Text>
+            <SegmentedControl
+              options={[
+                { value: "true", label: "Include" },
+                { value: "false", label: "Exclude" },
+              ]}
+              value={String(settings.allocationIncludeCash)}
+              onChange={(v) => updateSettings({ allocationIncludeCash: v === "true" })}
+            />
+          </View>
 
-        <SectionLabel colors={colors}>History Retention</SectionLabel>
-        <View style={styles.controlRow}>
-          <SegmentedControl
-            options={[
-              { value: "6M", label: "6M" },
-              { value: "1Y", label: "1Y" },
-              { value: "2Y", label: "2Y" },
-              { value: "ALL", label: "All" },
-            ]}
-            value={settings.timelineRetention ?? "1Y"}
-            onChange={(v) => updateSettings({ timelineRetention: v as TimelineRetention })}
-          />
-        </View>
+          {/* Intraday trades */}
+          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.prefTitle, { color: colors.text }]}>Intraday trades</Text>
+            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
+              Exclude same-day buy/sell round-trips from Insights so day-trading doesn’t skew win rate and holding periods.
+            </Text>
+            <SegmentedControl
+              options={[
+                { value: "true", label: "Exclude" },
+                { value: "false", label: "Include" },
+              ]}
+              value={String(settings.excludeIntradayFromInsights ?? true)}
+              onChange={(v) => updateSettings({ excludeIntradayFromInsights: v === "true" })}
+            />
+          </View>
 
-        {/* ── Theme ────────────────────────────────────────────────── */}
-        <SectionLabel colors={colors}>Theme</SectionLabel>
-        <View style={styles.controlRow}>
-          <SegmentedControl
-            options={[
-              { value: "light", label: "Light" },
-              { value: "dark", label: "Dark" },
-              { value: "system", label: "System" },
-            ]}
-            value={settings.themeMode ?? "dark"}
-            onChange={(v) => updateSettings({ themeMode: v as ThemeMode })}
-          />
+          {/* History retention */}
+          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.prefTitle, { color: colors.text }]}>History retention</Text>
+            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
+              How much historical snapshot data to keep.
+            </Text>
+            <SegmentedControl
+              options={[
+                { value: "6M", label: "6M" },
+                { value: "1Y", label: "1Y" },
+                { value: "2Y", label: "2Y" },
+                { value: "ALL", label: "All" },
+              ]}
+              value={settings.timelineRetention ?? "1Y"}
+              onChange={(v) => updateSettings({ timelineRetention: v as TimelineRetention })}
+            />
+          </View>
+
+          {/* Theme */}
+          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.prefTitle, { color: colors.text }]}>Theme</Text>
+            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
+              Appearance of the app interface.
+            </Text>
+            <SegmentedControl
+              options={[
+                { value: "light", label: "Light" },
+                { value: "dark", label: "Dark" },
+                { value: "system", label: "System" },
+              ]}
+              value={settings.themeMode ?? "dark"}
+              onChange={(v) => updateSettings({ themeMode: v as ThemeMode })}
+            />
+          </View>
         </View>
+        </TourTarget>
 
         {/* ── Help ─────────────────────────────────────────────────── */}
-        <TourTarget tourKey="settings">
-          <SectionLabel colors={colors}>Help</SectionLabel>
-          <View style={styles.cardList}>
-            <Pressable onPress={startTourNow} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-              <View>
-                <Text style={[styles.actionTitle, { color: colors.text }]}>Start Guided Tour</Text>
-                <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Walk through key features of the app step by step</Text>
-              </View>
-              <Text style={{ color: colors.muted }}>▶</Text>
-            </Pressable>
-            <Pressable onPress={() => setShowGuide(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-              <View>
-                <Text style={[styles.actionTitle, { color: colors.text }]}>Portfolio Guide</Text>
-                <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Understand metrics, filters, and how to input holdings</Text>
-              </View>
-              <Text style={{ color: colors.muted }}>?</Text>
-            </Pressable>
-            <Pressable onPress={showGuideNextLaunch} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-              <View>
-                <Text style={[styles.actionTitle, { color: colors.text }]}>Show Guide on Next Launch</Text>
-                <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Useful when sharing the app with someone new</Text>
-              </View>
-              <Text style={{ color: colors.muted }}>↻</Text>
-            </Pressable>
-          </View>
-        </TourTarget>
+        <SectionLabel colors={colors}>Help</SectionLabel>
+        <View style={styles.cardList}>
+          <Pressable onPress={startTourNow} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
+            <View>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Start Guided Tour</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Walk through key features of the app step by step</Text>
+            </View>
+            <Text style={{ color: colors.muted }}>▶</Text>
+          </Pressable>
+          <Pressable onPress={() => setShowGuide(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
+            <View>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Portfolio Guide</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Understand metrics, filters, and how to input holdings</Text>
+            </View>
+            <Text style={{ color: colors.muted }}>?</Text>
+          </Pressable>
+          <Pressable onPress={showGuideNextLaunch} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
+            <View>
+              <Text style={[styles.actionTitle, { color: colors.text }]}>Show Guide on Next Launch</Text>
+              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Useful when sharing the app with someone new</Text>
+            </View>
+            <Text style={{ color: colors.muted }}>↻</Text>
+          </Pressable>
+        </View>
 
         {/* ── Data ─────────────────────────────────────────────────── */}
         <SectionLabel colors={colors}>Data</SectionLabel>
@@ -439,6 +524,24 @@ const styles = StyleSheet.create({
   accountsSectionWrap: {
     marginBottom: spacing.xl,
   },
+  prefGroup: {
+    gap: spacing.sm,
+    marginBottom: spacing.xxl,
+  },
+  prefCard: {
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    gap: spacing.sm,
+  },
+  prefTitle: {
+    fontSize: typography.body,
+    fontWeight: typography.weightMedium,
+  },
+  prefSubtitle: {
+    fontSize: typography.caption,
+    lineHeight: 16,
+  },
   sectionLabel: {
     marginBottom: spacing.md,
     fontSize: typography.caption,
@@ -446,17 +549,23 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 1,
   },
-  sectionWrap: {
-    marginBottom: spacing.xxl,
-  },
-  rateHint: {
-    marginBottom: spacing.sm,
-    fontSize: typography.caption,
-  },
   rateRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
+  },
+  rateTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  rateRefreshBtn: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+  },
+  rateRefreshText: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightMedium,
   },
   rateInput: {
     flex: 1,
@@ -479,16 +588,6 @@ const styles = StyleSheet.create({
   errorText: {
     marginTop: spacing.xs,
     fontSize: typography.caption,
-  },
-  controlRow: {
-    marginBottom: spacing.xl,
-    flexDirection: "row",
-    alignItems: "flex-start",
-  },
-  hintText: {
-    fontSize: typography.caption,
-    marginBottom: spacing.sm,
-    lineHeight: 16,
   },
   cardList: {
     marginBottom: spacing.sm,

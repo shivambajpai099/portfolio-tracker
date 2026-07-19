@@ -5,6 +5,7 @@ import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { captureRef } from "react-native-view-shot";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { TourTarget } from "../../src/components/OnboardingTourProvider";
 import { UserMenu } from "../../src/components/UserMenu";
 import { CountryAllocationBlock } from "../../src/components/CountryAllocationBlock";
 import { RiskSnapshotSection } from "../../src/components/RiskSnapshotSection";
@@ -18,6 +19,7 @@ import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { calcTransactionAnalytics } from "../../src/features/portfolio/transactionAnalytics";
 import { getAllRealizations } from "../../src/features/portfolio/fifoCalculator";
+import { excludeIntradayRoundTrips } from "../../src/features/portfolio/intraday";
 import { calcSymbolAllocations, convert, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { formatMoney } from "../../src/utils/format";
@@ -236,9 +238,12 @@ export default function PortfolioInsightsScreen() {
   const [reviewCardNode, setReviewCardNode] = useState<View | null>(null);
 
   const analytics = useMemo(() => {
-    const realizations = getAllRealizations(transactions);
-    return calcTransactionAnalytics(transactions, holdings, realizations, fxRates, rc);
-  }, [transactions, holdings, fxRates, rc]);
+    const source = settings.excludeIntradayFromInsights
+      ? excludeIntradayRoundTrips(transactions)
+      : transactions;
+    const realizations = getAllRealizations(source);
+    return calcTransactionAnalytics(source, holdings, realizations, fxRates, rc);
+  }, [transactions, holdings, fxRates, rc, settings.excludeIntradayFromInsights]);
 
   const countryData = useMemo(() => {
     let indiaValue = 0;
@@ -461,10 +466,12 @@ export default function PortfolioInsightsScreen() {
     return (
       <ScreenContainer>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          <View style={styles.headerRow}>
-            <Text style={styles.title}>Insights</Text>
-            <UserMenu />
-          </View>
+          <TourTarget tourKey="insights">
+            <View style={styles.headerRow}>
+              <Text style={styles.title}>Insights</Text>
+              <UserMenu />
+            </View>
+          </TourTarget>
           <Text style={styles.subtitle}>Risk, allocation, performance and behavior analytics.</Text>
           <View style={styles.emptyCard}>
             <Ionicons name="analytics-outline" size={48} color={defaultColors.muted} style={styles.emptyIcon} />
@@ -481,10 +488,12 @@ export default function PortfolioInsightsScreen() {
   return (
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        <View style={styles.headerRow}>
-          <Text style={styles.title}>Insights</Text>
-          <UserMenu />
-        </View>
+        <TourTarget tourKey="insights">
+          <View style={styles.headerRow}>
+            <Text style={styles.title}>Insights</Text>
+            <UserMenu />
+          </View>
+        </TourTarget>
         <Text style={styles.subtitle}>Risk, allocation, performance and behavior analytics.</Text>
 
         <CountryAllocationBlock

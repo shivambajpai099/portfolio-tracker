@@ -690,3 +690,32 @@ export const clearYahooFinanceCache = (): void => {
   SPARKLINE_CACHE.clear();
 };
 
+/**
+ * Fetches the live USD → INR exchange rate (number of INR per 1 USD).
+ * Uses the same live-price pipeline (proxy on web, direct on native) with the
+ * Yahoo FX symbol `USDINR=X`. Returns a discriminated result so callers can
+ * fall back to the manually stored rate on failure.
+ */
+export const fetchUsdInrRate = async (
+  signal?: AbortSignal,
+  forceRefresh?: boolean
+): Promise<ServiceResult<number>> => {
+  const result = await fetchLivePrices(["USDINR=X"], signal, forceRefresh);
+  if (!result.ok) {
+    return { ok: false, error: result.error, fromCache: result.fromCache, fetchedAt: result.fetchedAt };
+  }
+
+  const quote = result.data.find((item) => item.symbol === "USDINR=X") ?? result.data[0];
+  const rate = quote?.price;
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+    return {
+      ok: false,
+      error: buildError("Could not read a valid USD/INR rate.", "API"),
+      fromCache: result.fromCache,
+      fetchedAt: result.fetchedAt,
+    };
+  }
+
+  return { ok: true, data: rate, fromCache: result.fromCache, fetchedAt: result.fetchedAt };
+};
+

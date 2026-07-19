@@ -129,6 +129,7 @@ export default function DashboardScreen() {
         setAccountTransactions={setAccountTransactions}
         updateAccount={updateAccount}
         updateMarketPrices={updateMarketPrices}
+        manualHoldings={manualHoldings}
       />
     </>
   );
@@ -138,7 +139,12 @@ export default function DashboardScreen() {
     return (
       <ScreenContainer>
         <View style={styles.noAccountsContainer}>
-          <Text style={[styles.headerTitle, { color: colors.text, marginBottom: spacing.xxxl }]}>Portfolio</Text>
+          <View style={styles.headerRow}>
+            <Text style={[styles.headerTitle, { color: colors.text }]}>Portfolio</Text>
+            <View style={styles.headerControls}>
+              <UserMenu />
+            </View>
+          </View>
           <View style={styles.noAccountsContent}>
             <View style={[styles.noAccountsIconWrap, { backgroundColor: colors.surface }]}>
               <Text style={styles.noAccountsIcon}>📊</Text>

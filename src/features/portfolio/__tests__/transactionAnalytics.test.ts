@@ -370,7 +370,6 @@ describe("calcTransactionAnalytics", () => {
     expect(result.evolution).toBeDefined();
     expect(result.behavior).toBeDefined();
     expect(result.bestWorst).toBeDefined();
-    expect(result.activity).toBeDefined();
   });
 
   it("handles empty data gracefully", () => {

@@ -9,6 +9,8 @@ import type { Currency, Holding } from "../../types/portfolio";
 import type { Transaction, ParsedTransaction, TransactionParseResult } from "../../types/transaction";
 import { deriveHoldingsFromTransactions } from "../portfolio/fifoCalculator";
 import { applyCorporateActions } from "../portfolio/corporateActions";
+import { processCorporateActions } from "../portfolio/corporateActionProcessor";
+import type { CorporateActionEvent } from "../portfolio/corporateActionProcessor";
 import type { EnrichedHolding, TransactionImportReviewData, SkippedRow } from "./types";
 
 /**
@@ -32,6 +34,7 @@ export const createTransactionFromParsed = (
     id: generateTransactionId(),
     accountId,
     symbol: parsed.symbol.toUpperCase(),
+    isin: parsed.isin?.trim().toUpperCase() || undefined,
     companyName: companyName || parsed.companyName || parsed.symbol.toUpperCase(),
     transactionDate: parsed.transactionDate,
     type: parsed.type,
@@ -50,7 +53,8 @@ export const createTransactionFromParsed = (
 export const createTransactionsFromParseResult = (
   parseResult: TransactionParseResult,
   accountId: string,
-  priceMap?: Map<string, { price: number; companyName: string }>
+  priceMap?: Map<string, { price: number; companyName: string }>,
+  corporateActions?: CorporateActionEvent[]
 ): Transaction[] => {
   const currency = parseResult.currency || "USD";
 
@@ -64,9 +68,14 @@ export const createTransactionsFromParseResult = (
     );
   });
 
-  // Reconcile corporate actions (bonus/demerger/rename) that credit shares
-  // without a broker order row — prevents false FIFO short-sell warnings.
-  return applyCorporateActions(transactions);
+  // Normalization stage. Order matters:
+  //  1. Stock splits — adjust historical quantity/price so share counts are
+  //     consistent with the post-split reality.
+  //  2. Bonus/demerger/rename reconciliation — sizes injected shares from the
+  //     (now split-adjusted) holdings as of each record date.
+  // FIFO and the intraday filter downstream receive only these normalized rows.
+  const splitNormalized = processCorporateActions(transactions, corporateActions);
+  return applyCorporateActions(splitNormalized);
 };
 
 /**
@@ -76,12 +85,13 @@ export const createTransactionsFromParseResult = (
 export const buildTransactionImportReviewData = (
   parseResult: TransactionParseResult,
   accountId: string,
-  priceMap: Map<string, { price: number; companyName: string }>
+  priceMap: Map<string, { price: number; companyName: string }>,
+  corporateActions?: CorporateActionEvent[]
 ): TransactionImportReviewData => {
   const currency = parseResult.currency || "USD";
 
   // Create transactions from parsed data
-  const transactions = createTransactionsFromParseResult(parseResult, accountId, priceMap);
+  const transactions = createTransactionsFromParseResult(parseResult, accountId, priceMap, corporateActions);
 
   // Derive holdings using FIFO
   const { holdings, errors } = deriveHoldingsFromTransactions(

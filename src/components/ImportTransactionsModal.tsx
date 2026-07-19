@@ -18,12 +18,14 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { colors, radii, spacing, typography } from "../theme";
-import { accountSupportsHoldings, type Account, type Currency } from "../types/portfolio";
+import { accountSupportsHoldings, type Account, type Currency, type Holding } from "../types/portfolio";
 import type { Transaction, TransactionParseResult } from "../types/transaction";
 import type { TransactionSourceParser, TransactionImportReviewData, EnrichedHolding } from "../features/import/types";
 import {
@@ -34,8 +36,24 @@ import {
   getSymbolsFromTransactions,
 } from "../features/import";
 import { fetchLivePrices } from "../services/yahooFinanceService";
+import { fetchStockSplits } from "../services/corporateActionsService";
+import { DEFAULT_STOCK_SPLITS } from "../features/portfolio/corporateActionProcessor";
+import type { StockSplit } from "../features/portfolio/corporateActionProcessor";
 
-type ImportStep = "upload" | "account" | "review" | "complete";
+type ImportStep = "upload" | "account" | "corporate" | "review" | "complete";
+
+/** Editable representation of a stock split shown in the corporate-actions step. */
+interface EditableSplit {
+  key: string;
+  enabled: boolean;
+  isin?: string;
+  symbol: string;
+  effectiveDate: string; // YYYY-MM-DD
+  newShares: string; // kept as strings for TextInput
+  oldShares: string;
+  label?: string;
+  source: "fetched" | "manual";
+}
 
 interface ImportTransactionsModalProps {
   visible: boolean;
@@ -47,6 +65,8 @@ interface ImportTransactionsModalProps {
   updateMarketPrices?: (prices: Record<string, number>) => void;
   /** Pre-select an account when opening the modal */
   preSelectedAccountId?: string;
+  /** Manual holdings, used to warn when an import will replace them. */
+  manualHoldings?: Holding[];
 }
 
 interface ImportCompleteResult {
@@ -66,6 +86,7 @@ export function ImportTransactionsModal({
   updateAccount,
   updateMarketPrices,
   preSelectedAccountId,
+  manualHoldings = [],
 }: ImportTransactionsModalProps) {
   // Step state
   const [step, setStep] = useState<ImportStep>("upload");
@@ -83,6 +104,12 @@ export function ImportTransactionsModal({
 
   // Account step state
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+
+  // Corporate-actions step state
+  const [editableSplits, setEditableSplits] = useState<EditableSplit[]>([]);
+  const [appliedSplits, setAppliedSplits] = useState<StockSplit[]>([]);
+  const [isFetchingActions, setIsFetchingActions] = useState(false);
+  const [actionsError, setActionsError] = useState<string | null>(null);
 
   // Review step state
   const [reviewData, setReviewData] = useState<TransactionImportReviewData | null>(null);
@@ -139,6 +166,9 @@ export function ImportTransactionsModal({
     setParseResult(null);
     setParseError(null);
     setSelectedAccountId("");
+    setEditableSplits([]);
+    setAppliedSplits([]);
+    setActionsError(null);
     setReviewData(null);
     setPriceMap(new Map());
     onClose();
@@ -210,8 +240,113 @@ export function ImportTransactionsModal({
     }
   };
 
-  // Handle account selection and proceed to review
-  const handleProceedToReview = async () => {
+  // Convert an editable split row into a validated StockSplit (or null if invalid).
+  const toStockSplit = (e: EditableSplit): StockSplit | null => {
+    const symbol = e.symbol.trim().toUpperCase();
+    const effectiveDate = e.effectiveDate.trim();
+    const newShares = Number(e.newShares);
+    const oldShares = Number(e.oldShares);
+    if (!symbol || !effectiveDate) return null;
+    if (!Number.isFinite(newShares) || !Number.isFinite(oldShares) || newShares <= 0 || oldShares <= 0) {
+      return null;
+    }
+    return {
+      type: "split",
+      symbol,
+      isin: e.isin,
+      effectiveDate,
+      ratio: { newShares, oldShares },
+      label: e.label,
+    };
+  };
+
+  const updateSplit = (key: string, patch: Partial<EditableSplit>) =>
+    setEditableSplits((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)));
+
+  const removeSplit = (key: string) =>
+    setEditableSplits((prev) => prev.filter((s) => s.key !== key));
+
+  const addManualSplit = () =>
+    setEditableSplits((prev) => [
+      ...prev,
+      {
+        key: `manual-${Date.now()}`,
+        enabled: true,
+        symbol: "",
+        effectiveDate: "",
+        newShares: "1",
+        oldShares: "1",
+        source: "manual",
+      },
+    ]);
+
+  // Move from account selection to the corporate-actions review step, fetching
+  // known stock splits for the imported symbols.
+  const handleProceedToCorporate = async () => {
+    if (!selectedAccountId || !parseResult) return;
+    setStep("corporate");
+    setIsFetchingActions(true);
+    setActionsError(null);
+
+    const normSym = (s: string) => s.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
+    const importedSymbols = new Set(parseResult.transactions.map((t) => normSym(t.symbol)));
+
+    try {
+      const securities = parseResult.transactions.map((t) => ({
+        symbol: t.symbol,
+        isin: t.isin,
+        currency: parseResult.currency,
+      }));
+      const { splits: fetched, errors } = await fetchStockSplits(securities);
+
+      // Seed with built-in defaults for imported symbols (covers cases where the
+      // network fetch is blocked, e.g. web CORS), then merge fetched splits.
+      const defaults = DEFAULT_STOCK_SPLITS.filter((s) => importedSymbols.has(normSym(s.symbol ?? "")));
+
+      const merged: StockSplit[] = [];
+      const seen = new Set<string>();
+      for (const s of [...defaults, ...fetched]) {
+        const key = `${normSym(s.symbol ?? "")}|${s.effectiveDate}|${s.ratio.newShares}:${s.ratio.oldShares}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(s);
+      }
+
+      setEditableSplits(
+        merged.map((s, idx) => ({
+          key: `split-${idx}`,
+          enabled: true,
+          isin: s.isin,
+          symbol: s.symbol ?? "",
+          effectiveDate: s.effectiveDate,
+          newShares: String(s.ratio.newShares),
+          oldShares: String(s.ratio.oldShares),
+          label: s.label,
+          source: "fetched",
+        }))
+      );
+      if (errors.length > 0) {
+        setActionsError(`Couldn't fetch splits for ${errors.length} symbol(s). You can add them manually.`);
+      }
+    } catch {
+      setActionsError("Failed to fetch corporate actions. You can add them manually.");
+    } finally {
+      setIsFetchingActions(false);
+    }
+  };
+
+  // Confirm the reviewed corporate actions and continue to the holdings review.
+  const handleConfirmCorporate = () => {
+    const splits = editableSplits
+      .filter((s) => s.enabled)
+      .map(toStockSplit)
+      .filter((s): s is StockSplit => s !== null);
+    setAppliedSplits(splits);
+    handleProceedToReview(splits);
+  };
+
+  // Fetch prices, apply corporate actions, and build the holdings preview.
+  const handleProceedToReview = async (splits: StockSplit[] = appliedSplits) => {
     if (!selectedAccountId || !parseResult || !selectedAccount) return;
 
     setIsFetchingPrices(true);
@@ -238,7 +373,8 @@ export function ImportTransactionsModal({
       const review = buildTransactionImportReviewData(
         parseResult,
         selectedAccountId,
-        newPriceMap
+        newPriceMap,
+        splits
       );
       setReviewData(review);
     } catch (error) {
@@ -246,7 +382,8 @@ export function ImportTransactionsModal({
       const review = buildTransactionImportReviewData(
         parseResult,
         selectedAccountId,
-        new Map()
+        new Map(),
+        splits
       );
       setReviewData(review);
     } finally {
@@ -267,7 +404,8 @@ export function ImportTransactionsModal({
       const transactions = createTransactionsFromParseResult(
         parseResult,
         selectedAccountId,
-        priceMap
+        priceMap,
+        appliedSplits
       );
 
       // Replace all transactions for this account
@@ -470,15 +608,132 @@ export function ImportTransactionsModal({
           </Pressable>
           <Pressable
             style={[styles.primaryButton, !selectedAccountId && styles.buttonDisabled]}
-            onPress={handleProceedToReview}
+            onPress={handleProceedToCorporate}
             disabled={!selectedAccountId}
           >
-            <Text style={styles.primaryButtonText}>Review</Text>
+            <Text style={styles.primaryButtonText}>Next</Text>
           </Pressable>
         </View>
       </View>
     );
   };
+
+  // Render corporate-actions step
+  const renderCorporateStep = () => (
+    <View style={styles.stepContent}>
+      <Text style={styles.stepTitle}>Corporate Actions</Text>
+      <Text style={styles.stepDescription}>
+        Stock splits adjust the quantity & price of transactions before their ex-date. Review, edit,
+        add or disable them before importing.
+      </Text>
+
+      {isFetchingActions ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={styles.loadingText}>Fetching corporate actions…</Text>
+        </View>
+      ) : (
+        <>
+          {actionsError && (
+            <View style={styles.warningBox}>
+              <Text style={styles.warningText}>{actionsError}</Text>
+            </View>
+          )}
+
+          {editableSplits.length === 0 ? (
+            <View style={styles.emptyActions}>
+              <Text style={styles.emptyActionsText}>
+                No stock splits found for these symbols. Add one manually if you know of a split.
+              </Text>
+            </View>
+          ) : (
+            <ScrollView style={styles.holdingsList}>
+              {editableSplits.map((s) => (
+                <View key={s.key} style={[styles.splitCard, !s.enabled && styles.splitCardDisabled]}>
+                  <View style={styles.splitHeader}>
+                    <TextInput
+                      style={styles.splitSymbolInput}
+                      value={s.symbol}
+                      onChangeText={(v) => updateSplit(s.key, { symbol: v })}
+                      placeholder="SYMBOL"
+                      placeholderTextColor={colors.muted}
+                      autoCapitalize="characters"
+                    />
+                    <Switch
+                      value={s.enabled}
+                      onValueChange={(v) => updateSplit(s.key, { enabled: v })}
+                      trackColor={{ true: colors.accent, false: colors.border }}
+                    />
+                  </View>
+
+                  <View style={styles.splitRow}>
+                    <Text style={styles.splitLabel}>Ex date</Text>
+                    <TextInput
+                      style={styles.splitInput}
+                      value={s.effectiveDate}
+                      onChangeText={(v) => updateSplit(s.key, { effectiveDate: v })}
+                      placeholder="YYYY-MM-DD"
+                      placeholderTextColor={colors.muted}
+                    />
+                  </View>
+
+                  <View style={styles.splitRow}>
+                    <Text style={styles.splitLabel}>Ratio (new : old)</Text>
+                    <View style={styles.ratioInputs}>
+                      <TextInput
+                        style={styles.ratioInput}
+                        value={s.newShares}
+                        onChangeText={(v) => updateSplit(s.key, { newShares: v })}
+                        keyboardType="numeric"
+                        placeholder="new"
+                        placeholderTextColor={colors.muted}
+                      />
+                      <Text style={styles.ratioColon}>:</Text>
+                      <TextInput
+                        style={styles.ratioInput}
+                        value={s.oldShares}
+                        onChangeText={(v) => updateSplit(s.key, { oldShares: v })}
+                        keyboardType="numeric"
+                        placeholder="old"
+                        placeholderTextColor={colors.muted}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.splitFooter}>
+                    <Text style={styles.splitSourceText}>
+                      {s.source === "fetched" ? "Fetched" : "Manual"}
+                    </Text>
+                    <Pressable onPress={() => removeSplit(s.key)}>
+                      <Text style={styles.removeSplitText}>Remove</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+
+          <Pressable style={styles.addSplitButton} onPress={addManualSplit}>
+            <Text style={styles.addSplitText}>+ Add split manually</Text>
+          </Pressable>
+        </>
+      )}
+
+      {/* Actions */}
+      <View style={styles.actions}>
+        <Pressable style={styles.secondaryButton} onPress={() => setStep("account")}>
+          <Text style={styles.secondaryButtonText}>Back</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.primaryButton, isFetchingActions && styles.buttonDisabled]}
+          onPress={handleConfirmCorporate}
+          disabled={isFetchingActions}
+        >
+          <Text style={styles.primaryButtonText}>Continue</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
 
   // Render review step
   const renderReviewStep = () => {
@@ -486,12 +741,29 @@ export function ImportTransactionsModal({
 
     const currency = parseResult?.currency || selectedAccount.baseCurrency;
 
+    // Manual holdings on the target account are permanently replaced by the
+    // derived (FIFO) holdings once this import is committed.
+    const replacedManualCount = manualHoldings.filter(
+      (h) => h.accountId === selectedAccount.id
+    ).length;
+
     return (
       <View style={styles.stepContent}>
         <Text style={styles.stepTitle}>Review Import</Text>
         <Text style={styles.stepDescription}>
           Holdings derived from your transactions using FIFO cost basis.
         </Text>
+
+        {replacedManualCount > 0 && (
+          <View style={styles.warningBox}>
+            <Text style={styles.warningTitle}>Replaces manual holdings</Text>
+            <Text style={styles.warningText}>
+              {replacedManualCount} manually entered holding
+              {replacedManualCount === 1 ? "" : "s"} on “{selectedAccount.name}” will be
+              removed and replaced by the transaction-derived holdings below. This cannot be undone.
+            </Text>
+          </View>
+        )}
 
         {isFetchingPrices ? (
           <View style={styles.loadingContainer}>
@@ -559,7 +831,7 @@ export function ImportTransactionsModal({
 
         {/* Actions */}
         <View style={styles.actions}>
-          <Pressable style={styles.secondaryButton} onPress={() => setStep("account")}>
+          <Pressable style={styles.secondaryButton} onPress={() => setStep("corporate")}>
             <Text style={styles.secondaryButtonText}>Back</Text>
           </Pressable>
           <Pressable
@@ -591,21 +863,16 @@ export function ImportTransactionsModal({
         <View style={styles.container}>
         {/* Progress indicator */}
         <View style={styles.progress}>
-          {["upload", "account", "review"].map((s, idx) => (
-            <View
-              key={s}
-              style={[
-                styles.progressDot,
-                (step === s || 
-                 (step === "account" && idx < 1) ||
-                 (step === "review" && idx < 2)) && styles.progressDotActive,
-              ]}
-            />
-          ))}
+          {(["upload", "account", "corporate", "review"] as const).map((s) => {
+            const order = ["upload", "account", "corporate", "review"];
+            const active = order.indexOf(step) >= order.indexOf(s);
+            return <View key={s} style={[styles.progressDot, active && styles.progressDotActive]} />;
+          })}
         </View>
 
         {step === "upload" && renderUploadStep()}
         {step === "account" && renderAccountStep()}
+        {step === "corporate" && renderCorporateStep()}
         {step === "review" && renderReviewStep()}
         </View>
       </View>
@@ -905,6 +1172,105 @@ const styles = StyleSheet.create({
   warningText: {
     fontSize: typography.caption,
     color: colors.warning,
+  },
+  emptyActions: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  emptyActionsText: {
+    fontSize: typography.caption,
+    color: colors.muted,
+    textAlign: "center",
+  },
+  splitCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  splitCardDisabled: {
+    opacity: 0.5,
+  },
+  splitHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  splitSymbolInput: {
+    flex: 1,
+    fontSize: typography.body,
+    color: colors.text,
+    fontWeight: typography.weightSemibold,
+    paddingVertical: spacing.xs,
+    marginRight: spacing.sm,
+  },
+  splitRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: spacing.xs,
+  },
+  splitLabel: {
+    fontSize: typography.caption,
+    color: colors.muted,
+  },
+  splitInput: {
+    fontSize: typography.caption,
+    color: colors.text,
+    backgroundColor: colors.bg,
+    borderRadius: radii.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    minWidth: 120,
+    textAlign: "right",
+  },
+  ratioInputs: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  ratioInput: {
+    fontSize: typography.caption,
+    color: colors.text,
+    backgroundColor: colors.bg,
+    borderRadius: radii.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    width: 56,
+    textAlign: "center",
+  },
+  ratioColon: {
+    fontSize: typography.body,
+    color: colors.muted,
+    marginHorizontal: spacing.sm,
+  },
+  splitFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: spacing.sm,
+  },
+  splitSourceText: {
+    fontSize: typography.micro,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  removeSplitText: {
+    fontSize: typography.caption,
+    color: colors.negative,
+  },
+  addSplitButton: {
+    paddingVertical: spacing.sm,
+    alignItems: "center",
+    marginBottom: spacing.md,
+  },
+  addSplitText: {
+    fontSize: typography.caption,
+    color: colors.accent,
+    fontWeight: typography.weightSemibold,
   },
   sectionTitle: {
     fontSize: typography.caption,

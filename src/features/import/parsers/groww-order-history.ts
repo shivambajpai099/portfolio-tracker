@@ -28,6 +28,7 @@ import type { ParsedTransaction, TransactionParseResult } from "../../../types/t
 const COLUMN_MAP: Record<string, keyof ColumnIndices> = {
   "stock name": "stockName",
   symbol: "symbol",
+  isin: "isin",
   type: "type",
   quantity: "quantity",
   value: "value",
@@ -39,6 +40,7 @@ const COLUMN_MAP: Record<string, keyof ColumnIndices> = {
 interface ColumnIndices {
   stockName: number;
   symbol: number;
+  isin: number;
   type: number;
   quantity: number;
   value: number;
@@ -117,6 +119,7 @@ const findColumnIndices = (row: unknown[]): ColumnIndices | null => {
   const indices: ColumnIndices = {
     stockName: -1,
     symbol: -1,
+    isin: -1,
     type: -1,
     quantity: -1,
     value: -1,
@@ -282,6 +285,7 @@ export const growwOrderHistoryParser: TransactionSourceParser = {
         const type = parseTransactionType(row[columns.type]);
         const symbolRaw = columns.symbol !== -1 ? row[columns.symbol] : null;
         const symbol = cleanSymbol(symbolRaw || (columns.stockName !== -1 ? row[columns.stockName] : ""));
+        const isin = columns.isin !== -1 ? cleanSymbol(row[columns.isin]) || undefined : undefined;
         const companyName = columns.stockName !== -1 ? String(row[columns.stockName] ?? "").trim() : undefined;
         const quantity = parseNumber(row[columns.quantity]);
         const value = parseNumber(row[columns.value]);
@@ -313,6 +317,7 @@ export const growwOrderHistoryParser: TransactionSourceParser = {
 
         transactions.push({
           symbol,
+          isin,
           companyName: companyName || undefined,
           transactionDate,
           type,

@@ -458,9 +458,14 @@ export const usePortfolioStore = create<PortfolioState>()(
           // Remove existing transactions for this account, then add new ones
           const otherTransactions = state.transactions.filter((tx) => tx.accountId !== accountId);
           const transactions = [...otherTransactions, ...newTransactions];
+          // Importing transactions makes this account transaction-sourced. Drop
+          // any manually entered holdings for the same account so the FIFO-
+          // derived holdings become the single source of truth (no double-count).
+          const holdings = state.holdings.filter((h) => h.accountId !== accountId);
           const priceMap = new Map(Object.entries(state.marketPrices));
-          const allHoldings = getAllHoldings(state.holdings, transactions, state.accounts, priceMap);
+          const allHoldings = getAllHoldings(holdings, transactions, state.accounts, priceMap);
           return {
+            holdings,
             transactions,
             allocationSnapshots: appendAllocationSnapshot(
               state.allocationSnapshots,

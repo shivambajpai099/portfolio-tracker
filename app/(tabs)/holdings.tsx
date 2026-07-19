@@ -126,7 +126,8 @@ export function HoldingsSection() {
   );
 
   const [searchText, setSearchText] = useState("");
-  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  // Default to highest allocation first so the largest positions surface at top.
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>("alloc");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [groupBy, setGroupBy] = useState<GroupByKey>("stock");
   const [marketFilter, setMarketFilter] = useState<MarketFilter>("ALL");
@@ -136,6 +137,10 @@ export function HoldingsSection() {
   const [expandedTab, setExpandedTab] = useState<Record<string, "accounts" | "transactions" | "info">>({});
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isAddMenuVisible, setIsAddMenuVisible] = useState(false);
+  const [addMenuAnchor, setAddMenuAnchor] = useState<{ top: number; right: number } | null>(null);
+  const [importMenuAnchor, setImportMenuAnchor] = useState<{ top: number; right: number } | null>(null);
+  const addBtnRef = useRef<View>(null);
+  const importBtnRef = useRef<View>(null);
   const [isAddAccountVisible, setIsAddAccountVisible] = useState(false);
   const [isImportVisible, setIsImportVisible] = useState(false);
   const [isImportMenuVisible, setIsImportMenuVisible] = useState(false);
@@ -505,6 +510,21 @@ export function HoldingsSection() {
     setSearchText("");
     setSortColumn(null);
     setSortDirection("desc");
+  };
+
+  // Open the Add / Import dropdowns anchored just below their buttons.
+  const openAddMenu = () => {
+    addBtnRef.current?.measureInWindow((x, y, width, height) => {
+      setAddMenuAnchor({ top: y + height + 6, right: Math.max(spacing.md, viewportWidth - (x + width)) });
+      setIsAddMenuVisible(true);
+    });
+  };
+
+  const openImportMenu = () => {
+    importBtnRef.current?.measureInWindow((x, y, width, height) => {
+      setImportMenuAnchor({ top: y + height + 6, right: Math.max(spacing.md, viewportWidth - (x + width)) });
+      setIsImportMenuVisible(true);
+    });
   };
 
   const handleCreateAccount = (input: AddAccountInput) => {
@@ -889,8 +909,9 @@ export function HoldingsSection() {
             <Text style={styles.actionBtnLabel}>{isRefreshingPrices ? "Refreshing" : "Refresh"}</Text>
           </Pressable>
           <Pressable
+            ref={importBtnRef}
             style={styles.actionBtn}
-            onPress={() => setIsImportMenuVisible(true)}
+            onPress={openImportMenu}
             accessibilityRole="button"
             accessibilityLabel="Import data"
           >
@@ -898,7 +919,7 @@ export function HoldingsSection() {
             <Text style={styles.actionBtnLabel}>Import</Text>
           </Pressable>
           <TourTarget tourKey="holdings-add">
-            <Pressable style={styles.addBtn} onPress={() => setIsAddMenuVisible(true)}>
+            <Pressable ref={addBtnRef} style={styles.addBtn} onPress={openAddMenu}>
               <Text style={styles.addBtnText}>Add</Text>
             </Pressable>
           </TourTarget>
@@ -1124,37 +1145,38 @@ export function HoldingsSection() {
         setAccountTransactions={setAccountTransactions}
         updateAccount={updateAccount}
         updateMarketPrices={updateMarketPrices}
+        manualHoldings={manualHoldings}
       />
 
       {/* Add Menu Modal */}
       <Modal visible={isAddMenuVisible} transparent animationType="fade" onRequestClose={() => setIsAddMenuVisible(false)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setIsAddMenuVisible(false)}>
-          <View style={styles.importMenuCard}>
-            <Text style={styles.importMenuTitle}>Add</Text>
+        <Pressable style={styles.dropdownBackdrop} onPress={() => setIsAddMenuVisible(false)}>
+          <Pressable
+            style={[styles.dropdownCard, addMenuAnchor ? { top: addMenuAnchor.top, right: addMenuAnchor.right } : styles.dropdownFallback]}
+            onPress={() => {}}
+          >
             <Pressable
-              style={styles.importMenuItem}
+              style={styles.dropdownItem}
               onPress={() => {
                 setIsAddMenuVisible(false);
                 setIsAddAccountVisible(true);
               }}
             >
-              <Text style={styles.importMenuItemTitle}>Add Account</Text>
-              <Text style={styles.importMenuItemDesc}>Create a new broker or savings account</Text>
+              <Text style={styles.dropdownItemTitle}>Add Account</Text>
+              <Text style={styles.dropdownItemDesc}>Create a new broker or savings account</Text>
             </Pressable>
+            <View style={styles.dropdownDivider} />
             <Pressable
-              style={styles.importMenuItem}
+              style={styles.dropdownItem}
               onPress={() => {
                 setIsAddMenuVisible(false);
                 setIsAddVisible(true);
               }}
             >
-              <Text style={styles.importMenuItemTitle}>Add Holding</Text>
-              <Text style={styles.importMenuItemDesc}>Add an individual holding to an account</Text>
+              <Text style={styles.dropdownItemTitle}>Add Holding</Text>
+              <Text style={styles.dropdownItemDesc}>Add an individual holding to an account</Text>
             </Pressable>
-            <Pressable style={styles.importMenuCancel} onPress={() => setIsAddMenuVisible(false)}>
-              <Text style={styles.importMenuCancelText}>Cancel</Text>
-            </Pressable>
-          </View>
+          </Pressable>
         </Pressable>
       </Modal>
 
@@ -1166,33 +1188,33 @@ export function HoldingsSection() {
 
       {/* Import Menu Modal */}
       <Modal visible={isImportMenuVisible} transparent animationType="fade" onRequestClose={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
-        <Pressable style={styles.modalOverlay} onPress={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
-          <View style={styles.importMenuCard}>
-            <Text style={styles.importMenuTitle}>Import Data</Text>
+        <Pressable style={styles.dropdownBackdrop} onPress={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
+          <Pressable
+            style={[styles.dropdownCard, importMenuAnchor ? { top: importMenuAnchor.top, right: importMenuAnchor.right } : styles.dropdownFallback]}
+            onPress={() => {}}
+          >
             <Pressable
-              style={styles.importMenuItem}
+              style={styles.dropdownItem}
               onPress={() => {
                 setIsImportMenuVisible(false);
                 setIsImportVisible(true);
               }}
             >
-              <Text style={styles.importMenuItemTitle}>Import Holdings</Text>
-              <Text style={styles.importMenuItemDesc}>Import current holdings snapshot from your broker</Text>
+              <Text style={styles.dropdownItemTitle}>Import Holdings</Text>
+              <Text style={styles.dropdownItemDesc}>Import current holdings snapshot from your broker</Text>
             </Pressable>
+            <View style={styles.dropdownDivider} />
             <Pressable
-              style={styles.importMenuItem}
+              style={styles.dropdownItem}
               onPress={() => {
                 setIsImportMenuVisible(false);
                 setIsImportTransactionsVisible(true);
               }}
             >
-              <Text style={styles.importMenuItemTitle}>Import Transactions</Text>
-              <Text style={styles.importMenuItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
+              <Text style={styles.dropdownItemTitle}>Import Transactions</Text>
+              <Text style={styles.dropdownItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
             </Pressable>
-            <Pressable style={styles.importMenuCancel} onPress={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
-              <Text style={styles.importMenuCancelText}>Cancel</Text>
-            </Pressable>
-          </View>
+          </Pressable>
         </Pressable>
       </Modal>
 
@@ -1346,17 +1368,6 @@ const styles = StyleSheet.create({
     fontWeight: typography.weightSemibold,
   },
   actionBtnLabel: {
-    color: defaultColors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
-  },
-  importBtn: {
-    borderRadius: radii.pill,
-    backgroundColor: defaultColors.surface,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xs,
-  },
-  importBtnText: {
     color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightMedium,
@@ -2063,42 +2074,51 @@ const styles = StyleSheet.create({
     color: defaultColors.muted,
     fontSize: typography.body,
   },
-  importMenuCard: {
-    width: "100%",
-    borderRadius: radii.xl,
+  dropdownBackdrop: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
+  dropdownCard: {
+    position: "absolute",
+    minWidth: 240,
+    maxWidth: 300,
     backgroundColor: defaultColors.surface,
-    padding: spacing.lg,
-  },
-  importMenuTitle: {
-    color: defaultColors.text,
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
-    marginBottom: spacing.md,
-  },
-  importMenuItem: {
-    backgroundColor: defaultColors.bg,
     borderRadius: radii.lg,
-    padding: spacing.lg,
-    marginBottom: spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: defaultColors.border,
+    paddingVertical: spacing.xs,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+      },
+      android: { elevation: 8 },
+      web: { boxShadow: "0 8px 24px rgba(0,0,0,0.4)" } as object,
+    }),
   },
-  importMenuItemTitle: {
+  dropdownFallback: {
+    top: 80,
+    right: spacing.lg,
+  },
+  dropdownItem: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+  },
+  dropdownItemTitle: {
     color: defaultColors.text,
     fontSize: typography.body,
     fontWeight: typography.weightSemibold,
-    marginBottom: spacing.xs,
+    marginBottom: 2,
   },
-  importMenuItemDesc: {
+  dropdownItemDesc: {
     color: defaultColors.muted,
     fontSize: typography.caption,
   },
-  importMenuCancel: {
-    marginTop: spacing.sm,
-    alignItems: "center",
-    paddingVertical: spacing.md,
-  },
-  importMenuCancelText: {
-    color: defaultColors.muted,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
+  dropdownDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: defaultColors.border,
+    marginHorizontal: spacing.md,
   },
 });

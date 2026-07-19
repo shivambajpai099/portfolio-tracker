@@ -18,6 +18,10 @@ interface AddAccountModalProps {
   visible: boolean;
   onClose: () => void;
   onCreate: (input: AddAccountInput) => void;
+  /** "add" (default) shows create copy; "edit" seeds the form and updates. */
+  mode?: "add" | "edit";
+  /** Initial values used to seed the form when editing an existing account. */
+  initialValues?: AddAccountInput;
 }
 
 type AccountDraft = {
@@ -106,21 +110,36 @@ function BrokerLogoItem({
  * Extracted so the add-account flow can be launched from the Portfolio page
  * (onboarding) as well as the Accounts section in Settings.
  */
-export function AddAccountModal({ visible, onClose, onCreate }: AddAccountModalProps) {
+export function AddAccountModal({ visible, onClose, onCreate, mode = "add", initialValues }: AddAccountModalProps) {
   const { colors } = useTheme();
   const [draft, setDraft] = useState<AccountDraft>(emptyDraft);
   const [savingsInitialBalance, setSavingsInitialBalance] = useState("");
   const [isOtherBroker, setIsOtherBroker] = useState(false);
   const customBrokerRef = useRef<TextInput>(null);
 
-  // Reset the form whenever the modal is opened.
+  // Reset (or seed, when editing) the form whenever the modal is opened.
   useEffect(() => {
-    if (visible) {
+    if (!visible) return;
+    if (mode === "edit" && initialValues) {
+      setDraft({
+        name: initialValues.name,
+        owner: initialValues.owner,
+        broker: initialValues.broker,
+        type: initialValues.type,
+        baseCurrency: initialValues.baseCurrency,
+      });
+      setSavingsInitialBalance("");
+      setIsOtherBroker(
+        initialValues.type === "BROKER" &&
+          Boolean(initialValues.broker) &&
+          !BROKERS.some((b) => b.label === initialValues.broker)
+      );
+    } else {
       setDraft(emptyDraft);
       setSavingsInitialBalance("");
       setIsOtherBroker(false);
     }
-  }, [visible]);
+  }, [visible, mode, initialValues]);
 
   const validation = useMemo(() => {
     const trimmedName = draft.name.trim();
@@ -156,7 +175,7 @@ export function AddAccountModal({ visible, onClose, onCreate }: AddAccountModalP
                 <View style={[styles.iconBadge, { backgroundColor: `${colors.accent}22` }]}>
                   <Text style={styles.iconEmoji}>🏦</Text>
                 </View>
-                <Text style={[styles.title, { color: colors.text }]}>Add Account</Text>
+                <Text style={[styles.title, { color: colors.text }]}>{mode === "edit" ? "Edit Account" : "Add Account"}</Text>
               </View>
               <Pressable style={styles.closeBtn} onPress={onClose} accessibilityLabel="Close">
                 <Text style={[styles.closeBtnText, { color: colors.muted }]}>✕</Text>
@@ -259,7 +278,7 @@ export function AddAccountModal({ visible, onClose, onCreate }: AddAccountModalP
               </>
             ) : null}
 
-            {draft.type === "SAVINGS" ? (
+            {draft.type === "SAVINGS" && mode === "add" ? (
               <>
                 <Text style={[styles.fieldLabel, { color: colors.muted }]}>Initial Balance</Text>
                 <TextInput
@@ -282,7 +301,7 @@ export function AddAccountModal({ visible, onClose, onCreate }: AddAccountModalP
               disabled={!validation.canSave}
             >
               <Text style={[styles.saveText, { color: validation.canSave ? colors.bg : "#5A6472" }]}>
-                Save Account
+                {mode === "edit" ? "Save Changes" : "Save Account"}
               </Text>
             </Pressable>
             {validation.helperMessage ? (

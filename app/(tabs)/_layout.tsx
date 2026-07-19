@@ -85,7 +85,6 @@ export default function TabsLayout() {
             backward compatibility and internal deep-links. */}
         <Tabs.Screen name="holdings" options={{ href: null }} />
         <Tabs.Screen name="accounts" options={{ href: null }} />
-        <Tabs.Screen name="transactionInsights" options={{ href: null }} />
         <Tabs.Screen name="xray" options={{ href: null }} />
         <Tabs.Screen name="drift" options={{ href: null }} />
         <Tabs.Screen name="timeline" options={{ href: null }} />

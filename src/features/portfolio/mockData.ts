@@ -117,6 +117,7 @@ export const seedSettings: PortfolioSettings = {
   includeFamilyAccounts: true,
   allocationBasis: "CURRENT_VALUE",
   allocationIncludeCash: true,
+  excludeIntradayFromInsights: true,
   onboardingTipsSeen: false,
   spotlightTourSeen: false,
   timelineRetention: "1Y",

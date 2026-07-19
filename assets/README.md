@@ -4,11 +4,18 @@ This folder contains static assets used in the app.
 
 ## Onboarding Tour Preview
 
-Place the overview screen screenshot here:
+The onboarding tour "overview" step shows a 3-image carousel. Place these
+screenshots here (already included):
 
-- **Filename**: `onboarding-overview-preview.jpg`
+- `onboarding-1.jpg` — Portfolio dashboard
+- `onboarding-2.jpg` — Insights / allocation
+- `onboarding-3.jpg` — Holdings & performance
+
 - **Recommended size**: 640x360px (16:9 aspect ratio) or similar
 - **Format**: JPG or PNG
 
-The image will be displayed in the onboarding tour (Step 3) to show users what the Overview screen looks like.
+These are registered in `src/components/SpotlightTour.tsx` (`PREVIEW_IMAGES`)
+and referenced by the `overview` step's `previewImages` array in
+`src/components/OnboardingTourProvider.tsx`. Any image not registered falls back
+to a styled "Preview N" placeholder.
 

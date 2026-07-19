@@ -2,31 +2,15 @@ import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
 import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
+import { AddAccountModal, type AddAccountInput } from "../../src/components/AddAccountModal";
 import { TourTarget } from "../../src/components/OnboardingTourProvider";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
-import { SegmentedControl } from "../../src/components/SegmentedControl";
 import { calcPortfolioTotals, convert } from "../../src/features/portfolio/calculations";
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
-import { accountSupportsHoldings, type Account, type AccountType, type CashHolding, type Currency } from "../../src/types/portfolio";
+import { accountSupportsHoldings, type Account, type CashHolding, type Currency } from "../../src/types/portfolio";
 import { formatMoney } from "../../src/utils/format";
-
-type AccountDraft = {
-  name: string;
-  owner: string;
-  broker: string;
-  type: AccountType;
-  baseCurrency: Currency;
-};
-
-const emptyDraft: AccountDraft = {
-  name: "",
-  owner: "",
-  broker: "",
-  type: "BROKER",
-  baseCurrency: "INR",
-};
 
 const nowIso = () => new Date().toISOString();
 const createAccountId = () => `acc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -72,10 +56,8 @@ export function AccountsSection() {
     [manualHoldings, transactions, accounts, priceMap]
   );
 
-  const [isFormVisible, setIsFormVisible] = useState(false);
-  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<AccountDraft>(emptyDraft);
-  const [savingsInitialBalance, setSavingsInitialBalance] = useState("");
+  const [accountModalVisible, setAccountModalVisible] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
   const [deleteCashTarget, setDeleteCashTarget] = useState<CashHolding | null>(null);
   const [menuOpenForAccount, setMenuOpenForAccount] = useState<string | null>(null);
@@ -193,49 +175,32 @@ export function AccountsSection() {
   };
 
   const openAddModal = () => {
-    setEditingAccountId(null);
-    setDraft(emptyDraft);
-    setSavingsInitialBalance("");
-    setIsFormVisible(true);
+    setEditingAccount(null);
+    setAccountModalVisible(true);
   };
 
   const openEditModal = (account: Account) => {
     setMenuOpenForAccount(null);
-    setEditingAccountId(account.id);
-    setDraft({
-      name: account.name,
-      owner: account.owner,
-      broker: account.broker,
-      type: account.type,
-      baseCurrency: account.baseCurrency,
-    });
-    setSavingsInitialBalance("");
-    setIsFormVisible(true);
+    setEditingAccount(account);
+    setAccountModalVisible(true);
   };
 
-  const closeFormModal = () => {
-    setIsFormVisible(false);
-    setEditingAccountId(null);
-    setDraft(emptyDraft);
-    setSavingsInitialBalance("");
+  const closeAccountModal = () => {
+    setAccountModalVisible(false);
+    setEditingAccount(null);
   };
 
-  const submitForm = () => {
-    const trimmedName = draft.name.trim();
-    const trimmedOwner = draft.owner.trim();
-    const trimmedBroker = draft.broker.trim();
-    const isSavings = draft.type === "SAVINGS";
+  const handleSubmitAccount = (input: AddAccountInput) => {
+    const trimmedName = input.name.trim();
+    if (!trimmedName) return;
 
-    if (!trimmedName || !trimmedOwner) return;
-    if (!isSavings && !trimmedBroker) return;
-
-    if (editingAccountId) {
-      updateAccount(editingAccountId, {
+    if (editingAccount) {
+      updateAccount(editingAccount.id, {
         name: trimmedName,
-        owner: trimmedOwner,
-        broker: trimmedBroker,
-        type: draft.type,
-        baseCurrency: draft.baseCurrency,
+        owner: input.owner.trim(),
+        broker: input.broker.trim(),
+        type: input.type,
+        baseCurrency: input.baseCurrency,
         updatedAt: nowIso(),
       });
     } else {
@@ -243,27 +208,27 @@ export function AccountsSection() {
       addAccount({
         id: accountId,
         name: trimmedName,
-        owner: trimmedOwner,
-        broker: trimmedBroker,
-        type: draft.type,
-        baseCurrency: draft.baseCurrency,
+        owner: input.owner.trim(),
+        broker: input.broker.trim(),
+        type: input.type,
+        baseCurrency: input.baseCurrency,
         createdAt: nowIso(),
         updatedAt: nowIso(),
       });
 
-      if (isSavings) {
-        const initialBalance = parseFloat(savingsInitialBalance);
+      if (input.type === "SAVINGS") {
+        const initialBalance = input.savingsInitialBalance ?? 0;
         addCashHolding({
           id: createCashId(),
           accountId,
-          currency: draft.baseCurrency,
+          currency: input.baseCurrency,
           balance: Number.isFinite(initialBalance) && initialBalance >= 0 ? initialBalance : 0,
           updatedAt: nowIso(),
         });
       }
     }
 
-    closeFormModal();
+    closeAccountModal();
   };
 
   const confirmDeleteAccount = () => {
@@ -283,10 +248,6 @@ export function AccountsSection() {
     setDeleteTarget(account);
   };
 
-  const openImportForAccount = (accountId: string) => {
-    setMenuOpenForAccount(null);
-    setImportForAccountId(accountId);
-  };
 
   const getLastUpdatedLabel = (account: Account): string => {
     if (account.lastImportedAt) {
@@ -305,7 +266,7 @@ export function AccountsSection() {
     <>
       <View style={styles.headerRow}>
         <Text style={[styles.headerTitle, { color: colors.text }]}>Accounts</Text>
-        <TourTarget tourKey="accounts-add">
+        <TourTarget tourKey="accounts-manage">
           <Pressable style={[styles.addBtn, { backgroundColor: colors.accent }]} onPress={openAddModal}>
             <Text style={[styles.addBtnText, { color: colors.bg }]}>Add</Text>
           </Pressable>
@@ -360,7 +321,7 @@ export function AccountsSection() {
               <Text style={[styles.emptyTitle, { color: colors.text }]}>No accounts yet</Text>
               <Text style={[styles.emptyBody, { color: colors.muted }]}>Your portfolio is empty because there is no account to place holdings or cash in.</Text>
               <Text style={[styles.emptyBody, { color: colors.muted }]}>Add your first account to get started.</Text>
-              <Pressable style={[styles.emptyPrimaryBtn, { backgroundColor: colors.accent }]} onPress={() => setIsFormVisible(true)}>
+              <Pressable style={[styles.emptyPrimaryBtn, { backgroundColor: colors.accent }]} onPress={openAddModal}>
                 <Text style={[styles.emptyPrimaryBtnText, { color: colors.bg }]}>Add your first account</Text>
               </Pressable>
             </View>
@@ -542,134 +503,24 @@ export function AccountsSection() {
         </View>
       </ScrollView>
 
-      {/* Add/Edit Account Modal */}
-      <Modal visible={isFormVisible} transparent animationType="fade" onRequestClose={closeFormModal}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            {/* Header */}
-            <View style={styles.modalHeaderRow}>
-              <View style={styles.modalHeaderLeft}>
-                <View style={styles.modalIconBadge}>
-                  <Text style={styles.modalIconEmoji}>🏦</Text>
-                </View>
-                <Text style={styles.modalTitle}>{editingAccountId ? "Edit Account" : "Add Account"}</Text>
-              </View>
-              <Pressable style={styles.modalCloseBtn} onPress={closeFormModal}>
-                <Text style={styles.modalCloseBtnText}>✕</Text>
-              </Pressable>
-            </View>
-
-            <Text style={styles.modalFieldLabel}>Account Name</Text>
-            <TextInput
-              value={draft.name}
-              onChangeText={(value) => setDraft((prev) => ({ ...prev, name: value }))}
-              placeholder="e.g. US-Core, India-Growth"
-              placeholderTextColor="#8A94A3"
-              style={styles.modalFieldInput}
-            />
-            
-            <Text style={styles.modalFieldLabel}>Owner</Text>
-            <TextInput
-              value={draft.owner}
-              onChangeText={(value) => setDraft((prev) => ({ ...prev, owner: value }))}
-              placeholder="e.g. John Doe"
-              placeholderTextColor="#8A94A3"
-              style={styles.modalFieldInput}
-            />
-
-            {/* Two-column row for Type and Currency */}
-            <View style={styles.modalTwoColumnRow}>
-              <View style={styles.modalColumnHalf}>
-                <Text style={styles.modalFieldLabel}>Type</Text>
-                <View style={styles.modalSegmentedWrap}>
-                  <SegmentedControl
-                    options={[
-                      { value: "BROKER", label: "Broker" },
-                      { value: "SAVINGS", label: "Savings" },
-                    ]}
-                    value={draft.type}
-                    onChange={(type) => setDraft((prev) => ({ ...prev, type: type as AccountType }))}
-                  />
-                </View>
-              </View>
-              <View style={styles.modalColumnHalf}>
-                <Text style={styles.modalFieldLabel}>Currency</Text>
-                <View style={styles.modalSegmentedWrap}>
-                  <SegmentedControl
-                    options={[
-                      { value: "INR", label: "INR" },
-                      { value: "USD", label: "USD" },
-                    ]}
-                    value={draft.baseCurrency}
-                    onChange={(currency) => setDraft((prev) => ({ ...prev, baseCurrency: currency as Currency }))}
-                  />
-                </View>
-              </View>
-            </View>
-
-            {draft.type === "BROKER" && (
-              <>
-                <Text style={styles.modalFieldLabel}>Broker</Text>
-                <TextInput
-                  value={draft.broker}
-                  onChangeText={(value) => setDraft((prev) => ({ ...prev, broker: value }))}
-                  placeholder="e.g. INDMoney, Groww, Zerodha"
-                  placeholderTextColor="#8A94A3"
-                  style={styles.modalFieldInput}
-                />
-              </>
-            )}
-
-            {draft.type === "SAVINGS" && !editingAccountId && (
-              <>
-                <Text style={styles.modalFieldLabel}>Initial Balance</Text>
-                <TextInput
-                  value={savingsInitialBalance}
-                  onChangeText={setSavingsInitialBalance}
-                  placeholder="0.00"
-                  placeholderTextColor="#8A94A3"
-                  keyboardType="decimal-pad"
-                  style={styles.modalFieldInput}
-                />
-              </>
-            )}
-
-            {/* Save button */}
-            {(() => {
-              const trimmedName = draft.name.trim();
-              const trimmedOwner = draft.owner.trim();
-              const trimmedBroker = draft.broker.trim();
-              const isSavings = draft.type === "SAVINGS";
-              const canSave = trimmedName && trimmedOwner && (isSavings || trimmedBroker);
-              
-              // Compute helper message
-              let helperMessage: string | null = null;
-              if (!canSave) {
-                if (!trimmedName) helperMessage = "Enter an account name to continue";
-                else if (!trimmedOwner) helperMessage = "Enter an owner name to continue";
-                else if (!isSavings && !trimmedBroker) helperMessage = "Enter a broker name to continue";
+      {/* Add/Edit Account Modal — shared component with broker logo support */}
+      <AddAccountModal
+        visible={accountModalVisible}
+        mode={editingAccount ? "edit" : "add"}
+        initialValues={
+          editingAccount
+            ? {
+                name: editingAccount.name,
+                owner: editingAccount.owner,
+                broker: editingAccount.broker,
+                type: editingAccount.type,
+                baseCurrency: editingAccount.baseCurrency,
               }
-              
-              return (
-                <>
-                  <Pressable
-                    style={[styles.modalSaveBtn, !canSave && styles.modalSaveBtnDisabled]}
-                    onPress={submitForm}
-                    disabled={!canSave}
-                  >
-                    <Text style={[styles.modalSaveText, !canSave && styles.modalSaveTextDisabled]}>
-                      Save Account
-                    </Text>
-                  </Pressable>
-                  {helperMessage && (
-                    <Text style={styles.modalDisabledHelper}>{helperMessage}</Text>
-                  )}
-                </>
-              );
-            })()}
-          </View>
-        </View>
-      </Modal>
+            : undefined
+        }
+        onClose={closeAccountModal}
+        onCreate={handleSubmitAccount}
+      />
 
       {/* Delete Account Confirmation Modal */}
       <Modal visible={Boolean(deleteTarget)} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
@@ -742,6 +593,7 @@ export function AccountsSection() {
         updateAccount={updateAccount}
         updateMarketPrices={updateMarketPrices}
         preSelectedAccountId={importTransactionsAccountId ?? undefined}
+        manualHoldings={manualHoldings}
       />
 
       {/* Import Menu Modal */}
@@ -1110,118 +962,10 @@ const styles = StyleSheet.create({
     shadowRadius: 40,
     elevation: 24,
   },
-  modalHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: spacing.lg,
-  },
-  modalHeaderLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  modalIconBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: "#16323A",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modalIconEmoji: {
-    fontSize: 16,
-  },
   modalTitle: {
     fontSize: 17,
     fontWeight: "700",
     color: "#F2F4F8",
-  },
-  modalCloseBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    backgroundColor: "#1A1F26",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modalCloseBtnText: {
-    color: "#8A94A3",
-    fontSize: 14,
-  },
-  modalFieldLabel: {
-    marginTop: spacing.lg,
-    marginBottom: 6,
-    color: "#8A94A3",
-    fontSize: 12,
-  },
-  modalFieldInput: {
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#262B33",
-    backgroundColor: "#0E1116",
-    color: "#F2F4F8",
-    paddingHorizontal: 13,
-    paddingVertical: 11,
-    fontSize: 14,
-  },
-  modalTwoColumnRow: {
-    flexDirection: "row",
-    gap: 14,
-  },
-  modalColumnHalf: {
-    flex: 1,
-  },
-  modalSegmentedWrap: {
-    marginTop: 0,
-  },
-  modalSaveBtn: {
-    marginTop: spacing.xxl,
-    borderRadius: 10,
-    backgroundColor: "#5FD4EB",
-    paddingVertical: 12,
-    paddingHorizontal: spacing.xl,
-    alignItems: "center",
-    alignSelf: "flex-end",
-  },
-  modalSaveBtnDisabled: {
-    backgroundColor: "#1A1F26",
-    borderWidth: 1,
-    borderColor: "#262B33",
-  },
-  modalSaveText: {
-    color: "#0B0C10",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  modalSaveTextDisabled: {
-    color: "#5A6472",
-  },
-  modalDisabledHelper: {
-    marginTop: spacing.sm,
-    color: "#8A94A3",
-    fontSize: 11,
-    textAlign: "right",
-  },
-  // Legacy modal styles for delete confirmations
-  modalInput: {
-    marginTop: spacing.lg,
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  modalInputCompact: {
-    marginTop: spacing.sm,
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  modalLabel: {
-    marginTop: spacing.lg,
-    fontSize: typography.caption,
-  },
-  controlRow: {
-    marginTop: spacing.sm,
   },
   modalActions: {
     marginTop: spacing.xxl,

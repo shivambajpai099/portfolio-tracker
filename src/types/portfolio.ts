@@ -90,6 +90,8 @@ export interface PortfolioSettings {
   allocationBasis: AllocationBasis;
   /** Whether cash balances are included when computing allocation percentages. */
   allocationIncludeCash: boolean;
+  /** Exclude same-day BUY/SELL round-trips from Insights trade analytics. */
+  excludeIntradayFromInsights?: boolean;
   /** True after the onboarding tips modal has been shown once. */
   onboardingTipsSeen: boolean;
   /** True after the spotlight onboarding tour has been completed or skipped. */
