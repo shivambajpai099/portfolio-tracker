@@ -16,6 +16,7 @@ import { fetchLivePrices } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
+import { spec } from "../../src/theme/specTokens";
 import { accountSupportsHoldings, type Currency, type Holding } from "../../src/types/portfolio";
 import type { Transaction } from "../../src/types/transaction";
 import type { LivePriceQuote } from "../../src/types/marketData";
@@ -915,8 +916,9 @@ export function HoldingsSection() {
             accessibilityRole="button"
             accessibilityLabel="Import data"
           >
-            <Text style={styles.actionBtnIcon}>⭳</Text>
+            <Text style={styles.actionBtnIcon}>≡</Text>
             <Text style={styles.actionBtnLabel}>Import</Text>
+            <Text style={styles.actionBtnChevron}>▾</Text>
           </Pressable>
           <TourTarget tourKey="holdings-add">
             <Pressable ref={addBtnRef} style={styles.addBtn} onPress={openAddMenu}>
@@ -1341,36 +1343,41 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   addBtn: {
-    borderRadius: radii.pill,
-    backgroundColor: defaultColors.accent,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xs,
+    borderRadius: 8,
+    backgroundColor: spec.TEAL,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
   addBtnText: {
-    color: defaultColors.bg,
-    fontSize: typography.body,
-    fontWeight: typography.weightBold,
+    color: "#000",
+    fontSize: 12,
+    fontWeight: "600",
   },
   actionBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    borderRadius: radii.pill,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: defaultColors.border,
-    backgroundColor: defaultColors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+    borderColor: spec.BDR,
+    backgroundColor: spec.CARD2,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
   actionBtnIcon: {
-    color: defaultColors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
+    color: spec.SUB,
+    fontSize: 12,
+    fontWeight: "600",
   },
   actionBtnLabel: {
-    color: defaultColors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
+    color: spec.SUB,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  actionBtnChevron: {
+    color: spec.SUB,
+    fontSize: 10,
+    marginLeft: -2,
   },
   searchInput: {
     marginBottom: spacing.lg,

@@ -193,6 +193,19 @@ interface PortfolioState {
   holdings: Holding[];
   cashHoldings: CashHolding[];
   transactions: Transaction[];
+  /**
+   * Point-in-time allocation + valuation snapshots.
+   *
+   * These are the system of record for historical *market value* and gain/loss
+   * over time (Timeline and Insights "Portfolio Evolution"), because the app
+   * does not persist historical market prices — so past valuation cannot be
+   * reconstructed from transactions alone.
+   *
+   * NOTE: Allocation *drift* no longer relies on these. `app/(tabs)/drift.tsx`
+   * reconstructs allocation at exact dates from transaction history (see
+   * `features/portfolio/allocationHistory.ts`) and only falls back to snapshots
+   * for manual-only portfolios that have no transactions.
+   */
   allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
   fxRates: FxRates;

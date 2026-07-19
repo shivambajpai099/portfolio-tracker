@@ -1,9 +1,6 @@
 import { useMemo, useState } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import * as FileSystem from "expo-file-system";
-import * as Sharing from "expo-sharing";
-import { captureRef } from "react-native-view-shot";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { TourTarget } from "../../src/components/OnboardingTourProvider";
 import { UserMenu } from "../../src/components/UserMenu";
@@ -16,13 +13,30 @@ import { Leaderboard } from "../../src/components/Leaderboard";
 import { InsightList } from "../../src/components/InsightBadge";
 import { ProgressBar } from "../../src/components/MiniBarChart";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
-import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
+import { radii, spacing, typography, useTheme } from "../../src/theme";
+import { spec } from "../../src/theme/specTokens";
+
+// Spec-palette mapping applied across the Insights screen. Keys mirror the
+// ThemeColors shape so existing style references remain unchanged while the
+// visual presentation adopts the new UI/UX spec.
+const defaultColors = {
+  bg: spec.CARD2,
+  surface: spec.CARD,
+  text: "#F2F4F8",
+  muted: spec.SUB,
+  accent: spec.TEAL,
+  positive: spec.GREEN,
+  negative: spec.RED,
+  warning: "#F59E0B",
+  border: spec.BDR,
+} as const;
+
 import { calcTransactionAnalytics } from "../../src/features/portfolio/transactionAnalytics";
 import { getAllRealizations } from "../../src/features/portfolio/fifoCalculator";
 import { excludeIntradayRoundTrips } from "../../src/features/portfolio/intraday";
 import { calcSymbolAllocations, convert, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
-import { formatMoney } from "../../src/utils/format";
+import { formatMoney, formatCompact } from "../../src/utils/format";
 import type { AllocationSnapshot, Currency, Holding } from "../../src/types/portfolio";
 
 type TopLevelSection = "performance" | "evolution" | "behavior" | null;
@@ -30,17 +44,13 @@ type SubSection =
   | "performance_breakdown"
   | "winrate"
   | "bestworst"
-  | "review"
   | "risk"
-  | "drift"
   | "capital"
   | "dca"
   | "conviction"
   | "behavior_insights"
   | "holding"
   | null;
-
-type Trend = "UP" | "DOWN" | "FLAT";
 
 const formatDuration = (days: number): string => {
   if (days < 30) return `${days} days`;
@@ -63,6 +73,11 @@ const formatDateShort = (iso: string | null): string => {
 
 const signedMoney = (value: number, rc: Currency): string => {
   return `${value >= 0 ? "+" : ""}${formatMoney(value, rc)}`;
+};
+
+// Compact, signed currency for the compact best/worst summary cards.
+const signedCompact = (value: number, rc: Currency): string => {
+  return `${value >= 0 ? "+" : ""}${formatCompact(value, rc)}`;
 };
 
 const SYMBOL_SECTOR: Record<string, string> = {
@@ -102,116 +117,6 @@ const inferSector = (holding: Holding): string => {
   return "Other";
 };
 
-const monthKey = (iso: string): string => {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${date.getFullYear()}-${month}`;
-};
-
-const monthLabel = (key: string): string => {
-  const [year, month] = key.split("-").map((v) => Number(v));
-  const date = new Date(year, (month || 1) - 1, 1);
-  if (Number.isNaN(date.getTime())) return key;
-  return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-};
-
-const toShortDate = (iso: string): string => {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-};
-
-const monthsAgoDate = (months: number): Date => {
-  const d = new Date();
-  d.setMonth(d.getMonth() - months);
-  return d;
-};
-
-const getSnapshotForPeriod = (sortedSnapshots: AllocationSnapshot[], months: number): AllocationSnapshot | null => {
-  if (sortedSnapshots.length === 0) return null;
-
-  const target = monthsAgoDate(months).getTime();
-  for (let i = sortedSnapshots.length - 1; i >= 0; i -= 1) {
-    const snapTs = new Date(sortedSnapshots[i].date).getTime();
-    if (Number.isFinite(snapTs) && snapTs <= target) {
-      return sortedSnapshots[i];
-    }
-  }
-
-  return sortedSnapshots[0];
-};
-
-const signedMoneyRc = (value: number, rc: "INR" | "USD"): string => {
-  return `${value >= 0 ? "+" : ""}${formatMoney(value, rc)}`;
-};
-
-const trendFromDelta = (delta: number): Trend => {
-  if (Math.abs(delta) < 0.1) return "FLAT";
-  return delta > 0 ? "UP" : "DOWN";
-};
-
-const trendColor = (trend: Trend): string => {
-  if (trend === "UP") return defaultColors.positive;
-  if (trend === "DOWN") return defaultColors.negative;
-  return defaultColors.muted;
-};
-
-const formatSignedPct = (value: number): string => `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
-
-interface AllocationChange {
-  label: "US" | "India" | "Cash";
-  before: number;
-  current: number;
-  delta: number;
-}
-
-interface HoldingChange {
-  symbol: string;
-  before: number;
-  current: number;
-  delta: number;
-}
-
-const buildAllocationChanges = (latest: AllocationSnapshot, baseline: AllocationSnapshot): AllocationChange[] => [
-  {
-    label: "US",
-    before: baseline.usAllocationPct,
-    current: latest.usAllocationPct,
-    delta: latest.usAllocationPct - baseline.usAllocationPct,
-  },
-  {
-    label: "India",
-    before: baseline.indiaAllocationPct,
-    current: latest.indiaAllocationPct,
-    delta: latest.indiaAllocationPct - baseline.indiaAllocationPct,
-  },
-  {
-    label: "Cash",
-    before: baseline.cashAllocationPct,
-    current: latest.cashAllocationPct,
-    delta: latest.cashAllocationPct - baseline.cashAllocationPct,
-  },
-];
-
-const buildHoldingChanges = (latest: AllocationSnapshot, baseline: AllocationSnapshot): HoldingChange[] => {
-  const baselineMap = new Map(baseline.topHoldings.map((item) => [item.symbol, item.allocationPct]));
-
-  return latest.topHoldings
-    .map((item) => {
-      const before = baselineMap.get(item.symbol) ?? 0;
-      return {
-        symbol: item.symbol,
-        before,
-        current: item.allocationPct,
-        delta: item.allocationPct - before,
-      };
-    })
-    .filter((item) => Math.abs(item.delta) >= 0.1)
-    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
-    .slice(0, 3);
-};
-
 export default function PortfolioInsightsScreen() {
   const { colors } = useTheme();
   const transactions = usePortfolioStore((s) => s.transactions);
@@ -220,7 +125,6 @@ export default function PortfolioInsightsScreen() {
   const accounts = usePortfolioStore((s) => s.accounts);
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
-  const snapshots = usePortfolioStore((s) => s.allocationSnapshots);
   const marketPrices = usePortfolioStore((s) => s.marketPrices);
   const rc = settings.reportingCurrency;
 
@@ -233,9 +137,6 @@ export default function PortfolioInsightsScreen() {
 
   const [expandedSection, setExpandedSection] = useState<TopLevelSection>(null);
   const [expandedSubSection, setExpandedSubSection] = useState<SubSection>(null);
-  const [activeMonthKey, setActiveMonthKey] = useState<string | null>(null);
-  const [reviewExportMsg, setReviewExportMsg] = useState("");
-  const [reviewCardNode, setReviewCardNode] = useState<View | null>(null);
 
   const analytics = useMemo(() => {
     const source = settings.excludeIntradayFromInsights
@@ -307,82 +208,6 @@ export default function PortfolioInsightsScreen() {
     return { allocations: sorted, top5Pct, top10Pct, largestPositionPct, sectorRows };
   }, [holdings, cashHoldings, fxRates, rc, settings.allocationBasis, settings.allocationIncludeCash]);
 
-  const driftData = useMemo(() => {
-    const sorted = [...snapshots].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const latest = sorted[sorted.length - 1] ?? null;
-
-    if (!latest) return { latest: null, periodComparisons: [] };
-
-    const periodComparisons = [1, 3]
-      .map((months) => {
-        const baseline = getSnapshotForPeriod(sorted, months);
-        if (!baseline) return null;
-
-        return {
-          months,
-          baseline,
-          latest,
-          allocationChanges: buildAllocationChanges(latest, baseline),
-          holdingChanges: buildHoldingChanges(latest, baseline),
-        };
-      })
-      .filter(Boolean) as Array<{
-      months: number;
-      baseline: AllocationSnapshot;
-      latest: AllocationSnapshot;
-      allocationChanges: AllocationChange[];
-      holdingChanges: HoldingChange[];
-    }>;
-
-    return { latest, periodComparisons };
-  }, [snapshots]);
-
-  const monthlyReviewData = useMemo(() => {
-    const sorted = [...snapshots].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    const byMonth = new Map<string, AllocationSnapshot[]>();
-    for (const snapshot of sorted) {
-      const key = monthKey(snapshot.date);
-      const list = byMonth.get(key) ?? [];
-      list.push(snapshot);
-      byMonth.set(key, list);
-    }
-
-    const monthlyOptions = [...byMonth.entries()]
-      .map(([key, list]) => ({ key, label: monthLabel(key), start: list[0], end: list[list.length - 1] }))
-      .sort((a, b) => b.key.localeCompare(a.key));
-
-    const activeMonthKeyResolved = activeMonthKey ?? monthlyOptions[0]?.key ?? null;
-
-    let activeMonthlyReview = null;
-    if (activeMonthKeyResolved) {
-      const month = monthlyOptions.find((item) => item.key === activeMonthKeyResolved);
-      if (month) {
-        const start = month.start;
-        const end = month.end;
-        const valueChange = end.totalPortfolioValue - start.totalPortfolioValue;
-        const netCapitalAdded = end.investedValue - start.investedValue;
-        const gainLossGenerated = valueChange - netCapitalAdded;
-
-        const topByPerformance = [...end.topHoldings].sort((a, b) => b.gainLossPct - a.gainLossPct);
-        const best = topByPerformance[0] ?? null;
-        const worst = topByPerformance[topByPerformance.length - 1] ?? null;
-
-        const sentences = [
-          `Portfolio value ${valueChange >= 0 ? "increased" : "decreased"} by ${formatMoney(Math.abs(valueChange), rc)} during ${month.label}.`,
-          `Net capital ${netCapitalAdded >= 0 ? "added" : "withdrawn"} was ${formatMoney(Math.abs(netCapitalAdded), rc)}, while performance generated ${signedMoneyRc(gainLossGenerated, rc)}.`,
-          best
-            ? `The best performing position was ${best.symbol} (${best.gainLossPct >= 0 ? "+" : ""}${best.gainLossPct.toFixed(1)}%).`
-            : "No position performance data is available for this month.",
-        ];
-
-        activeMonthlyReview = { month, start, end, best, worst, sentences };
-      }
-    }
-
-    return { monthlyOptions, activeMonthlyReview };
-  }, [snapshots, activeMonthKey, rc]);
-
   const toggleSection = (section: TopLevelSection) => {
     if (expandedSection === section) {
       setExpandedSection(null);
@@ -405,7 +230,7 @@ export default function PortfolioInsightsScreen() {
       ? `Best: ${analytics.bestWorst.bestInvestment.symbol} +${analytics.bestWorst.bestInvestment.totalReturnPct.toFixed(0)}%`
       : null;
     const parts = [winRate, best].filter(Boolean);
-    return parts.length > 0 ? parts.join(" · ") : "Performance, win rate and monthly review";
+    return parts.length > 0 ? parts.join(" · ") : "Performance, win rate and best & worst";
   }, [analytics]);
 
   const evolutionPreview = useMemo(() => {
@@ -414,7 +239,7 @@ export default function PortfolioInsightsScreen() {
       ? `${analytics.performance.totalReturn >= 0 ? "+" : ""}${((analytics.performance.totalReturn / Math.max(analytics.capitalDeployment.totalInvested, 1)) * 100).toFixed(0)}% since inception`
       : null;
     const parts = [positions, returnPct].filter(Boolean);
-    return parts.length > 0 ? parts.join(" · ") : "Journey, allocation, risk and drift";
+    return parts.length > 0 ? parts.join(" · ") : "Journey, allocation and risk";
   }, [analytics]);
 
   const behaviorPreview = useMemo(() => {
@@ -427,40 +252,6 @@ export default function PortfolioInsightsScreen() {
     const parts = [avgHolding, avgMonthly].filter(Boolean);
     return parts.length > 0 ? parts.join(" · ") : "Understand your investing patterns";
   }, [analytics, rc]);
-
-  const exportReviewAsImage = async () => {
-    if (!reviewCardNode || !monthlyReviewData.activeMonthlyReview) return;
-
-    try {
-      const snapshotResult = await captureRef(reviewCardNode, {
-        format: "png",
-        quality: 1,
-        result: Platform.OS === "web" ? "data-uri" : "tmpfile",
-      });
-
-      if (Platform.OS === "web") {
-        const anchor = document.createElement("a");
-        anchor.href = snapshotResult;
-        anchor.download = `monthly-review-${monthlyReviewData.activeMonthlyReview.month.key}.png`;
-        anchor.click();
-        setReviewExportMsg("Monthly review image downloaded.");
-        return;
-      }
-
-      const outputPath = `${FileSystem.cacheDirectory}monthly-review-${monthlyReviewData.activeMonthlyReview.month.key}.png`;
-      await FileSystem.copyAsync({ from: snapshotResult, to: outputPath });
-
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(outputPath, { mimeType: "image/png", dialogTitle: "Export Monthly Review" });
-      }
-      setReviewExportMsg("Monthly review image exported.");
-    } catch {
-      setReviewExportMsg("Unable to export image right now.");
-    }
-
-    setTimeout(() => setReviewExportMsg(""), 3000);
-  };
 
   if (holdings.length === 0) {
     return (
@@ -657,169 +448,112 @@ export default function PortfolioInsightsScreen() {
               />
               {expandedSubSection === "bestworst" && (
                 <View style={styles.subSectionContent}>
-                  {analytics.bestWorst.bestInvestment && (
-                    <View style={styles.bestWorstCard}>
-                      <View style={styles.bestWorstBadge}>
-                        <Text style={styles.bestWorstBadgeText}>🏆 Best</Text>
-                      </View>
-                      <Text style={styles.bestWorstSymbol}>{analytics.bestWorst.bestInvestment.symbol}</Text>
-                      <Text style={styles.bestWorstCompany}>{analytics.bestWorst.bestInvestment.companyName}</Text>
-                      <View style={styles.bestWorstMetrics}>
-                        <View style={styles.bestWorstMetric}>
-                          <Text style={styles.bestWorstMetricLabel}>Invested</Text>
-                          <Text style={styles.bestWorstMetricValue}>{formatMoney(analytics.bestWorst.bestInvestment.totalInvested, rc)}</Text>
-                        </View>
-                        <View style={styles.bestWorstMetric}>
-                          <Text style={styles.bestWorstMetricLabel}>Return</Text>
-                          <Text style={[styles.bestWorstMetricValue, { color: defaultColors.positive }]}>
-                            {signedMoney(analytics.bestWorst.bestInvestment.totalReturn, rc)}
-                          </Text>
-                        </View>
-                        <View style={styles.bestWorstMetric}>
-                          <Text style={styles.bestWorstMetricLabel}>Return %</Text>
-                          <Text style={[styles.bestWorstMetricValue, { color: defaultColors.positive }]}>
-                            +{analytics.bestWorst.bestInvestment.totalReturnPct.toFixed(1)}%
-                          </Text>
+                  {/* Compact best/worst summary cards */}
+                  <View style={styles.bwGrid}>
+                    {analytics.bestWorst.bestInvestment && (
+                      <View style={[styles.bwCard, styles.bwCardBest]}>
+                        <Text style={[styles.bwLabel, { color: defaultColors.positive }]}>Best performer</Text>
+                        <Text style={styles.bwTicker}>{analytics.bestWorst.bestInvestment.symbol}</Text>
+                        <View style={styles.bwSubRow}>
+                          <View>
+                            <Text style={styles.bwSubLabel}>Return</Text>
+                            <Text style={[styles.bwSubValue, { color: defaultColors.positive }]}>
+                              {signedCompact(analytics.bestWorst.bestInvestment.totalReturn, rc)}
+                            </Text>
+                          </View>
+                          <View style={styles.bwSubColRight}>
+                            <Text style={styles.bwSubLabel}>Return %</Text>
+                            <Text style={[styles.bwSubValue, { color: defaultColors.positive }]}>
+                              +{analytics.bestWorst.bestInvestment.totalReturnPct.toFixed(1)}%
+                            </Text>
+                          </View>
                         </View>
                       </View>
-                    </View>
-                  )}
+                    )}
 
-                  {analytics.bestWorst.worstInvestment && analytics.bestWorst.worstInvestment.totalReturn < 0 && (
-                    <View style={[styles.bestWorstCard, styles.worstCard]}>
-                      <View style={[styles.bestWorstBadge, styles.worstBadge]}>
-                        <Text style={styles.bestWorstBadgeText}>📉 Worst</Text>
-                      </View>
-                      <Text style={styles.bestWorstSymbol}>{analytics.bestWorst.worstInvestment.symbol}</Text>
-                      <Text style={styles.bestWorstCompany}>{analytics.bestWorst.worstInvestment.companyName}</Text>
-                      <View style={styles.bestWorstMetrics}>
-                        <View style={styles.bestWorstMetric}>
-                          <Text style={styles.bestWorstMetricLabel}>Invested</Text>
-                          <Text style={styles.bestWorstMetricValue}>{formatMoney(analytics.bestWorst.worstInvestment.totalInvested, rc)}</Text>
-                        </View>
-                        <View style={styles.bestWorstMetric}>
-                          <Text style={styles.bestWorstMetricLabel}>Return</Text>
-                          <Text style={[styles.bestWorstMetricValue, { color: defaultColors.negative }]}>
-                            {formatMoney(analytics.bestWorst.worstInvestment.totalReturn, rc)}
-                          </Text>
-                        </View>
-                        <View style={styles.bestWorstMetric}>
-                          <Text style={styles.bestWorstMetricLabel}>Return %</Text>
-                          <Text style={[styles.bestWorstMetricValue, { color: defaultColors.negative }]}>
-                            {analytics.bestWorst.worstInvestment.totalReturnPct.toFixed(1)}%
-                          </Text>
+                    {analytics.bestWorst.worstInvestment && (
+                      <View style={[styles.bwCard, styles.bwCardWorst]}>
+                        <Text style={[styles.bwLabel, { color: defaultColors.negative }]}>Worst performer</Text>
+                        <Text style={styles.bwTicker}>{analytics.bestWorst.worstInvestment.symbol}</Text>
+                        <View style={styles.bwSubRow}>
+                          <View>
+                            <Text style={styles.bwSubLabel}>Return</Text>
+                            <Text style={[styles.bwSubValue, { color: defaultColors.negative }]}>
+                              {signedCompact(analytics.bestWorst.worstInvestment.totalReturn, rc)}
+                            </Text>
+                          </View>
+                          <View style={styles.bwSubColRight}>
+                            <Text style={styles.bwSubLabel}>Return %</Text>
+                            <Text style={[styles.bwSubValue, { color: defaultColors.negative }]}>
+                              {analytics.bestWorst.worstInvestment.totalReturnPct.toFixed(1)}%
+                            </Text>
+                          </View>
                         </View>
                       </View>
-                    </View>
-                  )}
+                    )}
+                  </View>
 
                   {analytics.bestWorst.topWinners.length > 0 && (
-                    <View style={styles.subsection}>
-                      <Text style={styles.subsectionTitle}>Top Winners</Text>
-                      <Leaderboard
-                        items={analytics.bestWorst.topWinners.map((w, i) => ({
-                          rank: i + 1,
-                          label: w.symbol,
-                          value: signedMoney(w.totalReturn, rc),
-                          secondaryValue: `+${w.totalReturnPct.toFixed(1)}%`,
-                          positive: true,
-                        }))}
-                      />
+                    <View style={styles.rankList}>
+                      <Text style={styles.rankListLabel}>Top Winners</Text>
+                      {analytics.bestWorst.topWinners.map((w, i, arr) => (
+                        <View
+                          key={w.symbol}
+                          style={[styles.rankRow, i === arr.length - 1 && styles.rankRowLast]}
+                        >
+                          <View style={styles.rankLeft}>
+                            <View style={[styles.rankBadge, { backgroundColor: "rgba(34,197,94,0.15)" }]}>
+                              <Text style={[styles.rankBadgeText, { color: defaultColors.positive }]}>{i + 1}</Text>
+                            </View>
+                            <Text style={styles.rankTicker}>{w.symbol}</Text>
+                          </View>
+                          <View style={styles.rankRight}>
+                            <Text style={[styles.rankValue, { color: defaultColors.positive }]}>
+                              {signedMoney(w.totalReturn, rc)}
+                            </Text>
+                            <Text style={[styles.rankPct, { color: defaultColors.positive }]}>
+                              +{w.totalReturnPct.toFixed(1)}%
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
                     </View>
                   )}
 
                   {analytics.bestWorst.topLosers.length > 0 && (
-                    <View style={styles.subsection}>
-                      <Text style={styles.subsectionTitle}>Top Losers</Text>
-                      <Leaderboard
-                        items={analytics.bestWorst.topLosers.map((l, i) => ({
-                          rank: i + 1,
-                          label: l.symbol,
-                          value: formatMoney(l.totalReturn, rc),
-                          secondaryValue: `${l.totalReturnPct.toFixed(1)}%`,
-                          positive: false,
-                        }))}
-                      />
-                    </View>
-                  )}
-                </View>
-              )}
-
-              <SubSectionHeader
-                title="Monthly Review"
-                isExpanded={expandedSubSection === "review"}
-                onPress={() => toggleSubSection("review")}
-              />
-              {expandedSubSection === "review" && (
-                <View style={styles.subSectionContent}>
-                  {monthlyReviewData.monthlyOptions.length === 0 ? (
-                    <View style={ivStyles.emptyCard}>
-                      <Text style={ivStyles.emptyTitle}>No monthly review yet</Text>
-                      <Text style={ivStyles.emptyText}>
-                        Monthly reviews appear once you have activity that spans at least a full calendar month.
-                      </Text>
-                    </View>
-                  ) : (
-                    <>
-                      <View style={ivStyles.monthRow}>
-                        {monthlyReviewData.monthlyOptions.slice(0, 12).map((item) => {
-                          const active = (activeMonthKey ?? monthlyReviewData.monthlyOptions[0]?.key) === item.key;
-                          return (
-                            <Pressable
-                              key={item.key}
-                              onPress={() => setActiveMonthKey(item.key)}
-                              style={[ivStyles.monthPill, active && ivStyles.monthPillActive]}
-                            >
-                              <Text style={[ivStyles.monthText, active && ivStyles.monthTextActive]}>{item.label.split(" ")[0]}</Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-
-                      {monthlyReviewData.activeMonthlyReview ? (
-                        <View ref={setReviewCardNode} collapsable={false} style={ivStyles.reviewCard}>
-                          <Text style={ivStyles.reviewTitle}>{monthlyReviewData.activeMonthlyReview.month.label}</Text>
-
-                          <View style={ivStyles.reviewGrid}>
-                            <ReviewMetric
-                              label="Best Position"
-                              value={monthlyReviewData.activeMonthlyReview.best ? `${monthlyReviewData.activeMonthlyReview.best.symbol} ${monthlyReviewData.activeMonthlyReview.best.gainLossPct >= 0 ? "+" : ""}${monthlyReviewData.activeMonthlyReview.best.gainLossPct.toFixed(1)}%` : "-"}
-                              positive
-                            />
-                            <ReviewMetric
-                              label="Worst Position"
-                              value={monthlyReviewData.activeMonthlyReview.worst ? `${monthlyReviewData.activeMonthlyReview.worst.symbol} ${monthlyReviewData.activeMonthlyReview.worst.gainLossPct >= 0 ? "+" : ""}${monthlyReviewData.activeMonthlyReview.worst.gainLossPct.toFixed(1)}%` : "-"}
-                              positive={false}
-                            />
+                    <View style={styles.rankList}>
+                      <Text style={styles.rankListLabel}>Top Losers</Text>
+                      {analytics.bestWorst.topLosers.map((l, i, arr) => (
+                        <View
+                          key={l.symbol}
+                          style={[styles.rankRow, i === arr.length - 1 && styles.rankRowLast]}
+                        >
+                          <View style={styles.rankLeft}>
+                            <View style={[styles.rankBadge, { backgroundColor: "rgba(248,113,113,0.15)" }]}>
+                              <Text style={[styles.rankBadgeText, { color: defaultColors.negative }]}>{i + 1}</Text>
+                            </View>
+                            <Text style={styles.rankTicker}>{l.symbol}</Text>
                           </View>
-
-                          <View style={ivStyles.summaryBlock}>
-                            <Text style={ivStyles.summaryLabel}>Narrative Summary</Text>
-                            {monthlyReviewData.activeMonthlyReview.sentences.map((sentence, idx) => (
-                              <View key={idx} style={ivStyles.summaryRow}>
-                                <View style={ivStyles.summaryDot} />
-                                <Text style={ivStyles.summaryText}>{sentence}</Text>
-                              </View>
-                            ))}
+                          <View style={styles.rankRight}>
+                            <Text style={[styles.rankValue, { color: defaultColors.negative }]}>
+                              {formatMoney(l.totalReturn, rc)}
+                            </Text>
+                            <Text style={[styles.rankPct, { color: defaultColors.negative }]}>
+                              {l.totalReturnPct.toFixed(1)}%
+                            </Text>
                           </View>
                         </View>
-                      ) : null}
-
-                      <View style={ivStyles.reviewActionRow}>
-                        <Pressable onPress={exportReviewAsImage} style={ivStyles.exportBtn} disabled={!monthlyReviewData.activeMonthlyReview}>
-                          <Text style={ivStyles.exportBtnText}>Export as Image</Text>
-                        </Pressable>
-                        {reviewExportMsg ? <Text style={ivStyles.exportStatus}>{reviewExportMsg}</Text> : null}
-                      </View>
-                    </>
+                      ))}
+                    </View>
                   )}
                 </View>
               )}
+
             </View>
           )}
         </View>
 
-        {/* 2. PORTFOLIO EVOLUTION — Journey, Allocation over time, Risk, Drift */}
+        {/* 2. PORTFOLIO EVOLUTION — Journey, Allocation over time, Risk */}
         <View style={styles.groupCard}>
           <Pressable onPress={() => toggleSection("evolution")} style={styles.groupHeader}>
             <View style={styles.groupHeaderContent}>
@@ -898,78 +632,6 @@ export default function PortfolioInsightsScreen() {
                     sectorRows={riskData.sectorRows}
                     rc={rc}
                   />
-                </View>
-              )}
-
-              <SubSectionHeader
-                title="Drift Over Time"
-                isExpanded={expandedSubSection === "drift"}
-                onPress={() => toggleSubSection("drift")}
-              />
-              {expandedSubSection === "drift" && (
-                <View style={styles.subSectionContent}>
-                  {!driftData.latest ? (
-                    <View style={ivStyles.emptyCard}>
-                      <Text style={ivStyles.emptyTitle}>Nothing to compare yet</Text>
-                      <Text style={ivStyles.emptyText}>
-                        Drift shows how your portfolio allocation has shifted over time. Add a holding or update a price to record your first data point.
-                      </Text>
-                    </View>
-                  ) : (
-                    <>
-                      {driftData.periodComparisons.map((item) => (
-                        <View key={item.months} style={ivStyles.periodCard}>
-                          <View style={ivStyles.periodHeader}>
-                            <Text style={ivStyles.periodTitle}>vs {item.months} month{item.months > 1 ? "s" : ""} ago</Text>
-                            <Text style={ivStyles.periodDates}>{`${toShortDate(item.baseline.date)} → ${toShortDate(item.latest.date)}`}</Text>
-                          </View>
-
-                          <View style={ivStyles.changeList}>
-                            {item.allocationChanges.map((change) => {
-                              const trend = trendFromDelta(change.delta);
-                              return (
-                                <View key={change.label} style={ivStyles.changeRow}>
-                                  <View style={ivStyles.changeTextWrap}>
-                                    <Text style={ivStyles.changeText}>
-                                      {change.label} allocation {change.delta >= 0 ? "increased" : "decreased"} from {change.before.toFixed(1)}% to {change.current.toFixed(1)}% ({formatSignedPct(change.delta)})
-                                    </Text>
-                                  </View>
-                                  <View style={[ivStyles.trendBadge, { borderColor: trendColor(trend) }]}>
-                                    <Text style={[ivStyles.trendBadgeText, { color: trendColor(trend) }]}>
-                                      {trend === "UP" ? "↑" : trend === "DOWN" ? "↓" : "→"}
-                                    </Text>
-                                  </View>
-                                </View>
-                              );
-                            })}
-                          </View>
-
-                          <View style={ivStyles.holdingSection}>
-                            <Text style={ivStyles.holdingTitle}>Top Holdings Drift</Text>
-                            {item.holdingChanges.length === 0 ? (
-                              <Text style={ivStyles.holdingFallback}>No major top-holding changes for this period.</Text>
-                            ) : (
-                              item.holdingChanges.map((holding) => (
-                                <View key={holding.symbol} style={ivStyles.holdingRow}>
-                                  <Text style={ivStyles.holdingText}>
-                                    {holding.symbol} {holding.delta >= 0 ? "grew" : "fell"} from {holding.before.toFixed(1)}% to {holding.current.toFixed(1)}% of portfolio
-                                  </Text>
-                                  <Text
-                                    style={[
-                                      ivStyles.holdingDelta,
-                                      { color: holding.delta >= 0 ? colors.positive : colors.negative },
-                                    ]}
-                                  >
-                                    {formatSignedPct(holding.delta)}
-                                  </Text>
-                                </View>
-                              ))
-                            )}
-                          </View>
-                        </View>
-                      ))}
-                    </>
-                  )}
                 </View>
               )}
             </View>
@@ -1312,26 +974,9 @@ function LegendItem({ label, value, color }: { label: string; value: string; col
   );
 }
 
-function ReviewMetric({
-  label,
-  value,
-  positive,
-}: {
-  label: string;
-  value: string;
-  positive: boolean;
-}) {
-  return (
-    <View style={ivStyles.reviewMetric}>
-      <Text style={ivStyles.reviewMetricLabel}>{label}</Text>
-      <Text style={[ivStyles.reviewMetricValue, { color: positive ? defaultColors.text : defaultColors.negative }]}>{value}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   scrollContent: {
-    paddingBottom: 48,
+    paddingBottom: 112,
   },
   headerRow: {
     flexDirection: "row",
@@ -1659,57 +1304,109 @@ const styles = StyleSheet.create({
     color: defaultColors.muted,
     fontSize: typography.micro,
   },
-  bestWorstCard: {
-    backgroundColor: `${defaultColors.positive}15`,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    alignItems: "center",
-    marginBottom: spacing.md,
-  },
-  worstCard: {
-    backgroundColor: `${defaultColors.negative}15`,
-  },
-  bestWorstBadge: {
-    backgroundColor: `${defaultColors.positive}30`,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  worstBadge: {
-    backgroundColor: `${defaultColors.negative}30`,
-  },
-  bestWorstBadgeText: {
-    color: defaultColors.text,
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
-  },
-  bestWorstSymbol: {
-    color: defaultColors.text,
-    fontSize: typography.subheading,
-    fontWeight: typography.weightBold,
-  },
-  bestWorstCompany: {
-    color: defaultColors.muted,
-    fontSize: typography.caption,
-    marginBottom: spacing.md,
-  },
-  bestWorstMetrics: {
+  // Best & Worst — compact summary cards
+  bwGrid: {
     flexDirection: "row",
-    gap: spacing.xl,
+    gap: 8,
+    marginBottom: 20,
   },
-  bestWorstMetric: {
-    alignItems: "center",
+  bwCard: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  bestWorstMetricLabel: {
+  bwCardBest: {
+    backgroundColor: "rgba(34,197,94,0.08)",
+    borderColor: "rgba(34,197,94,0.2)",
+  },
+  bwCardWorst: {
+    backgroundColor: "rgba(248,113,113,0.08)",
+    borderColor: "rgba(248,113,113,0.2)",
+  },
+  bwLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    letterSpacing: 0.3,
+  },
+  bwTicker: {
+    fontSize: 18,
+    fontWeight: "500",
+    color: "#F2F4F8",
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  bwSubRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  bwSubColRight: {
+    alignItems: "flex-end",
+  },
+  bwSubLabel: {
+    fontSize: 11,
     color: defaultColors.muted,
-    fontSize: typography.micro,
   },
-  bestWorstMetricValue: {
-    color: defaultColors.text,
-    fontSize: typography.caption,
-    fontWeight: typography.weightSemibold,
+  bwSubValue: {
+    fontSize: 13,
+    fontWeight: "500",
     marginTop: 2,
+  },
+  // Best & Worst — ranked lists
+  rankList: {
+    marginBottom: 20,
+  },
+  rankListLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    color: spec.MUTED,
+    marginBottom: 8,
+  },
+  rankRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: defaultColors.border,
+  },
+  rankRowLast: {
+    borderBottomWidth: 0,
+  },
+  rankLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  rankBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rankBadgeText: {
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  rankTicker: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "#F2F4F8",
+  },
+  rankRight: {
+    alignItems: "flex-end",
+  },
+  rankValue: {
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  rankPct: {
+    fontSize: 11,
+    marginTop: 1,
   },
 });
 

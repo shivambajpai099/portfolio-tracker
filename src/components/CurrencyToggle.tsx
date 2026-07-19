@@ -18,22 +18,18 @@ export function CurrencyToggle() {
 
   return (
     <View style={styles.container}>
-      {OPTIONS.map((option, index) => {
+      {OPTIONS.map((option) => {
         const selected = reportingCurrency === option.value;
         return (
           <Pressable
             key={option.value}
             onPress={() => updateSettings({ reportingCurrency: option.value })}
-            style={[
-              styles.option,
-              index > 0 && styles.optionDivider,
-              selected && styles.optionSelected,
-            ]}
+            style={[styles.option, { backgroundColor: selected ? TEAL : CARD2 }]}
             accessibilityRole="button"
             accessibilityState={{ selected }}
             accessibilityLabel={`Show values in ${option.value}`}
           >
-            <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
+            <Text style={[styles.optionText, { color: selected ? "#000" : SUB }]}>
               {option.label}
             </Text>
           </Pressable>
@@ -43,37 +39,28 @@ export function CurrencyToggle() {
   );
 }
 
-const BORDER = "#1E232B";
+const TEAL = "#00d4c8";
+const CARD2 = "#1c1c26";
+const BDR = "rgba(255,255,255,0.07)";
+const SUB = "#80809a";
 
 const styles = StyleSheet.create({
   container: {
     flexDirection: "row",
     borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 7,
+    borderColor: BDR,
+    borderRadius: 8,
     overflow: "hidden",
   },
   option: {
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    backgroundColor: "transparent",
+    width: 32,
+    height: 32,
     alignItems: "center",
     justifyContent: "center",
   },
-  optionDivider: {
-    borderLeftWidth: 1,
-    borderLeftColor: BORDER,
-  },
-  optionSelected: {
-    backgroundColor: "#16323A",
-  },
   optionText: {
-    fontSize: 12,
-    color: "#8A94A3",
-  },
-  optionTextSelected: {
-    color: "#5FD4EB",
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "700",
   },
 });
 

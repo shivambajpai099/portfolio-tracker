@@ -15,6 +15,7 @@ import {
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { radii, spacing, typography, useTheme } from "../../src/theme";
+import { spec } from "../../src/theme/specTokens";
 import { accountSupportsHoldings, type Currency } from "../../src/types/portfolio";
 import { formatMoney } from "../../src/utils/format";
 
@@ -173,64 +174,68 @@ export default function DashboardScreen() {
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.headerRow}>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Portfolio</Text>
+          <Text style={styles.headerTitle}>Portfolio</Text>
           <View style={styles.headerControls}>
             <CurrencyToggle />
             <UserMenu />
           </View>
         </View>
 
-
         <TourTarget tourKey="overview">
           <View style={styles.heroSection}>
-            <Text style={[styles.heroLabel, { color: colors.muted }]}>Total Portfolio Value</Text>
-            <Text style={[styles.heroValue, { color: colors.text }]}>{formatMoney(totals.currentValue, rc)}</Text>
+            <Text style={styles.heroLabel}>Total Portfolio Value</Text>
+            <Text style={styles.heroValue}>{formatMoney(totals.currentValue, rc)}</Text>
 
-            <View style={styles.heroStatsWrap}>
-              <View style={styles.heroStatRow}>
-                <Text style={[styles.heroStatKey, { color: colors.muted }]}>Invested</Text>
-                <Text style={[styles.heroStatValue, { color: colors.text }]}>{formatMoney(totals.investedValue, rc)}</Text>
+            <View style={styles.heroStatsRow}>
+              <View style={styles.heroStatItem}>
+                <Text style={styles.heroStatKey}>Invested</Text>
+                <Text style={styles.heroStatValue}>{formatMoney(totals.investedValue, rc)}</Text>
               </View>
 
-              <View style={styles.heroStatRow}>
-                <Text style={[styles.heroStatKey, { color: colors.muted }]}>Gain/Loss</Text>
-                <Text style={[
-                  styles.heroStatGain,
-                  { color: totals.gainLoss >= 0 ? colors.positive : colors.negative },
-                ]}>
+              <View style={styles.heroStatItem}>
+                <Text style={styles.heroStatKey}>Gain/Loss</Text>
+                <Text
+                  style={[
+                    styles.heroStatGain,
+                    { color: totals.gainLoss >= 0 ? spec.GREEN : spec.RED },
+                  ]}
+                >
                   {totals.gainLoss >= 0 ? "+" : ""}
                   {formatMoney(totals.gainLoss, rc)}
                 </Text>
-                <View style={[
-                  styles.gainBadge,
-                  { backgroundColor: totals.gainLoss >= 0 ? `${colors.positive}22` : `${colors.negative}22` },
-                ]}>
-                <Text style={[
-                  styles.gainBadgeText,
-                  { color: totals.gainLoss >= 0 ? colors.positive : colors.negative },
-                ]}>
-                  {totals.gainLossPct >= 0 ? "+" : ""}
-                  {totals.gainLossPct.toFixed(2)}%
-                </Text>
+                <View
+                  style={[
+                    styles.gainBadge,
+                    {
+                      backgroundColor:
+                        totals.gainLoss >= 0 ? "rgba(34,197,94,0.15)" : "rgba(248,113,113,0.15)",
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.gainBadgeText,
+                      { color: totals.gainLoss >= 0 ? spec.GREEN : spec.RED },
+                    ]}
+                  >
+                    {totals.gainLossPct >= 0 ? "+" : ""}
+                    {totals.gainLossPct.toFixed(2)}%
+                  </Text>
+                </View>
               </View>
             </View>
           </View>
-        </View>
         </TourTarget>
 
         {/* Portfolio Performance Chart */}
         {accounts.length > 0 && (
           <View style={styles.chartSection}>
-            <PortfolioPerformanceChart
-              data={performanceData}
-              currency={rc}
-            />
+            <PortfolioPerformanceChart data={performanceData} currency={rc} />
           </View>
         )}
 
-
         {/* Holdings — merged from the former standalone Holdings tab */}
-        <View style={[styles.holdingsDivider, { borderTopColor: colors.border }]} />
+        <View style={styles.holdingsDivider} />
         <HoldingsSection />
       </ScrollView>
       {onboardingModals}
@@ -240,7 +245,7 @@ export default function DashboardScreen() {
 
 const styles = StyleSheet.create({
   scrollContent: {
-    paddingBottom: 48,
+    paddingBottom: 112,
   },
   // State A — no accounts centered empty state
   noAccountsContainer: {
@@ -286,68 +291,74 @@ const styles = StyleSheet.create({
     fontWeight: typography.weightSemibold,
   },
   headerRow: {
-    marginBottom: spacing.xxxl,
+    marginBottom: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
   headerTitle: {
-    fontSize: typography.heading,
-    fontWeight: typography.weightSemibold,
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#F2F4F8",
   },
   headerControls: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: 8,
   },
   heroSection: {
-    marginBottom: spacing.lg,
+    marginBottom: 20,
   },
   heroLabel: {
-    fontSize: typography.caption,
+    fontSize: 12,
+    color: spec.SUB,
+    marginBottom: 4,
   },
   heroValue: {
-    marginTop: spacing.xs,
-    fontSize: 32,
-    fontWeight: typography.weightSemibold,
-    lineHeight: 36,
+    fontSize: 36,
+    fontWeight: "700",
+    letterSpacing: -0.5,
+    lineHeight: 42,
+    color: "#F2F4F8",
   },
-  heroStatsWrap: {
-    marginTop: spacing.lg,
-    gap: spacing.xs,
-  },
-  heroStatRow: {
+  heroStatsRow: {
+    marginTop: 8,
     flexDirection: "row",
-    alignItems: "baseline",
-    gap: spacing.md,
+    flexWrap: "wrap",
+    columnGap: 16,
+    rowGap: 4,
+  },
+  heroStatItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   heroStatKey: {
-    width: 76,
-    fontSize: typography.caption,
+    fontSize: 14,
+    color: spec.SUB,
   },
   heroStatValue: {
-    fontSize: typography.body,
+    fontSize: 14,
+    color: "#F2F4F8",
   },
   heroStatGain: {
-    fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
+    fontSize: 14,
+    fontWeight: "600",
   },
   gainBadge: {
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 1,
-    marginLeft: spacing.xs,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
   },
   gainBadgeText: {
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
+    fontSize: 12,
+    fontWeight: "600",
   },
   chartSection: {
-    marginBottom: spacing.xxxl,
+    marginBottom: 20,
   },
   holdingsDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    marginBottom: spacing.xxxl,
+    marginBottom: 20,
   },
   sectionGap: {
     marginBottom: spacing.xxxl,

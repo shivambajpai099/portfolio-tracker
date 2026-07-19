@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "../../src/components/DonutChart";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
+import { buildTransactionDriftSeries } from "../../src/features/portfolio/allocationHistory";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors, radii, spacing, typography } from "../../src/theme";
 import type { AllocationSnapshot } from "../../src/types/portfolio";
@@ -109,17 +110,50 @@ const buildHoldingChanges = (latest: AllocationSnapshot, baseline: AllocationSna
 export default function PortfolioDriftScreen() {
   const router = useRouter();
   const snapshots = usePortfolioStore((s) => s.allocationSnapshots);
+  const manualHoldings = usePortfolioStore((s) => s.holdings);
+  const transactions = usePortfolioStore((s) => s.transactions);
+  const accounts = usePortfolioStore((s) => s.accounts);
+  const cashHoldings = usePortfolioStore((s) => s.cashHoldings);
+  const fxRates = usePortfolioStore((s) => s.fxRates);
   const rc = usePortfolioStore((s) => s.settings.reportingCurrency);
 
-  const sortedSnapshots = useMemo(
-    () => [...snapshots].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
-    [snapshots]
+  // Transactions are the primary, deterministic source for allocation drift:
+  // we reconstruct allocation at exact month offsets from trade history rather
+  // than depending on when allocation snapshots happened to be captured.
+  const hasTransactions = transactions.length > 0;
+
+  const txDrift = useMemo(
+    () =>
+      hasTransactions
+        ? buildTransactionDriftSeries(manualHoldings, transactions, accounts, cashHoldings, fxRates, rc)
+        : null,
+    [hasTransactions, manualHoldings, transactions, accounts, cashHoldings, fxRates, rc]
   );
 
-  const latest = sortedSnapshots[sortedSnapshots.length - 1] ?? null;
+  // Snapshot fallback is only relevant for manual-only portfolios that have no
+  // transaction history to reconstruct from.
+  const sortedSnapshots = useMemo(
+    () => (hasTransactions ? [] : [...snapshots].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())),
+    [hasTransactions, snapshots]
+  );
+
+  const snapshotLatest = sortedSnapshots[sortedSnapshots.length - 1] ?? null;
+  const latest = txDrift?.latest ?? snapshotLatest;
 
   const periodComparisons = useMemo(() => {
-    if (!latest) return [];
+    // Primary path — baselines reconstructed from transactions at exact offsets.
+    if (txDrift) {
+      return txDrift.comparisons.map((item) => ({
+        months: item.months,
+        baseline: item.baseline,
+        latest: item.latest,
+        allocationChanges: buildAllocationChanges(item.latest, item.baseline),
+        holdingChanges: buildHoldingChanges(item.latest, item.baseline),
+      }));
+    }
+
+    // Fallback path — snapshot lookup for manual-only portfolios.
+    if (!snapshotLatest) return [];
 
     return [1, 3, 6]
       .map((months) => {
@@ -129,9 +163,9 @@ export default function PortfolioDriftScreen() {
         return {
           months,
           baseline,
-          latest,
-          allocationChanges: buildAllocationChanges(latest, baseline),
-          holdingChanges: buildHoldingChanges(latest, baseline),
+          latest: snapshotLatest,
+          allocationChanges: buildAllocationChanges(snapshotLatest, baseline),
+          holdingChanges: buildHoldingChanges(snapshotLatest, baseline),
         };
       })
       .filter(Boolean) as Array<{
@@ -141,13 +175,17 @@ export default function PortfolioDriftScreen() {
       allocationChanges: AllocationChange[];
       holdingChanges: HoldingChange[];
     }>;
-  }, [latest, sortedSnapshots]);
+  }, [txDrift, snapshotLatest, sortedSnapshots]);
 
   return (
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <Text style={styles.title}>Portfolio Drift</Text>
-        <Text style={styles.subtitle}>Track how allocation shifts over time and catch concentration drift early.</Text>
+        <Text style={styles.subtitle}>
+          {txDrift
+            ? "How your invested allocation has shifted over time, reconstructed from your transaction history."
+            : "Track how allocation shifts over time and catch concentration drift early."}
+        </Text>
 
         {!latest ? (
           <View style={styles.emptyCard}>
@@ -166,7 +204,7 @@ export default function PortfolioDriftScreen() {
           <>
             <View style={styles.latestCard}>
               <View>
-                <Text style={styles.sectionLabel}>Latest Snapshot</Text>
+                <Text style={styles.sectionLabel}>{txDrift ? "Current Allocation" : "Latest Snapshot"}</Text>
                 <Text style={styles.latestDate}>{toShortDate(latest.date)}</Text>
                 <Text style={styles.latestValue}>{formatMoney(latest.totalPortfolioValue, rc)}</Text>
               </View>

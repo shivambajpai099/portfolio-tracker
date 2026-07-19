@@ -6,13 +6,13 @@ import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, Vi
 import { TourTarget, useOnboardingTour } from "../../src/components/OnboardingTourProvider";
 import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
-import { SegmentedControl } from "../../src/components/SegmentedControl";
+import { Card, SectionLabel, SegToggle } from "../../src/components/SpecUI";
 import { UserMenu } from "../../src/components/UserMenu";
 import { AccountsSection } from "./accounts";
 import { fetchUsdInrRate } from "../../src/services/yahooFinanceService";
 import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
-import { radii, spacing, typography, useTheme, type ThemeColors } from "../../src/theme";
+import { spec } from "../../src/theme/specTokens";
 import type { AllocationBasis, Currency, ThemeMode, TimelineRetention } from "../../src/types/portfolio";
 
 interface PortfolioExport {
@@ -25,7 +25,6 @@ interface PortfolioExport {
 }
 
 export default function SettingsScreen() {
-  const { colors } = useTheme();
   const fxRates = usePortfolioStore((s) => s.fxRates);
   const settings = usePortfolioStore((s) => s.settings);
   const accounts = usePortfolioStore((s) => s.accounts);
@@ -236,13 +235,13 @@ export default function SettingsScreen() {
     <ScreenContainer>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.headerRow}>
-          <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
+          <Text style={styles.title}>Settings</Text>
           <UserMenu />
         </View>
 
         {statusMsg ? (
-          <View style={[styles.statusCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.statusText, { color: colors.accent }]}>{statusMsg}</Text>
+          <View style={styles.statusCard}>
+            <Text style={styles.statusText}>{statusMsg}</Text>
           </View>
         ) : null}
 
@@ -253,235 +252,216 @@ export default function SettingsScreen() {
 
         {/* ── Preferences (all display/allocation toggles grouped) ─── */}
         <TourTarget tourKey="settings">
-          <SectionLabel colors={colors}>Preferences</SectionLabel>
+          <SectionLabel>Preferences</SectionLabel>
           <View style={styles.prefGroup}>
-          {/* Display currency */}
-          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.prefTitle, { color: colors.text }]}>Display currency</Text>
-            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
-              Currency used across the app. Saved on this device.
-            </Text>
-            <SegmentedControl
-              options={[
-                { value: "INR", label: "₹ INR" },
-                { value: "USD", label: "$ USD" },
-              ]}
-              value={settings.reportingCurrency}
-              onChange={(c) => setReportingCurrency(c as Currency)}
-            />
-          </View>
-
-          {/* Exchange rate */}
-          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
-            <View style={styles.rateTitleRow}>
-              <Text style={[styles.prefTitle, { color: colors.text }]}>Exchange rate</Text>
-              <Pressable
-                style={styles.rateRefreshBtn}
-                onPress={() => refreshLiveRate(true)}
-                disabled={rateLoading}
-                accessibilityRole="button"
-                accessibilityLabel="Fetch live USD to INR rate"
-              >
-                <Text style={[styles.rateRefreshText, { color: colors.accent }]}>
-                  {rateLoading ? "Fetching…" : "↻ Live rate"}
-                </Text>
-              </Pressable>
-            </View>
-            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
-              {rateSource === "live"
-                ? "1 USD equals (auto-filled from live market rate — edit if needed)"
-                : "1 USD equals (enter manually or fetch the live rate)"}
-            </Text>
-            <View style={styles.rateRow}>
-              <TextInput
-                value={rateInput}
-                onChangeText={(v) => {
-                  setRateInput(v);
-                  setRateError("");
-                  setRateSource("manual");
-                }}
-                onSubmitEditing={commitRate}
-                keyboardType="decimal-pad"
-                returnKeyType="done"
-                style={[styles.rateInput, { backgroundColor: colors.bg, color: colors.text }]}
-                placeholderTextColor={colors.muted}
+            {/* Display currency */}
+            <Card style={styles.prefCard}>
+              <Text style={styles.prefTitle}>Display currency</Text>
+              <Text style={styles.prefSubtitle}>Currency used across the app. Saved on this device.</Text>
+              <SegToggle
+                options={[
+                  { value: "INR", label: "₹ INR" },
+                  { value: "USD", label: "$ USD" },
+                ]}
+                value={settings.reportingCurrency}
+                onChange={(c) => setReportingCurrency(c as Currency)}
               />
-              <Text style={[styles.inrText, { color: colors.muted }]}>INR</Text>
-              <Pressable style={[styles.saveBtn, { backgroundColor: colors.accent }]} onPress={commitRate}>
-                <Text style={[styles.saveBtnText, { color: colors.bg }]}>Save</Text>
-              </Pressable>
-            </View>
-            {rateError ? <Text style={[styles.errorText, { color: colors.negative }]}>{rateError}</Text> : null}
-          </View>
+            </Card>
 
-          {/* Allocation basis */}
-          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.prefTitle, { color: colors.text }]}>Allocation basis</Text>
-            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
-              Base allocation percentages on current or invested value.
-            </Text>
-            <SegmentedControl
-              options={[
-                { value: "CURRENT_VALUE", label: "Current" },
-                { value: "INVESTED_VALUE", label: "Invested" },
-              ]}
-              value={settings.allocationBasis}
-              onChange={(basis) => updateSettings({ allocationBasis: basis as AllocationBasis })}
-            />
-          </View>
+            {/* Exchange rate */}
+            <Card style={styles.prefCard}>
+              <View style={styles.rateTitleRow}>
+                <Text style={styles.prefTitle}>Exchange rate</Text>
+                <Pressable
+                  style={styles.rateRefreshBtn}
+                  onPress={() => refreshLiveRate(true)}
+                  disabled={rateLoading}
+                  accessibilityRole="button"
+                  accessibilityLabel="Fetch live USD to INR rate"
+                >
+                  <Text style={styles.rateRefreshText}>{rateLoading ? "Fetching…" : "↺ Live rate"}</Text>
+                </Pressable>
+              </View>
+              <Text style={styles.prefSubtitle}>
+                {rateSource === "live"
+                  ? "1 USD equals (auto-filled from live market rate — edit if needed)"
+                  : "1 USD equals (enter manually or fetch the live rate)"}
+              </Text>
+              <View style={styles.rateRow}>
+                <TextInput
+                  value={rateInput}
+                  onChangeText={(v) => {
+                    setRateInput(v);
+                    setRateError("");
+                    setRateSource("manual");
+                  }}
+                  onSubmitEditing={commitRate}
+                  keyboardType="decimal-pad"
+                  returnKeyType="done"
+                  style={styles.rateInput}
+                  placeholderTextColor={spec.MUTED}
+                />
+                <Text style={styles.inrText}>INR</Text>
+                <Pressable style={styles.saveBtn} onPress={commitRate}>
+                  <Text style={styles.saveBtnText}>Save</Text>
+                </Pressable>
+              </View>
+              {rateError ? <Text style={styles.errorText}>{rateError}</Text> : null}
+            </Card>
 
-          {/* Cash in allocation */}
-          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.prefTitle, { color: colors.text }]}>Cash in allocation</Text>
-            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
-              Include uninvested cash when computing allocations.
-            </Text>
-            <SegmentedControl
-              options={[
-                { value: "true", label: "Include" },
-                { value: "false", label: "Exclude" },
-              ]}
-              value={String(settings.allocationIncludeCash)}
-              onChange={(v) => updateSettings({ allocationIncludeCash: v === "true" })}
-            />
-          </View>
+            {/* Allocation basis */}
+            <Card style={styles.prefCard}>
+              <Text style={styles.prefTitle}>Allocation basis</Text>
+              <Text style={styles.prefSubtitle}>Base allocation percentages on current or invested value.</Text>
+              <SegToggle
+                options={[
+                  { value: "CURRENT_VALUE", label: "Current" },
+                  { value: "INVESTED_VALUE", label: "Invested" },
+                ]}
+                value={settings.allocationBasis}
+                onChange={(basis) => updateSettings({ allocationBasis: basis as AllocationBasis })}
+              />
+            </Card>
 
-          {/* Intraday trades */}
-          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.prefTitle, { color: colors.text }]}>Intraday trades</Text>
-            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
-              Exclude same-day buy/sell round-trips from Insights so day-trading doesn’t skew win rate and holding periods.
-            </Text>
-            <SegmentedControl
-              options={[
-                { value: "true", label: "Exclude" },
-                { value: "false", label: "Include" },
-              ]}
-              value={String(settings.excludeIntradayFromInsights ?? true)}
-              onChange={(v) => updateSettings({ excludeIntradayFromInsights: v === "true" })}
-            />
-          </View>
+            {/* Cash in allocation */}
+            <Card style={styles.prefCard}>
+              <Text style={styles.prefTitle}>Cash in allocation</Text>
+              <Text style={styles.prefSubtitle}>Include uninvested cash when computing allocations.</Text>
+              <SegToggle
+                options={[
+                  { value: "true", label: "Include" },
+                  { value: "false", label: "Exclude" },
+                ]}
+                value={String(settings.allocationIncludeCash)}
+                onChange={(v) => updateSettings({ allocationIncludeCash: v === "true" })}
+              />
+            </Card>
 
-          {/* History retention */}
-          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.prefTitle, { color: colors.text }]}>History retention</Text>
-            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
-              How much historical snapshot data to keep.
-            </Text>
-            <SegmentedControl
-              options={[
-                { value: "6M", label: "6M" },
-                { value: "1Y", label: "1Y" },
-                { value: "2Y", label: "2Y" },
-                { value: "ALL", label: "All" },
-              ]}
-              value={settings.timelineRetention ?? "1Y"}
-              onChange={(v) => updateSettings({ timelineRetention: v as TimelineRetention })}
-            />
-          </View>
+            {/* Intraday trades */}
+            <Card style={styles.prefCard}>
+              <Text style={styles.prefTitle}>Intraday trades</Text>
+              <Text style={styles.prefSubtitle}>
+                Exclude same-day buy/sell round-trips from Insights so day-trading doesn’t skew win rate and holding periods.
+              </Text>
+              <SegToggle
+                options={[
+                  { value: "true", label: "Exclude" },
+                  { value: "false", label: "Include" },
+                ]}
+                value={String(settings.excludeIntradayFromInsights ?? true)}
+                onChange={(v) => updateSettings({ excludeIntradayFromInsights: v === "true" })}
+              />
+            </Card>
 
-          {/* Theme */}
-          <View style={[styles.prefCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.prefTitle, { color: colors.text }]}>Theme</Text>
-            <Text style={[styles.prefSubtitle, { color: colors.muted }]}>
-              Appearance of the app interface.
-            </Text>
-            <SegmentedControl
-              options={[
-                { value: "light", label: "Light" },
-                { value: "dark", label: "Dark" },
-                { value: "system", label: "System" },
-              ]}
-              value={settings.themeMode ?? "dark"}
-              onChange={(v) => updateSettings({ themeMode: v as ThemeMode })}
-            />
+            {/* History retention */}
+            <Card style={styles.prefCard}>
+              <Text style={styles.prefTitle}>History retention</Text>
+              <Text style={styles.prefSubtitle}>How much historical snapshot data to keep.</Text>
+              <SegToggle
+                options={[
+                  { value: "6M", label: "6M" },
+                  { value: "1Y", label: "1Y" },
+                  { value: "2Y", label: "2Y" },
+                  { value: "ALL", label: "All" },
+                ]}
+                value={settings.timelineRetention ?? "1Y"}
+                onChange={(v) => updateSettings({ timelineRetention: v as TimelineRetention })}
+              />
+            </Card>
+
+            {/* Theme */}
+            <Card style={styles.prefCard}>
+              <Text style={styles.prefTitle}>Theme</Text>
+              <Text style={styles.prefSubtitle}>Appearance of the app interface.</Text>
+              <SegToggle
+                options={[
+                  { value: "light", label: "Light" },
+                  { value: "dark", label: "Dark" },
+                  { value: "system", label: "System" },
+                ]}
+                value={settings.themeMode ?? "dark"}
+                onChange={(v) => updateSettings({ themeMode: v as ThemeMode })}
+              />
+            </Card>
           </View>
-        </View>
         </TourTarget>
 
         {/* ── Help ─────────────────────────────────────────────────── */}
-        <SectionLabel colors={colors}>Help</SectionLabel>
+        <SectionLabel>Help</SectionLabel>
         <View style={styles.cardList}>
-          <Pressable onPress={startTourNow} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Start Guided Tour</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Walk through key features of the app step by step</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>▶</Text>
-          </Pressable>
-          <Pressable onPress={() => setShowGuide(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Portfolio Guide</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Understand metrics, filters, and how to input holdings</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>?</Text>
-          </Pressable>
-          <Pressable onPress={showGuideNextLaunch} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Show Guide on Next Launch</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Useful when sharing the app with someone new</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>↻</Text>
-          </Pressable>
+          <SettingsRow
+            title="Start Guided Tour"
+            subtitle="Walk through key features of the app step by step"
+            icon="▶"
+            onPress={startTourNow}
+          />
+          <SettingsRow
+            title="Portfolio Guide"
+            subtitle="Understand metrics, filters, and how to input holdings"
+            icon="?"
+            onPress={() => setShowGuide(true)}
+          />
+          <SettingsRow
+            title="Show Guide on Next Launch"
+            subtitle="Useful when sharing the app with someone new"
+            icon="↺"
+            onPress={showGuideNextLaunch}
+          />
         </View>
 
         {/* ── Data ─────────────────────────────────────────────────── */}
-        <SectionLabel colors={colors}>Data</SectionLabel>
+        <SectionLabel>Data</SectionLabel>
         <View style={styles.cardList}>
-          <Pressable onPress={handleExport} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Export Portfolio</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Save a JSON backup of all your data</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>↑</Text>
-          </Pressable>
-
-          <Pressable onPress={handleImport} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Import Portfolio</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Restore from a JSON backup file</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>↓</Text>
-          </Pressable>
+          <SettingsRow
+            title="Export Portfolio"
+            subtitle="Save a JSON backup of all your data"
+            icon="↑"
+            onPress={handleExport}
+          />
+          <SettingsRow
+            title="Import Portfolio"
+            subtitle="Restore from a JSON backup file"
+            icon="↓"
+            onPress={handleImport}
+          />
         </View>
 
         {/* ── Auth ─────────────────────────────────────────────────── */}
-        <SectionLabel colors={colors}>Auth</SectionLabel>
+        <SectionLabel>Auth</SectionLabel>
         <View style={styles.cardList}>
-          <Pressable onPress={handleSignOut} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
-            <View>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Sign Out</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.muted }]}>End current session on this device</Text>
-            </View>
-            <Text style={{ color: colors.muted }}>→</Text>
-          </Pressable>
+          <SettingsRow
+            title="Sign Out"
+            subtitle="End current session on this device"
+            icon="→"
+            onPress={handleSignOut}
+          />
         </View>
 
         {/* ── Danger zone ──────────────────────────────────────────── */}
-        <SectionLabel colors={colors} style={styles.dangerLabel}>Danger Zone</SectionLabel>
-        <Pressable onPress={() => setShowClearConfirm(true)} style={[styles.actionCard, { backgroundColor: colors.surface }]}>
+        <SectionLabel style={styles.dangerLabel}>Danger Zone</SectionLabel>
+        <Pressable onPress={() => setShowClearConfirm(true)} style={styles.dangerRow}>
           <View>
-            <Text style={[styles.actionTitle, { color: colors.negative }]}>Clear All Data</Text>
-            <Text style={[styles.actionSubtitle, { color: colors.muted }]}>Permanently removes all accounts, holdings and balances</Text>
+            <Text style={styles.dangerTitle}>Clear All Data</Text>
+            <Text style={styles.actionSubtitle}>Permanently removes all accounts, holdings and balances</Text>
           </View>
-          <Text style={{ color: colors.negative }}>×</Text>
+          <Text style={styles.dangerIcon}>✕</Text>
         </Pressable>
       </ScrollView>
 
       {/* ── Clear confirmation modal ─────────────────────────────── */}
       <Modal visible={showClearConfirm} transparent animationType="fade" onRequestClose={() => setShowClearConfirm(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Clear all data?</Text>
-            <Text style={[styles.modalText, { color: colors.muted }]}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Clear all data?</Text>
+            <Text style={styles.modalText}>
               This will permanently delete all accounts, holdings, and cash balances. This cannot be undone.
             </Text>
             <View style={styles.modalActions}>
               <Pressable style={styles.ghostBtn} onPress={() => setShowClearConfirm(false)}>
-                <Text style={{ color: colors.muted }}>Cancel</Text>
+                <Text style={{ color: spec.SUB }}>Cancel</Text>
               </Pressable>
-              <Pressable style={[styles.dangerBtn, { backgroundColor: colors.negative }]} onPress={confirmClear}>
-                <Text style={[styles.dangerBtnText, { color: colors.text }]}>Clear</Text>
+              <Pressable style={styles.dangerBtn} onPress={confirmClear}>
+                <Text style={styles.dangerBtnText}>Clear</Text>
               </Pressable>
             </View>
           </View>
@@ -492,67 +472,82 @@ export default function SettingsScreen() {
   );
 }
 
-function SectionLabel({ children, style, colors }: { children: string; style?: object; colors?: ThemeColors }) {
-  const theme = useTheme();
-  const c = colors ?? theme.colors;
-  return <Text style={[styles.sectionLabel, { color: c.muted }, style]}>{children}</Text>;
+function SettingsRow({
+  title,
+  subtitle,
+  icon,
+  onPress,
+}: {
+  title: string;
+  subtitle: string;
+  icon: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable onPress={onPress} style={styles.actionCard}>
+      <View style={styles.actionTextWrap}>
+        <Text style={styles.actionTitle}>{title}</Text>
+        <Text style={styles.actionSubtitle}>{subtitle}</Text>
+      </View>
+      <Text style={styles.actionIcon}>{icon}</Text>
+    </Pressable>
+  );
 }
 
 const styles = StyleSheet.create({
   scrollContent: {
-    paddingBottom: 40,
+    paddingBottom: 112,
   },
   headerRow: {
-    marginBottom: spacing.xxl,
+    marginBottom: 24,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
   title: {
-    fontSize: typography.heading,
-    fontWeight: typography.weightSemibold,
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#F2F4F8",
   },
   statusCard: {
-    marginBottom: spacing.xl,
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    marginBottom: 16,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: spec.CARD,
+    borderWidth: 1,
+    borderColor: spec.BDR,
   },
   statusText: {
-    fontSize: typography.body,
+    fontSize: 14,
+    color: spec.TEAL,
   },
   accountsSectionWrap: {
-    marginBottom: spacing.xl,
+    marginBottom: 16,
   },
   prefGroup: {
-    gap: spacing.sm,
-    marginBottom: spacing.xxl,
+    gap: 12,
+    marginBottom: 28,
   },
   prefCard: {
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    gap: spacing.sm,
+    padding: 16,
+    gap: 8,
   },
   prefTitle: {
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#F2F4F8",
   },
   prefSubtitle: {
-    fontSize: typography.caption,
+    fontSize: 12,
     lineHeight: 16,
-  },
-  sectionLabel: {
-    marginBottom: spacing.md,
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
-    textTransform: "uppercase",
-    letterSpacing: 1,
+    color: spec.SUB,
+    marginBottom: 4,
   },
   rateRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
+    gap: 12,
   },
   rateTitleRow: {
     flexDirection: "row",
@@ -560,95 +555,144 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   rateRefreshBtn: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
   },
   rateRefreshText: {
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
+    fontSize: 12,
+    fontWeight: "600",
+    color: spec.TEAL,
   },
   rateInput: {
     flex: 1,
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    fontSize: typography.body,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 14,
+    backgroundColor: spec.CARD2,
+    borderWidth: 1,
+    borderColor: spec.BDR,
+    color: "#F2F4F8",
   },
   inrText: {
-    fontSize: typography.body,
+    fontSize: 14,
+    color: spec.SUB,
   },
   saveBtn: {
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: spec.TEAL,
   },
   saveBtnText: {
-    fontWeight: typography.weightSemibold,
+    fontWeight: "700",
+    color: "#000",
   },
   errorText: {
-    marginTop: spacing.xs,
-    fontSize: typography.caption,
+    marginTop: 4,
+    fontSize: 12,
+    color: spec.RED,
   },
   cardList: {
-    marginBottom: spacing.sm,
-    gap: spacing.sm,
+    marginBottom: 16,
+    gap: 8,
   },
   actionCard: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: spec.CARD,
+    borderWidth: 1,
+    borderColor: spec.BDR,
+  },
+  actionTextWrap: {
+    flex: 1,
+    paddingRight: 12,
   },
   actionTitle: {
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#F2F4F8",
   },
   actionSubtitle: {
     marginTop: 2,
-    fontSize: typography.caption,
+    fontSize: 12,
+    color: spec.SUB,
+  },
+  actionIcon: {
+    fontSize: 16,
+    color: spec.TEAL,
   },
   dangerLabel: {
-    marginTop: spacing.xxl,
+    marginTop: 28,
+  },
+  dangerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: "rgba(248,113,113,0.25)",
+    backgroundColor: spec.CARD,
+  },
+  dangerTitle: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: spec.RED,
+  },
+  dangerIcon: {
+    fontSize: 16,
+    color: spec.RED,
   },
   modalOverlay: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.7)",
-    paddingHorizontal: spacing.xl,
+    paddingHorizontal: 24,
   },
   modalCard: {
     width: "100%",
-    borderRadius: radii.xl,
-    padding: spacing.xl,
+    borderRadius: 20,
+    padding: 24,
+    backgroundColor: spec.CARD,
+    borderWidth: 1,
+    borderColor: spec.BDR,
   },
   modalTitle: {
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#F2F4F8",
   },
   modalText: {
-    marginTop: spacing.sm,
-    fontSize: typography.body,
+    marginTop: 8,
+    fontSize: 14,
+    color: spec.SUB,
   },
   modalActions: {
-    marginTop: spacing.xxl,
+    marginTop: 28,
     flexDirection: "row",
     justifyContent: "flex-end",
-    gap: spacing.sm,
+    gap: 8,
   },
   ghostBtn: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
   },
   dangerBtn: {
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: spec.RED,
   },
   dangerBtnText: {
-    fontWeight: typography.weightSemibold,
+    fontWeight: "700",
+    color: "#000",
   },
 });
 

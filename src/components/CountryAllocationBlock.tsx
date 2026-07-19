@@ -1,10 +1,11 @@
 import { StyleSheet, Text, View } from "react-native";
 import { DonutChart } from "./DonutChart";
-import { colors, radii, spacing, typography } from "../theme";
+import { spacing, typography } from "../theme";
+import { spec } from "../theme/specTokens";
 import { formatMoney } from "../utils/format";
 
-const INDIA_COLOR = "#F59E0B";
-const US_COLOR = "#6366F1";
+const INDIA_COLOR = "#f97316";
+const US_COLOR = "#6366f1";
 const CASH_COLOR = "#374151";
 
 export function CountryAllocationBlock({
@@ -77,17 +78,19 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     marginBottom: spacing.md,
-    color: colors.muted,
+    color: spec.MUTED,
     fontSize: typography.micro,
     textTransform: "uppercase",
-    letterSpacing: 1,
+    letterSpacing: 1.5,
     fontWeight: typography.weightMedium,
   },
   chartRow: {
-    borderRadius: radii.lg,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    borderRadius: 16,
+    backgroundColor: spec.CARD,
+    borderWidth: 1,
+    borderColor: spec.BDR,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.lg,
@@ -114,19 +117,19 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   legendLabel: {
-    color: colors.text,
+    color: spec.SUB,
     fontSize: typography.caption,
   },
   legendRight: {
     alignItems: "flex-end",
   },
   legendPct: {
-    color: colors.text,
+    color: "#F2F4F8",
     fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
+    fontWeight: typography.weightSemibold,
   },
   legendValue: {
-    color: colors.muted,
+    color: spec.MUTED,
     fontSize: typography.micro,
     marginTop: 1,
   },

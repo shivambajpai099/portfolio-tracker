@@ -18,6 +18,7 @@ import Svg, {
   Text as SvgText,
 } from "react-native-svg";
 import { radii, spacing, typography, useTheme } from "../theme";
+import { spec } from "../theme/specTokens";
 import type { Currency } from "../types/portfolio";
 import { formatMoney, formatCompactAxis } from "../utils/format";
 
@@ -66,9 +67,9 @@ const Y_AXIS_SECTIONS = 4;
 const Y_AXIS_PADDING_PERCENT = 0.075; // 7.5% padding top and bottom
 
 const INVESTED_COLOR = "#6366F1"; // Indigo
-const CURRENT_VALUE_COLOR = "#22C55E"; // Green
-const GRID_COLOR = "#1E2128";
-const TOOLTIP_BG = "#1A1D24";
+const CURRENT_VALUE_COLOR = "#00d4c8"; // Teal (spec accent)
+const GRID_COLOR = "rgba(255,255,255,0.04)";
+const TOOLTIP_BG = "#1c1c26";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -495,7 +496,7 @@ export function PortfolioPerformanceChart({
   // Loading state
   if (isLoading) {
     return (
-      <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
+      <View style={styles.card}>
         <View style={styles.loadingContainer}>
           <Text style={[styles.loadingText, { color: themeColors.muted }]}>Loading chart data...</Text>
         </View>
@@ -506,7 +507,7 @@ export function PortfolioPerformanceChart({
   // Error state
   if (error) {
     return (
-      <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
+      <View style={styles.card}>
         <View style={styles.errorContainer}>
           <Text style={[styles.errorText, { color: themeColors.negative }]}>{error}</Text>
         </View>
@@ -517,8 +518,8 @@ export function PortfolioPerformanceChart({
   // Empty state
   if (data.length === 0) {
     return (
-      <View style={[styles.card, { backgroundColor: themeColors.surface }]}>
-        <Text style={[styles.cardTitle, { color: themeColors.text }]}>Portfolio Performance</Text>
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Portfolio Performance</Text>
         <View style={styles.emptyContainer}>
           <Text style={[styles.emptyTitle, { color: themeColors.text }]}>No Transaction Data</Text>
           <Text style={[styles.emptyText, { color: themeColors.muted }]}>
@@ -531,13 +532,13 @@ export function PortfolioPerformanceChart({
 
   return (
     <View
-      style={[styles.card, { backgroundColor: themeColors.surface }]}
+      style={styles.card}
       onLayout={handleLayout}
     >
       {/* Header */}
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
-          <Text style={[styles.cardTitle, { color: themeColors.text }]}>Portfolio Performance</Text>
+          <Text style={styles.cardTitle}>Portfolio Performance</Text>
         </View>
       </View>
 
@@ -795,10 +796,11 @@ export function PortfolioPerformanceChart({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
+    borderRadius: 16,
+    backgroundColor: spec.CARD,
+    borderWidth: 1,
+    borderColor: spec.BDR,
+    padding: 16,
   },
   headerRow: {
     flexDirection: "row",
@@ -810,8 +812,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   cardTitle: {
-    fontSize: typography.body,
+    fontSize: 14,
     fontWeight: "600",
+    color: "#F2F4F8",
   },
   dateRange: {
     fontSize: typography.caption,

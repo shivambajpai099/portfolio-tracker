@@ -8,9 +8,23 @@ import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { calcPortfolioTotals, convert } from "../../src/features/portfolio/calculations";
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
-import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
+import { radii, spacing, typography } from "../../src/theme";
+import { spec } from "../../src/theme/specTokens";
 import { accountSupportsHoldings, type Account, type CashHolding, type Currency } from "../../src/types/portfolio";
 import { formatMoney } from "../../src/utils/format";
+
+// Spec-palette mapping (keys mirror ThemeColors so existing style references work).
+const defaultColors = {
+  bg: spec.CARD2,
+  surface: spec.CARD,
+  text: "#F2F4F8",
+  muted: spec.SUB,
+  accent: spec.TEAL,
+  positive: spec.GREEN,
+  negative: spec.RED,
+  warning: "#F59E0B",
+  border: spec.BDR,
+} as const;
 
 const nowIso = () => new Date().toISOString();
 const createAccountId = () => `acc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -28,7 +42,7 @@ const formatDate = (isoString: string | undefined): string | null => {
 };
 
 export function AccountsSection() {
-  const { colors } = useTheme();
+  const colors = defaultColors;
   const manualHoldings = usePortfolioStore((state) => state.holdings);
   const cashHoldings = usePortfolioStore((state) => state.cashHoldings);
   const accounts = usePortfolioStore((state) => state.accounts);
@@ -670,7 +684,9 @@ const styles = StyleSheet.create({
   },
   // Summary card styles
   summaryCard: {
-    borderRadius: radii.lg,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: spec.BDR,
     padding: spacing.lg,
     marginBottom: spacing.sm,
   },
@@ -732,7 +748,9 @@ const styles = StyleSheet.create({
   },
   // Empty state
   emptyCard: {
-    borderRadius: radii.lg,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: spec.BDR,
     padding: spacing.lg,
   },
   emptyTitle: {
@@ -757,7 +775,9 @@ const styles = StyleSheet.create({
   },
   // Account card
   card: {
-    borderRadius: radii.lg,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: spec.BDR,
     padding: spacing.lg,
   },
   cardHeader: {
