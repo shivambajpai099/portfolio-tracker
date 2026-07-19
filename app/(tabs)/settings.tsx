@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { TourTarget, useOnboardingTour } from "../../src/components/OnboardingTourProvider";
 import { PortfolioGuideModal } from "../../src/components/PortfolioGuideModal";
+import { StockSplitManagerModal } from "../../src/components/StockSplitManagerModal";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { Card, SectionLabel, SegToggle } from "../../src/components/SpecUI";
 import { UserMenu } from "../../src/components/UserMenu";
@@ -44,6 +45,7 @@ export default function SettingsScreen() {
   const [rateSource, setRateSource] = useState<"live" | "manual">("manual");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [showSplits, setShowSplits] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
 
   const flash = (msg: string) => {
@@ -70,7 +72,10 @@ export default function SettingsScreen() {
     setRateLoading(true);
     setRateError("");
     try {
-      const result = await fetchUsdInrRate();
+      // A user-triggered refresh (announce) bypasses the 20-min price cache so
+      // the button always fetches a fresh rate; the silent mount refresh reuses
+      // the cache to avoid an extra upstream call.
+      const result = await fetchUsdInrRate(undefined, announce);
       if (result.ok) {
         const rounded = Math.round(result.data * 100) / 100;
         setRateInput(String(rounded));
@@ -424,6 +429,12 @@ export default function SettingsScreen() {
             icon="↓"
             onPress={handleImport}
           />
+          <SettingsRow
+            title="Stock Splits"
+            subtitle="Fix averages after a split/bonus that wasn't auto-detected"
+            icon="⇄"
+            onPress={() => setShowSplits(true)}
+          />
         </View>
 
         {/* ── Auth ─────────────────────────────────────────────────── */}
@@ -468,6 +479,7 @@ export default function SettingsScreen() {
         </View>
       </Modal>
       <PortfolioGuideModal visible={showGuide} onClose={closeGuide} />
+      <StockSplitManagerModal visible={showSplits} onClose={() => setShowSplits(false)} />
     </ScreenContainer>
   );
 }

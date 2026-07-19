@@ -4,6 +4,15 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import type { PortfolioSnapshotData } from "../features/portfolio/cloudSnapshot";
 import { calcSymbolAllocations, convert, holdingCost } from "../features/portfolio/calculations";
 import { deriveHoldingsFromTransactions } from "../features/portfolio/fifoCalculator";
+import {
+  processCorporateActions,
+  normalizeHoldingsForSplits,
+  reverseStockSplit,
+  reverseStockSplitFromHolding,
+  DEFAULT_STOCK_SPLITS,
+  corporateActionId,
+  type StockSplit,
+} from "../features/portfolio/corporateActionProcessor";
 import { exposureBySymbol, holdingMarketValue, toINR, toUSD } from "../features/portfolio/selectors";
 import { seedAccounts, seedCashHoldings, seedFxRates, seedHoldings, seedSettings } from "../features/portfolio/mockData";
 import type {
@@ -18,6 +27,7 @@ import type {
   TimelineRetention,
 } from "../types/portfolio";
 import type { Transaction } from "../types/transaction";
+import { applyIndiaAlias } from "../utils/indiaSymbols";
 
 const normalizeSettings = (settings: Partial<PortfolioSettings> | undefined): PortfolioSettings => ({
   ...seedSettings,
@@ -31,6 +41,25 @@ const DRIFT_SNAPSHOT_LIMIT = 500;
 const isIndiaHolding = (holding: Holding): boolean => {
   const symbol = holding.symbol.toUpperCase();
   return holding.currency === "INR" || symbol.endsWith(".NS") || symbol.endsWith(".BO");
+};
+
+/**
+ * Merge stock-split registries, de-duplicated by their stable corporate-action
+ * id (identity + effective date + ratio). Preserves input order (first wins).
+ */
+const mergeSplitRegistries = (...registries: (StockSplit[] | undefined)[]): StockSplit[] => {
+  const seen = new Set<string>();
+  const merged: StockSplit[] = [];
+  for (const registry of registries) {
+    if (!registry) continue;
+    for (const split of registry) {
+      const id = corporateActionId(split);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      merged.push(split);
+    }
+  }
+  return merged;
 };
 
 /**
@@ -211,6 +240,12 @@ interface PortfolioState {
   fxRates: FxRates;
   /** Cached market prices for symbols (used for transaction-derived holdings) */
   marketPrices: Record<string, number>;
+  /**
+   * Known stock splits discovered during imports (from Yahoo) plus any manual
+   * ones. Persisted so the launch-time `normalizeCorporateActions` pass can
+   * retroactively split-adjust existing data — not just the built-in defaults.
+   */
+  stockSplits: StockSplit[];
   snapshotUpdatedAt: string;
   hydrated: boolean;
   setHydrated: (value: boolean) => void;
@@ -237,6 +272,26 @@ interface PortfolioState {
 
   /** Update cached market prices for symbols */
   updateMarketPrices: (prices: Record<string, number>) => void;
+
+  /** Correct known Indian ticker mismatches/renames on stored data. */
+  applyIndiaSymbolAliases: () => void;
+
+  /**
+   * Split-adjust already-persisted transactions and manual/snapshot holdings
+   * for known stock splits, so cost basis (average price) and share counts stay
+   * correct. Idempotent — safe to re-run on every launch.
+   */
+  normalizeCorporateActions: () => void;
+
+  /**
+   * Merge newly-discovered stock splits into the persisted registry (deduped)
+   * and immediately re-run normalization so both new and existing data are
+   * split-adjusted.
+   */
+  addStockSplits: (splits: StockSplit[]) => void;
+
+  /** Remove a persisted stock split and reverse its adjustment on stored data. */
+  removeStockSplit: (id: string) => void;
 
   updateSettings: (updates: Partial<PortfolioSettings>) => void;
   updateFxRates: (rates: FxRates) => void;
@@ -266,6 +321,7 @@ export const usePortfolioStore = create<PortfolioState>()(
       settings: seedSettings,
       fxRates: seedFxRates,
       marketPrices: {},
+      stockSplits: [],
       snapshotUpdatedAt: new Date().toISOString(),
       hydrated: false,
       setHydrated: (value: boolean) => set({ hydrated: value }),
@@ -542,6 +598,75 @@ export const usePortfolioStore = create<PortfolioState>()(
         set((state) => ({
           marketPrices: { ...state.marketPrices, ...prices },
         })),
+      applyIndiaSymbolAliases: () =>
+        set((state) => {
+          let changed = false;
+          const transactions = state.transactions.map((tx) => {
+            if (tx.currency !== "INR") return tx;
+            const next = applyIndiaAlias(tx.symbol);
+            if (next === tx.symbol) return tx;
+            changed = true;
+            return { ...tx, symbol: next };
+          });
+          const holdings = state.holdings.map((h) => {
+            if (h.currency !== "INR") return h;
+            const next = applyIndiaAlias(h.symbol);
+            if (next === h.symbol) return h;
+            changed = true;
+            return { ...h, symbol: next };
+          });
+          return changed ? { transactions, holdings } : {};
+        }),
+      normalizeCorporateActions: () =>
+        set((state) => {
+          // Registry = built-in defaults + splits discovered/persisted from
+          // imports, deduped by their stable corporate-action id.
+          const registry = mergeSplitRegistries(DEFAULT_STOCK_SPLITS, state.stockSplits);
+
+          // Re-apply known splits to stored transactions (idempotent via each
+          // row's appliedCorporateActions markers). Fixes existing data that was
+          // imported before a split was known/fetched.
+          const transactions = processCorporateActions(state.transactions, registry);
+
+          // Split-adjust manual/snapshot holdings whose snapshot pre-dates a
+          // split (idempotent via each holding's appliedCorporateActions).
+          const holdings = normalizeHoldingsForSplits(state.holdings, registry);
+
+          const transactionsChanged = transactions !== state.transactions && transactions.some(
+            (tx, i) => tx !== state.transactions[i]
+          );
+          const holdingsChanged = holdings.some((h, i) => h !== state.holdings[i]);
+
+          if (!transactionsChanged && !holdingsChanged) return {};
+          return { transactions, holdings };
+        }),
+      addStockSplits: (splits: StockSplit[]) =>
+        set((state) => {
+          const existing = state.stockSplits ?? [];
+          const merged = mergeSplitRegistries(existing, splits);
+          // Nothing new? avoid a needless state write.
+          if (merged.length === existing.length) return {};
+
+          // Re-normalize immediately so newly-learned splits correct both the
+          // just-imported and any previously-stored data.
+          const registry = mergeSplitRegistries(DEFAULT_STOCK_SPLITS, merged);
+          const transactions = processCorporateActions(state.transactions, registry);
+          const holdings = normalizeHoldingsForSplits(state.holdings, registry);
+          return { stockSplits: merged, transactions, holdings };
+        }),
+      removeStockSplit: (id: string) =>
+        set((state) => {
+          const existing = state.stockSplits ?? [];
+          const target = existing.find((s) => corporateActionId(s) === id);
+          const stockSplits = existing.filter((s) => corporateActionId(s) !== id);
+          if (!target) return { stockSplits };
+
+          // Reverse the adjustment on any rows/holdings carrying this split's
+          // marker so the position returns to its pre-split values.
+          const transactions = reverseStockSplit(state.transactions, target);
+          const holdings = reverseStockSplitFromHolding(state.holdings, target);
+          return { stockSplits, transactions, holdings };
+        }),
       clearAllData: () =>
         set({
           accounts: [],
@@ -598,9 +723,22 @@ export const usePortfolioStore = create<PortfolioState>()(
         settings: state.settings,
         fxRates: state.fxRates,
         marketPrices: state.marketPrices,
+        stockSplits: state.stockSplits,
         snapshotUpdatedAt: state.snapshotUpdatedAt,
       }),
       onRehydrateStorage: () => (state: PortfolioState | undefined) => {
+        // One-time correction of known Indian ticker mismatches/renames on
+        // already-stored data (e.g. SONATA -> SONATSOFTW) so price lookups
+        // resolve. No-op when nothing matches the alias map.
+        if (state) {
+          state.applyIndiaSymbolAliases();
+        }
+        // Re-apply known stock splits to stored transactions and manual/snapshot
+        // holdings so cost basis stays correct for data imported before a split
+        // was known. Idempotent — no-op when everything is already adjusted.
+        if (state) {
+          state.normalizeCorporateActions();
+        }
         if (state && !state.snapshotUpdatedAt) {
           state.replaceFromSnapshot({
             accounts: state.accounts,

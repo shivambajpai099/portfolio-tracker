@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+import { Animated, Easing } from "react-native";
 import { G, Path, Svg } from "react-native-svg";
 
 interface Slice {
@@ -9,6 +11,8 @@ interface DonutChartProps {
   slices: Slice[];
   size?: number;
   strokeWidth?: number;
+  /** Play a fade + scale entrance animation on mount. */
+  animate?: boolean;
 }
 
 const polarToCartesian = (cx: number, cy: number, r: number, angleDeg: number) => {
@@ -25,10 +29,29 @@ const describeArc = (cx: number, cy: number, r: number, startDeg: number, endDeg
   return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
 };
 
-export function DonutChart({ slices, size = 160, strokeWidth = 22 }: DonutChartProps) {
+export function DonutChart({ slices, size = 160, strokeWidth = 22, animate = false }: DonutChartProps) {
   const cx = size / 2;
   const cy = size / 2;
   const r = (size - strokeWidth) / 2;
+
+  // Entrance animation (fade + subtle scale). No-op when `animate` is false.
+  const progress = useRef(new Animated.Value(animate ? 0 : 1)).current;
+  useEffect(() => {
+    if (!animate) return;
+    progress.setValue(0);
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: 800,
+      delay: 0,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [animate, progress]);
+
+  const animatedStyle = {
+    opacity: progress,
+    transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] }) }],
+  };
 
   const total = slices.reduce((sum, s) => sum + s.value, 0);
   if (total === 0) {
@@ -58,20 +81,22 @@ export function DonutChart({ slices, size = 160, strokeWidth = 22 }: DonutChartP
   }
 
   return (
-    <Svg width={size} height={size}>
-      <G>
-        {paths.map((p, i) => (
-          <Path
-            key={i}
-            d={p.d}
-            stroke={p.color}
-            strokeWidth={strokeWidth}
-            fill="none"
-            strokeLinecap="butt"
-          />
-        ))}
-      </G>
-    </Svg>
+    <Animated.View style={animatedStyle}>
+      <Svg width={size} height={size}>
+        <G>
+          {paths.map((p, i) => (
+            <Path
+              key={i}
+              d={p.d}
+              stroke={p.color}
+              strokeWidth={strokeWidth}
+              fill="none"
+              strokeLinecap="butt"
+            />
+          ))}
+        </G>
+      </Svg>
+    </Animated.View>
   );
 }
 

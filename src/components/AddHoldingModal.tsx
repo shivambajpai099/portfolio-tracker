@@ -3,6 +3,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, Text
 import { PortfolioGuideModal } from "./PortfolioGuideModal";
 import { SegmentedControl } from "./SegmentedControl";
 import { fetchLivePrices, searchTickerSuggestions } from "../services/yahooFinanceService";
+import { applyIndiaAlias, buildIndiaQuoteCandidates } from "../utils/indiaSymbols";
 import { colors, spacing } from "../theme";
 import type { TickerSuggestion } from "../types/marketData";
 import { accountSupportsHoldings, type Account, type Currency } from "../types/portfolio";
@@ -31,17 +32,8 @@ const parseNumber = (value: string): number => {
   return Number.isFinite(parsed) ? parsed : NaN;
 };
 
-const buildLivePriceCandidates = (symbol: string, currency: Currency): string[] => {
-  const normalized = symbol.trim().toUpperCase();
-  const candidates = new Set<string>([normalized]);
-
-  if (currency === "INR" && !normalized.endsWith(".NS") && !normalized.endsWith(".BO")) {
-    candidates.add(`${normalized}.NS`);
-    candidates.add(`${normalized}.BO`);
-  }
-
-  return [...candidates];
-};
+const buildLivePriceCandidates = (symbol: string, currency: Currency): string[] =>
+  buildIndiaQuoteCandidates(symbol, currency);
 
 export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHoldingModalProps) {
   const [query, setQuery] = useState("");
@@ -261,6 +253,9 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
       setIsSaving(true);
 
+      // Correct known Indian ticker mismatches so price lookups resolve.
+      const storedSymbol = customCurrency === "INR" ? applyIndiaAlias(symbol) : symbol;
+
       let marketPrice = avg;
       try {
         const result = await fetchLivePrices(buildLivePriceCandidates(symbol, customCurrency));
@@ -273,7 +268,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
       onCreate({
         accountId,
-        symbol,
+        symbol: storedSymbol,
         companyName,
         currency: customCurrency,
         quantity: qty,
@@ -304,7 +299,7 @@ export function AddHoldingModal({ visible, accounts, onClose, onCreate }: AddHol
 
       onCreate({
         accountId,
-        symbol: selected.symbol,
+        symbol: selected.currency === "INR" ? applyIndiaAlias(selected.symbol) : selected.symbol,
         companyName: selected.companyName,
         currency: selected.currency,
         quantity: qty,

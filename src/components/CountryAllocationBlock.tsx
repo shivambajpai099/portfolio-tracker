@@ -34,7 +34,7 @@ export function CountryAllocationBlock({
     <View style={styles.container}>
       <Text style={styles.sectionTitle}>Country Allocation</Text>
       <View style={styles.chartRow}>
-        <DonutChart slices={countrySlices} size={144} strokeWidth={20} />
+        <DonutChart slices={countrySlices} size={144} strokeWidth={20} animate />
         <View style={styles.chartLegend}>
           <LegendRow label="India" pct={indiaPctEquity} value={indiaValue} color={INDIA_COLOR} rc={rc} />
           <LegendRow label="US" pct={usPctEquity} value={usValue} color={US_COLOR} rc={rc} />

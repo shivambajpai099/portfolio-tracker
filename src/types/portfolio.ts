@@ -35,6 +35,8 @@ export interface Holding {
   accountId: string;
   // Exchange ticker symbol, e.g. AAPL or RELIANCE.
   symbol: string;
+  /** Permanent security identifier; survives ticker renames (used as a price-lookup fallback). */
+  isin?: string;
   companyName: string;
   quantity: number;
   averagePrice: number;
@@ -42,6 +44,12 @@ export interface Holding {
   currency: Currency;
   asOf?: TimestampISO;
   updatedAt?: TimestampISO;
+  /**
+   * IDs of corporate actions (e.g. stock splits) already applied to this
+   * holding. Enables idempotent re-normalization — a split is never applied
+   * twice to the same snapshot/manual holding.
+   */
+  appliedCorporateActions?: string[];
 }
 
 export interface CashHolding {

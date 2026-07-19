@@ -14,6 +14,7 @@ import type { Transaction, TaxLot, LotConsumption, SellTransactionRealization } 
  */
 interface PositionState {
   symbol: string;
+  isin?: string;
   companyName: string;
   currency: Currency;
   accountId: string;
@@ -204,6 +205,7 @@ export const deriveHoldingsFromTransactions = (
     if (!position) {
       position = {
         symbol,
+        isin: tx.isin?.trim().toUpperCase() || undefined,
         companyName: tx.companyName,
         currency: tx.currency,
         accountId,
@@ -213,6 +215,11 @@ export const deriveHoldingsFromTransactions = (
         lastTransactionDate: tx.transactionDate,
       };
       positions.set(symbol, position);
+    }
+
+    // Backfill ISIN from any transaction that carries it.
+    if (!position.isin && tx.isin) {
+      position.isin = tx.isin.trim().toUpperCase();
     }
 
     // Update company name if newer transaction has it
@@ -261,6 +268,7 @@ export const deriveHoldingsFromTransactions = (
       id: generateDerivedHoldingId(accountId, position.symbol),
       accountId,
       symbol: position.symbol,
+      isin: position.isin,
       companyName: position.companyName,
       quantity,
       averagePrice,

@@ -23,6 +23,8 @@ interface YahooQuoteItem {
   fullExchangeName?: string;
   exchange?: string;
   regularMarketTime?: number;
+  longName?: string;
+  shortName?: string;
 }
 
 interface YahooQuoteResponse {
@@ -38,6 +40,7 @@ interface CacheEntry<T> {
 
 const SEARCH_CACHE = new Map<string, CacheEntry<TickerSuggestion[]>>();
 const PRICE_CACHE = new Map<string, CacheEntry<LivePriceQuote[]>>();
+const ISIN_SYMBOL_CACHE = new Map<string, CacheEntry<string | null>>();
 const TTL_MS = 20 * 60 * 1000;
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").trim().replace(/\/$/, "");
@@ -55,6 +58,9 @@ const isFresh = (entry: CacheEntry<unknown>): boolean => {
 
 const normalizeSymbol = (symbol: string): string => symbol.trim().toUpperCase();
 const isIndiaQuoteSymbol = (symbol: string): boolean => /\.(NS|BO)$/i.test(symbol);
+// Yahoo FX pairs (e.g. USDINR=X) are unreliable on the v7 quote endpoint but
+// resolve fine via the chart API — route them there like Indian tickers.
+const isFxSymbol = (symbol: string): boolean => /=X$/i.test(symbol);
 const stripIndiaSuffix = (symbol: string): string => symbol.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
 const indiaExchangeForSymbol = (symbol: string): "NSE" | "BOM" => (symbol.endsWith(".BO") ? "BOM" : "NSE");
 
@@ -112,6 +118,7 @@ const mapQuoteResults = (payload: YahooQuoteResponse): LivePriceQuote[] => {
         currency: inferCurrency(item.currency, symbol),
         exchange: item.fullExchangeName ?? item.exchange ?? "Unknown",
         asOf,
+        companyName: item.longName ?? item.shortName ?? undefined,
       };
     })
     .filter((quote): quote is LivePriceQuote => Boolean(quote));
@@ -199,6 +206,8 @@ const fetchDirectYahooChartQuotes = async (symbols: string[], signal?: AbortSign
                 exchangeName?: string;
                 fullExchangeName?: string;
                 regularMarketTime?: number;
+                longName?: string;
+                shortName?: string;
               };
             }>;
           };
@@ -217,6 +226,7 @@ const fetchDirectYahooChartQuotes = async (symbols: string[], signal?: AbortSign
           currency: inferCurrency(meta?.currency, resolvedSymbol),
           exchange: meta?.fullExchangeName ?? meta?.exchangeName ?? "Yahoo Chart",
           asOf: meta?.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : nowIso(),
+          companyName: meta?.longName ?? meta?.shortName ?? undefined,
         };
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
@@ -289,7 +299,11 @@ const fetchDirectNseQuotes = async (symbols: string[], signal?: AbortSignal): Pr
           return null;
         }
 
-        const payload = (await response.json()) as { priceInfo?: { lastPrice?: number } };
+        const payload = (await response.json()) as {
+          priceInfo?: { lastPrice?: number };
+          info?: { companyName?: string };
+          metadata?: { companyName?: string };
+        };
         const price = payload.priceInfo?.lastPrice;
         if (typeof price !== "number") {
           return null;
@@ -301,6 +315,7 @@ const fetchDirectNseQuotes = async (symbols: string[], signal?: AbortSignal): Pr
           currency: "INR" as Currency,
           exchange: "NSE",
           asOf: nowIso(),
+          companyName: payload.info?.companyName ?? payload.metadata?.companyName ?? undefined,
         };
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
@@ -451,6 +466,46 @@ export const searchTickerSuggestions = async (
   }
 };
 
+/**
+ * Resolve a security's *current* ticker symbol from its ISIN.
+ *
+ * ISIN is permanent and survives NSE ticker renames, so this is used as a
+ * price-lookup fallback when a stored symbol no longer resolves. Yahoo's search
+ * endpoint accepts an ISIN and returns the matching listing(s); we prefer the
+ * NSE (`.NS`), then BSE (`.BO`), then any INR listing, then the first result.
+ *
+ * Returns `null` when it can't be resolved (including when the search proxy is
+ * not configured — search is proxy-only on native). Cached per ISIN.
+ */
+export const resolveSymbolByIsin = async (
+  isin: string,
+  signal?: AbortSignal
+): Promise<string | null> => {
+  const key = isin.trim().toUpperCase();
+  if (!key) return null;
+
+  const cached = ISIN_SYMBOL_CACHE.get(key);
+  if (cached && isFresh(cached)) {
+    return cached.value;
+  }
+
+  const result = await searchTickerSuggestions(key, signal);
+  if (!result.ok || !result.data || result.data.length === 0) {
+    // Preserve a previously-resolved value if the network call failed.
+    return cached?.value ?? null;
+  }
+
+  const suggestions = result.data;
+  const best =
+    (suggestions.find((s) => s.symbol.toUpperCase().endsWith(".NS")) ??
+      suggestions.find((s) => s.symbol.toUpperCase().endsWith(".BO")) ??
+      suggestions.find((s) => s.currency === "INR") ??
+      suggestions[0])?.symbol ?? null;
+
+  ISIN_SYMBOL_CACHE.set(key, { value: best, fetchedAt: nowIso() });
+  return best;
+};
+
 export const fetchLivePrices = async (
   symbols: string[],
   signal?: AbortSignal,
@@ -468,14 +523,16 @@ export const fetchLivePrices = async (
   }
 
   const indiaSymbols = normalized.filter(isIndiaQuoteSymbol);
-  const otherSymbols = normalized.filter((symbol) => !isIndiaQuoteSymbol(symbol));
+  const fxSymbols = normalized.filter(isFxSymbol);
+  const otherSymbols = normalized.filter((symbol) => !isIndiaQuoteSymbol(symbol) && !isFxSymbol(symbol));
 
   try {
     if (!hasProxyBase) {
-      const [indiaChartQuotes, indiaGoogleQuotes, indiaNseQuotes, otherQuotes] = await Promise.all([
+      const [indiaChartQuotes, indiaGoogleQuotes, indiaNseQuotes, fxQuotes, otherQuotes] = await Promise.all([
         indiaSymbols.length > 0 ? fetchDirectYahooChartQuotes(indiaSymbols, signal) : Promise.resolve([]),
         indiaSymbols.length > 0 ? fetchDirectGoogleFinanceQuotes(indiaSymbols, signal) : Promise.resolve([]),
         indiaSymbols.length > 0 ? fetchDirectNseQuotes(indiaSymbols, signal) : Promise.resolve([]),
+        fxSymbols.length > 0 ? fetchDirectYahooChartQuotes(fxSymbols, signal) : Promise.resolve([]),
         otherSymbols.length > 0
           ? fetchDirectYahooQuotes(otherSymbols.join(","), signal).then((response) => {
               if (!response.ok) return [] as LivePriceQuote[];
@@ -485,10 +542,15 @@ export const fetchLivePrices = async (
       ]);
 
       const mergedIndiaQuotes = [...indiaChartQuotes, ...indiaGoogleQuotes, ...indiaNseQuotes];
-      const quotes = [...otherQuotes, ...mergedIndiaQuotes]
+      const quotes = [...otherQuotes, ...fxQuotes, ...mergedIndiaQuotes]
         .reduce<LivePriceQuote[]>((acc, quote) => {
-          if (!acc.some((item) => item.symbol === quote.symbol)) {
+          const existing = acc.find((item) => item.symbol === quote.symbol);
+          if (!existing) {
             acc.push(quote);
+          } else if (!existing.companyName && quote.companyName) {
+            // Keep the first source's price but backfill a name from a later
+            // source (e.g. chart has the price, NSE has the company name).
+            existing.companyName = quote.companyName;
           }
           return acc;
         }, []);

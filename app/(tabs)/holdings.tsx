@@ -3,16 +3,16 @@ import { useRouter } from "expo-router";
 import { Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
 import { AddAccountModal, type AddAccountInput } from "../../src/components/AddAccountModal";
-import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
 import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
 import { TourTarget } from "../../src/components/OnboardingTourProvider";
 import { ScreenContainer } from "../../src/components/ScreenContainer";
 import { SegmentedControl } from "../../src/components/SegmentedControl";
 import { TickerImage } from "../../src/components/TickerImage";
+import { HoldingAvatar } from "../../src/components/HoldingAvatar";
 import { HoldingPerformanceChart } from "../../src/components/HoldingPerformanceChart";
 import { calcHoldingPerformanceHistory, holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
-import { fetchLivePrices } from "../../src/services/yahooFinanceService";
+import { fetchLivePrices, resolveSymbolByIsin } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
@@ -78,6 +78,21 @@ type EditDraft = {
 };
 
 const nowIso = () => new Date().toISOString();
+
+/**
+ * Full-precision currency formatting for the mobile row — always 2 decimals,
+ * no compact/rounded notation. Indian digit grouping for INR (₹2,57,339.79),
+ * Western grouping for USD ($257,339.79).
+ */
+const formatMoneyFull = (value: number, currency: Currency): string => {
+  const locale = currency === "INR" ? "en-IN" : "en-US";
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+};
 const createHoldingId = () => `h-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 const createAccountId = () => `acc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 const createCashId = () => `cash-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -101,6 +116,8 @@ export function HoldingsSection() {
   // On narrow viewports the three value columns don't comfortably fit, so the
   // secondary Invested figure (header + per-row value) is hidden. Current + Alloc stay.
   const hideInvested = viewportWidth < 480;
+  // Below this width we swap the column table for a single stacked-column row list.
+  const isMobile = viewportWidth < 768;
   const settings = usePortfolioStore((state) => state.settings);
   const accounts = usePortfolioStore((state) => state.accounts);
   const fxRates = usePortfolioStore((state) => state.fxRates);
@@ -139,12 +156,8 @@ export function HoldingsSection() {
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isAddMenuVisible, setIsAddMenuVisible] = useState(false);
   const [addMenuAnchor, setAddMenuAnchor] = useState<{ top: number; right: number } | null>(null);
-  const [importMenuAnchor, setImportMenuAnchor] = useState<{ top: number; right: number } | null>(null);
   const addBtnRef = useRef<View>(null);
-  const importBtnRef = useRef<View>(null);
   const [isAddAccountVisible, setIsAddAccountVisible] = useState(false);
-  const [isImportVisible, setIsImportVisible] = useState(false);
-  const [isImportMenuVisible, setIsImportMenuVisible] = useState(false);
   const [pendingImportAccountId, setPendingImportAccountId] = useState<string | null>(null);
   const [isImportTransactionsVisible, setIsImportTransactionsVisible] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
@@ -226,10 +239,18 @@ export function HoldingsSection() {
       const requestSymbols = new Set<string>();
       for (const holding of holdings) {
         const symbol = holding.symbol.trim().toUpperCase();
-        requestSymbols.add(symbol);
+        const alreadySuffixed = symbol.endsWith(".NS") || symbol.endsWith(".BO");
 
-        if (isIndiaHolding(holding) && !symbol.endsWith(".NS") && !symbol.endsWith(".BO")) {
+        if (isIndiaHolding(holding) && !alreadySuffixed) {
+          // Indian tickers frequently collide with a same-symbol US listing
+          // (e.g. bare "TATAPOWER"/"MMTC"). Fetching the bare symbol would
+          // return the US quote in USD. Request ONLY the exchange-suffixed
+          // variants so we always get the Indian price (or none at all —
+          // never the wrong US one).
           requestSymbols.add(`${symbol}.NS`);
+          requestSymbols.add(`${symbol}.BO`);
+        } else {
+          requestSymbols.add(symbol);
         }
       }
 
@@ -274,10 +295,51 @@ export function HoldingsSection() {
         }
 
         // Update manual holdings directly
+        const quoteName = quote.companyName?.trim();
+        const currentNameIsTicker =
+          !holding.companyName ||
+          normalizeIndiaTicker(holding.companyName) === normalizedKey;
         updateHolding(holding.id, {
           marketPrice: quote.price,
+          // Backfill a real company name when the holding only has the ticker.
+          ...(quoteName && quoteName.toUpperCase() !== key && currentNameIsTicker
+            ? { companyName: quoteName }
+            : {}),
           updatedAt: nowIso(),
         });
+      }
+
+      // ISIN fallback: for INR holdings whose ticker didn't resolve (e.g. an
+      // NSE symbol rename), resolve the current symbol from the permanent ISIN
+      // and fetch that. Requires the market-data proxy (no-op otherwise).
+      const isinTargets = holdings.filter((holding) => {
+        if (!isIndiaHolding(holding) || !holding.isin) return false;
+        const key = holding.symbol.toUpperCase();
+        return fetchedPrices[key] === undefined && fetchedPrices[normalizeIndiaTicker(key)] === undefined;
+      });
+
+      if (isinTargets.length > 0) {
+        await Promise.all(
+          isinTargets.map(async (holding) => {
+            try {
+              const resolvedSymbol = await resolveSymbolByIsin(holding.isin as string);
+              if (!resolvedSymbol) return;
+              const priceResult = await fetchLivePrices([resolvedSymbol], undefined, true);
+              const quote = (priceResult.data ?? [])[0];
+              if (!quote) return;
+
+              const key = holding.symbol.toUpperCase();
+              const normalizedKey = normalizeIndiaTicker(key);
+              fetchedPrices[key] = quote.price;
+              if (normalizedKey !== key) {
+                fetchedPrices[normalizedKey] = quote.price;
+              }
+              updateHolding(holding.id, { marketPrice: quote.price, updatedAt: nowIso() });
+            } catch {
+              // Ignore — leave this holding on its last-known / cost-basis price.
+            }
+          })
+        );
       }
 
       // Update the centralized market prices in store (for transaction-derived holdings)
@@ -521,13 +583,6 @@ export function HoldingsSection() {
     });
   };
 
-  const openImportMenu = () => {
-    importBtnRef.current?.measureInWindow((x, y, width, height) => {
-      setImportMenuAnchor({ top: y + height + 6, right: Math.max(spacing.md, viewportWidth - (x + width)) });
-      setIsImportMenuVisible(true);
-    });
-  };
-
   const handleCreateAccount = (input: AddAccountInput) => {
     const timestamp = nowIso();
     const accountId = createAccountId();
@@ -558,7 +613,7 @@ export function HoldingsSection() {
     // account that was just created (preselected in the import flow).
     if (accountSupportsHoldings(input.type)) {
       setPendingImportAccountId(accountId);
-      setIsImportMenuVisible(true);
+      setIsImportTransactionsVisible(true);
     }
   };
 
@@ -574,6 +629,45 @@ export function HoldingsSection() {
     return (
       <View key={group.id}>
         {/* Main row - tappable to expand/collapse */}
+        {isMobile ? (
+          <Pressable
+            onPress={() => toggleGroup(group.id)}
+            style={({ pressed }) => [
+              styles.mobileRow,
+              indent && styles.colHoldingIndent,
+              { borderBottomColor: colors.border },
+              (isExpanded || pressed) && { backgroundColor: colors.surface },
+            ]}
+          >
+            <HoldingAvatar symbol={group.title} fallbackColor={tickerColor} size={40} />
+            <View style={styles.mobileIdentity}>
+              <Text style={[styles.mobileTicker, { color: colors.text }]} numberOfLines={1}>
+                {group.title}
+              </Text>
+              {group.subtitle && normalizeIndiaTicker(group.subtitle) !== normalizeIndiaTicker(group.title) ? (
+                <Text style={[styles.mobileName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
+                  {group.subtitle}
+                </Text>
+              ) : null}
+            </View>
+            <View style={styles.mobileValueStack}>
+              <Text style={[styles.mobileAlloc, { color: colors.muted }]}>
+                {group.allocationPct.toFixed(1)}% alloc
+              </Text>
+              <Text style={[styles.mobileCurrent, { color: colors.text }]}>
+                {formatMoneyFull(group.currentValue, settings.reportingCurrency)}
+              </Text>
+              <Text style={styles.mobileInvestedLine}>
+                <Text style={{ color: colors.muted }}>
+                  {formatMoneyFull(group.investedValue, settings.reportingCurrency)} inv{" · "}
+                </Text>
+                <Text style={[styles.mobileGainPct, { color: gainPositive ? colors.positive : colors.negative }]}>
+                  {gainPositive ? "+" : ""}{group.gainLossPct.toFixed(2)}%
+                </Text>
+              </Text>
+            </View>
+          </Pressable>
+        ) : (
         <Pressable
           onPress={() => toggleGroup(group.id)}
           onHoverIn={() => setHoveredRowId(group.id)}
@@ -591,9 +685,13 @@ export function HoldingsSection() {
               <View style={styles.holdingTickerRow}>
                 <Text style={[styles.holdingTicker, { color: colors.text }]}>{group.title}</Text>
               </View>
-              <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
-                {group.subtitle || group.title}
-              </Text>
+              {/* Company name below the ticker — hidden when it's absent or just
+                  repeats the ticker (e.g. derived holdings without a real name). */}
+              {group.subtitle && normalizeIndiaTicker(group.subtitle) !== normalizeIndiaTicker(group.title) ? (
+                <Text style={[styles.holdingName, { color: colors.muted }]} numberOfLines={1} ellipsizeMode="tail">
+                  {group.subtitle}
+                </Text>
+              ) : null}
             </View>
             {/* Expand/collapse chevron (revealed on hover or when expanded) */}
             <Text style={[styles.rowChevron, { color: colors.muted }, (isExpanded || hoveredRowId === group.id) ? styles.rowChevronVisible : null]}>
@@ -624,6 +722,7 @@ export function HoldingsSection() {
             </Text>
           </View>
         </Pressable>
+        )}
 
         {/* Expanded view with tabs */}
         {isExpanded ? (
@@ -910,15 +1009,13 @@ export function HoldingsSection() {
             <Text style={styles.actionBtnLabel}>{isRefreshingPrices ? "Refreshing" : "Refresh"}</Text>
           </Pressable>
           <Pressable
-            ref={importBtnRef}
             style={styles.actionBtn}
-            onPress={openImportMenu}
+            onPress={() => setIsImportTransactionsVisible(true)}
             accessibilityRole="button"
-            accessibilityLabel="Import data"
+            accessibilityLabel="Import transactions"
           >
             <Text style={styles.actionBtnIcon}>≡</Text>
             <Text style={styles.actionBtnLabel}>Import</Text>
-            <Text style={styles.actionBtnChevron}>▾</Text>
           </Pressable>
           <TourTarget tourKey="holdings-add">
             <Pressable ref={addBtnRef} style={styles.addBtn} onPress={openAddMenu}>
@@ -927,9 +1024,12 @@ export function HoldingsSection() {
           </TourTarget>
         </View>
       </View>
-      {lastPricesRefreshedAt ? (
-        <Text style={styles.refreshMeta}>Prices refreshed {formatRelativeTime(lastPricesRefreshedAt)}</Text>
-      ) : null}
+      <View style={styles.headerMetaBlock}>
+        <Text style={styles.headerHint}>Tap a holding for full details</Text>
+        {lastPricesRefreshedAt ? (
+          <Text style={styles.headerMetaLine}>Prices refreshed {formatRelativeTime(lastPricesRefreshedAt)}</Text>
+        ) : null}
+      </View>
 
       {/* Search */}
       <TextInput
@@ -959,15 +1059,17 @@ export function HoldingsSection() {
           />
         </View>
         <View style={styles.groupControlItem}>
-          <SegmentedControl<MarketFilter>
-            options={[
-              { value: "ALL", label: "All" },
-              { value: "INDIA", label: "India" },
-              { value: "US", label: "US" },
-            ]}
-            value={marketFilter}
-            onChange={setMarketFilter}
-          />
+          {!isMobile ? (
+            <SegmentedControl<MarketFilter>
+              options={[
+                { value: "ALL", label: "All" },
+                { value: "INDIA", label: "India" },
+                { value: "US", label: "US" },
+              ]}
+              value={marketFilter}
+              onChange={setMarketFilter}
+            />
+          ) : null}
           <View>
             <Pressable
               style={[styles.cashIconBtn, showCash && styles.cashIconBtnActive]}
@@ -992,9 +1094,10 @@ export function HoldingsSection() {
         </View>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} scrollEnabled={false}>
-        <View style={styles.listWrap}>
-          {holdings.length === 0 ? (
+      {/* Plain container — the outer ScreenContainer ScrollView owns scrolling.
+          A nested (disabled) ScrollView here previously swallowed row scrolling. */}
+      <View style={styles.listWrap}>
+        {holdings.length === 0 ? (
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>{brokerAccounts.length === 0 ? "No broker account yet" : "No holdings yet"}</Text>
               {brokerAccounts.length === 0 ? (
@@ -1018,12 +1121,26 @@ export function HoldingsSection() {
           ) : null}
 
           {holdings.length > 0 ? (
+            isMobile ? (
+              <View style={styles.mobileFilterRow}>
+                <SegmentedControl<MarketFilter>
+                  options={[
+                    { value: "ALL", label: "All" },
+                    { value: "INDIA", label: "India" },
+                    { value: "US", label: "US" },
+                  ]}
+                  value={marketFilter}
+                  onChange={setMarketFilter}
+                />
+              </View>
+            ) : (
             <View style={[styles.gridRow, styles.columnHeaderRow, styles.stickyHeader, { backgroundColor: colors.bg, borderBottomColor: colors.border }]}>
               {renderSortHeader("holding", groupBy === "account" ? "ACCOUNT / HOLDING" : "HOLDING", styles.colHolding, "left")}
               {!hideInvested ? renderSortHeader("invested", "INVESTED", styles.cellInvested, "right") : null}
               {renderSortHeader("current", "CURRENT", styles.cellCurrent, "right")}
               {renderSortHeader("alloc", "ALLOC", styles.cellAlloc, "right")}
             </View>
+            )
           ) : null}
 
           {holdings.length > 0 ? (
@@ -1092,7 +1209,6 @@ export function HoldingsSection() {
             </View>
           ) : null}
         </View>
-      </ScrollView>
 
       <AddHoldingModal
         visible={isAddVisible}
@@ -1112,24 +1228,6 @@ export function HoldingsSection() {
             updatedAt: nowIso(),
           });
         }}
-      />
-
-      <ImportHoldingsModal
-        visible={isImportVisible}
-        accounts={brokerAccounts}
-        existingHoldings={holdings}
-        preSelectedAccountId={pendingImportAccountId ?? undefined}
-        onClose={() => {
-          setIsImportVisible(false);
-          setPendingImportAccountId(null);
-        }}
-        onComplete={(result) => {
-          console.log(`Imported ${result.addedCount} new, ${result.updatedCount} updated to ${result.accountName}`);
-          setPendingImportAccountId(null);
-        }}
-        addHolding={addHolding}
-        updateHolding={updateHolding}
-        updateAccount={updateAccount}
       />
 
       <ImportTransactionsModal
@@ -1189,36 +1287,6 @@ export function HoldingsSection() {
       />
 
       {/* Import Menu Modal */}
-      <Modal visible={isImportMenuVisible} transparent animationType="fade" onRequestClose={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
-        <Pressable style={styles.dropdownBackdrop} onPress={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
-          <Pressable
-            style={[styles.dropdownCard, importMenuAnchor ? { top: importMenuAnchor.top, right: importMenuAnchor.right } : styles.dropdownFallback]}
-            onPress={() => {}}
-          >
-            <Pressable
-              style={styles.dropdownItem}
-              onPress={() => {
-                setIsImportMenuVisible(false);
-                setIsImportVisible(true);
-              }}
-            >
-              <Text style={styles.dropdownItemTitle}>Import Holdings</Text>
-              <Text style={styles.dropdownItemDesc}>Import current holdings snapshot from your broker</Text>
-            </Pressable>
-            <View style={styles.dropdownDivider} />
-            <Pressable
-              style={styles.dropdownItem}
-              onPress={() => {
-                setIsImportMenuVisible(false);
-                setIsImportTransactionsVisible(true);
-              }}
-            >
-              <Text style={styles.dropdownItemTitle}>Import Transactions</Text>
-              <Text style={styles.dropdownItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
 
       <Modal visible={Boolean(editTarget)} transparent animationType="fade" onRequestClose={() => setEditTarget(null)}>
         <View style={styles.modalOverlay}>
@@ -1321,9 +1389,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
   },
-  refreshMeta: {
+  headerMetaBlock: {
     marginTop: -spacing.sm,
     marginBottom: spacing.lg,
+    gap: 2,
+  },
+  headerHint: {
+    color: defaultColors.muted,
+    fontSize: typography.caption,
+  },
+  headerMetaLine: {
     color: defaultColors.muted,
     fontSize: typography.caption,
   },
@@ -1359,25 +1434,20 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: spec.BDR,
-    backgroundColor: spec.CARD2,
+    borderColor: "#4b4b5e",
+    backgroundColor: "#2a2a38",
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
   actionBtnIcon: {
-    color: spec.SUB,
+    color: "#f4f4f6",
     fontSize: 12,
     fontWeight: "600",
   },
   actionBtnLabel: {
-    color: spec.SUB,
+    color: "#f4f4f6",
     fontSize: 12,
     fontWeight: "500",
-  },
-  actionBtnChevron: {
-    color: spec.SUB,
-    fontSize: 10,
-    marginLeft: -2,
   },
   searchInput: {
     marginBottom: spacing.lg,
@@ -1723,6 +1793,52 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: spacing.md,
+  },
+  // --- Mobile (< 768px) stacked-column row ---
+  mobileFilterRow: {
+    paddingVertical: spacing.sm,
+  },
+  mobileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  mobileIdentity: {
+    flex: 1,
+    minWidth: 0,
+  },
+  mobileTicker: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  mobileName: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  mobileValueStack: {
+    alignItems: "flex-end",
+  },
+  mobileAlloc: {
+    fontSize: 12,
+    fontVariant: ["tabular-nums"],
+  },
+  mobileCurrent: {
+    fontSize: 15,
+    fontWeight: "700",
+    marginTop: 2,
+    fontVariant: ["tabular-nums"],
+  },
+  mobileInvestedLine: {
+    fontSize: 11,
+    marginTop: 2,
+    fontVariant: ["tabular-nums"],
+  },
+  mobileGainPct: {
+    fontSize: 11,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   colHolding: {
     flex: 1,

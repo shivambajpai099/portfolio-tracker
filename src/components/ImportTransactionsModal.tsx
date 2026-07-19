@@ -35,7 +35,8 @@ import {
   createTransactionsFromParseResult,
   getSymbolsFromTransactions,
 } from "../features/import";
-import { fetchLivePrices } from "../services/yahooFinanceService";
+import { fetchLivePrices, resolveSymbolByIsin } from "../services/yahooFinanceService";
+import { applyIndiaAlias, buildIndiaQuoteCandidates } from "../utils/indiaSymbols";
 import { fetchStockSplits } from "../services/corporateActionsService";
 import { DEFAULT_STOCK_SPLITS } from "../features/portfolio/corporateActionProcessor";
 import type { StockSplit } from "../features/portfolio/corporateActionProcessor";
@@ -63,6 +64,8 @@ interface ImportTransactionsModalProps {
   setAccountTransactions: (accountId: string, transactions: Transaction[]) => void;
   updateAccount?: (accountId: string, updates: Partial<Account>) => void;
   updateMarketPrices?: (prices: Record<string, number>) => void;
+  /** Persist confirmed stock splits so existing data is retroactively adjusted. */
+  addStockSplits?: (splits: StockSplit[]) => void;
   /** Pre-select an account when opening the modal */
   preSelectedAccountId?: string;
   /** Manual holdings, used to warn when an import will replace them. */
@@ -85,6 +88,7 @@ export function ImportTransactionsModal({
   setAccountTransactions,
   updateAccount,
   updateMarketPrices,
+  addStockSplits,
   preSelectedAccountId,
   manualHoldings = [],
 }: ImportTransactionsModalProps) {
@@ -353,8 +357,16 @@ export function ImportTransactionsModal({
     setStep("review");
 
     try {
-      // Fetch prices for all symbols
-      const symbols = getSymbolsFromTransactions(parseResult);
+      // Fetch prices for all symbols. Indian securities share their bare ticker
+      // with unrelated US listings, so for INR imports we request the
+      // exchange-suffixed variants (.NS/.BO) instead of the bare symbol —
+      // otherwise the quote resolves to the wrong US stock in USD.
+      const baseSymbols = getSymbolsFromTransactions(parseResult);
+      const isINR = parseResult.currency === "INR";
+      const symbols = isINR
+        ? [...new Set(baseSymbols.flatMap((s) => buildIndiaQuoteCandidates(s, "INR")))]
+        : baseSymbols;
+
       const newPriceMap = new Map<string, { price: number; companyName: string }>();
 
       const result = await fetchLivePrices(symbols);
@@ -362,9 +374,58 @@ export function ImportTransactionsModal({
         for (const quote of result.data) {
           newPriceMap.set(quote.symbol.toUpperCase(), {
             price: quote.price,
-            companyName: quote.symbol, // Name comes from parsed data, not quote
+            companyName: quote.companyName ?? quote.symbol,
           });
         }
+        // Mirror each exchange-suffixed quote under its bare ticker so bare
+        // transaction symbols (as stored) resolve. Prefer NSE (.NS) over BSE.
+        for (const quote of result.data) {
+          const sym = quote.symbol.toUpperCase();
+          const match = sym.match(/^(.*)\.(NS|BO)$/i);
+          if (!match) continue;
+          const bare = match[1];
+          const isNSE = /\.NS$/i.test(sym);
+          if (!newPriceMap.has(bare) || isNSE) {
+            newPriceMap.set(bare, { price: quote.price, companyName: quote.companyName ?? quote.symbol });
+          }
+        }
+      }
+
+      // ISIN fallback: for INR securities the ticker fetch couldn't price
+      // (e.g. an NSE symbol rename), resolve the current symbol from the
+      // permanent ISIN and fetch that. Requires the market-data proxy.
+      if (isINR) {
+        const seenIsins = new Set<string>();
+        const unresolved = parseResult.transactions.filter((tx) => {
+          if (!tx.isin) return false;
+          const bare = applyIndiaAlias(tx.symbol);
+          return (
+            newPriceMap.get(bare) === undefined &&
+            newPriceMap.get(`${bare}.NS`) === undefined &&
+            newPriceMap.get(`${bare}.BO`) === undefined
+          );
+        });
+
+        await Promise.all(
+          unresolved.map(async (tx) => {
+            const isin = (tx.isin as string).trim().toUpperCase();
+            if (seenIsins.has(isin)) return;
+            seenIsins.add(isin);
+            try {
+              const resolvedSymbol = await resolveSymbolByIsin(isin);
+              if (!resolvedSymbol) return;
+              const priceResult = await fetchLivePrices([resolvedSymbol]);
+              const quote = (priceResult.data ?? [])[0];
+              if (!quote) return;
+              const entry = { price: quote.price, companyName: quote.symbol };
+              const bare = applyIndiaAlias(tx.symbol);
+              newPriceMap.set(resolvedSymbol.toUpperCase(), entry);
+              if (!newPriceMap.has(bare)) newPriceMap.set(bare, entry);
+            } catch {
+              // Ignore — the holding imports at cost basis.
+            }
+          })
+        );
       }
 
       setPriceMap(newPriceMap);
@@ -410,6 +471,12 @@ export function ImportTransactionsModal({
 
       // Replace all transactions for this account
       setAccountTransactions(selectedAccountId, transactions);
+
+      // Persist the confirmed splits so they also retroactively adjust any
+      // other stored positions (and survive future launches).
+      if (addStockSplits && appliedSplits.length > 0) {
+        addStockSplits(appliedSplits);
+      }
 
       // Save fetched prices to store for transaction-derived holdings
       if (updateMarketPrices && priceMap.size > 0) {

@@ -26,6 +26,7 @@ import type { HoldingsSourceParser, ParseResult, SkippedRow, ImportReviewData, E
 import { getAllParsers, getDefaultParserId, getParser } from "../features/import/parserRegistry";
 import { buildImportReviewData, commitImport, getSymbolsForPriceFetch } from "../features/import/importLogic";
 import { fetchLivePrices } from "../services/yahooFinanceService";
+import { buildIndiaQuoteCandidates } from "../utils/indiaSymbols";
 
 type ImportStep = "upload" | "account" | "review" | "complete";
 
@@ -207,8 +208,16 @@ export function ImportHoldingsModal({
     setStep("review");
 
     try {
-      // Fetch prices for all symbols
-      const symbols = getSymbolsForPriceFetch(parseResult);
+      // Fetch prices for all symbols. Indian securities share their bare ticker
+      // with unrelated US listings, so for INR imports we request the
+      // exchange-suffixed variants (.NS/.BO) instead of the bare symbol —
+      // otherwise the quote resolves to the wrong US stock in USD.
+      const baseSymbols = getSymbolsForPriceFetch(parseResult);
+      const isINR = parseResult.currency === "INR";
+      const symbols = isINR
+        ? [...new Set(baseSymbols.flatMap((s) => buildIndiaQuoteCandidates(s, "INR")))]
+        : baseSymbols;
+
       const newPriceMap = new Map<string, { price: number; companyName: string }>();
 
       const result = await fetchLivePrices(symbols);
@@ -216,8 +225,20 @@ export function ImportHoldingsModal({
         for (const quote of result.data) {
           newPriceMap.set(quote.symbol.toUpperCase(), {
             price: quote.price,
-            companyName: quote.name || quote.symbol,
+            companyName: quote.symbol,
           });
+        }
+        // Mirror each exchange-suffixed quote under its bare ticker so bare
+        // holding symbols (as stored) resolve. Prefer NSE (.NS) over BSE.
+        for (const quote of result.data) {
+          const sym = quote.symbol.toUpperCase();
+          const match = sym.match(/^(.*)\.(NS|BO)$/i);
+          if (!match) continue;
+          const bare = match[1];
+          const isNSE = /\.NS$/i.test(sym);
+          if (!newPriceMap.has(bare) || isNSE) {
+            newPriceMap.set(bare, { price: quote.price, companyName: quote.symbol });
+          }
         }
       }
 

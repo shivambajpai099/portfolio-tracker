@@ -27,6 +27,7 @@
  */
 
 import type { Transaction } from "../../types/transaction";
+import type { Holding } from "../../types/portfolio";
 
 // ---------------------------------------------------------------------------
 // Event types
@@ -121,6 +122,129 @@ export const applyStockSplit = (transactions: Transaction[], split: StockSplit):
       quantity: tx.quantity * factor,
       pricePerShare: tx.pricePerShare / factor,
       appliedCorporateActions: [...(tx.appliedCorporateActions ?? []), id],
+    };
+  });
+};
+
+/**
+ * Reverse a previously-applied stock split on transactions (undo).
+ *
+ * Only rows carrying this split's idempotency marker are affected: quantity is
+ * divided and price multiplied back, and the marker is removed. Used when a
+ * user deletes a manually-added split so the position returns to its original,
+ * pre-adjustment values.
+ */
+export const reverseStockSplit = (transactions: Transaction[], split: StockSplit): Transaction[] => {
+  const factor = split.ratio.newShares / split.ratio.oldShares;
+  if (!Number.isFinite(factor) || factor <= 0) return transactions;
+
+  const id = corporateActionId(split);
+
+  return transactions.map((tx) => {
+    if (!tx.appliedCorporateActions?.includes(id)) return tx;
+    return {
+      ...tx,
+      quantity: tx.quantity / factor,
+      pricePerShare: tx.pricePerShare * factor,
+      appliedCorporateActions: tx.appliedCorporateActions.filter((x) => x !== id),
+    };
+  });
+};
+
+// ---------------------------------------------------------------------------
+// Holding-level split application (pure)
+// ---------------------------------------------------------------------------
+
+/**
+ * Does this holding belong to the security targeted by the event?
+ * Mirrors `securityMatches` for transactions: ISIN authoritative when present
+ * on both sides, otherwise a normalized symbol comparison.
+ */
+const holdingSecurityMatches = (holding: Holding, event: CorporateActionEvent): boolean => {
+  if (event.isin && holding.isin) return normalizeIsin(event.isin) === normalizeIsin(holding.isin);
+  if (event.symbol) return normalizeSymbol(event.symbol) === normalizeSymbol(holding.symbol);
+  return false;
+};
+
+/**
+ * A holding's `asOf` timestamp is the reference point for split eligibility.
+ * A holding whose snapshot pre-dates the split still carries pre-split
+ * quantity/averagePrice and must be adjusted; one dated on/after the ex-date
+ * already reflects the split and is left untouched.
+ *
+ * Holdings with no `asOf` are treated as pre-split (conservative), since older
+ * imports frequently omitted the field.
+ */
+const holdingIsBeforeEffective = (holding: Holding, effectiveDate: string): boolean => {
+  if (!holding.asOf) return true;
+  return new Date(holding.asOf).getTime() < new Date(effectiveDate).getTime();
+};
+
+/**
+ * Apply a single stock split to a list of holdings (snapshot / manual model).
+ *
+ * Pure and idempotent: matched holdings dated before the effective date have
+ * their quantity multiplied and averagePrice divided by the split factor (total
+ * cost basis preserved) and the split ID recorded; already-adjusted holdings
+ * and non-matching / post-split holdings are returned untouched.
+ */
+export const applyStockSplitToHolding = (holdings: Holding[], split: StockSplit): Holding[] => {
+  const factor = split.ratio.newShares / split.ratio.oldShares;
+  if (!Number.isFinite(factor) || factor <= 0) return holdings;
+
+  const id = corporateActionId(split);
+
+  return holdings.map((holding) => {
+    // Idempotency: never apply the same split to the same holding twice.
+    if (holding.appliedCorporateActions?.includes(id)) return holding;
+    if (!holdingSecurityMatches(holding, split)) return holding;
+    if (!holdingIsBeforeEffective(holding, split.effectiveDate)) return holding;
+
+    return {
+      ...holding,
+      quantity: holding.quantity * factor,
+      averagePrice: holding.averagePrice / factor,
+      appliedCorporateActions: [...(holding.appliedCorporateActions ?? []), id],
+    };
+  });
+};
+
+/**
+ * Normalize a list of holdings for all configured stock splits, applied in
+ * chronological order. Idempotent — safe to re-run on every app launch.
+ */
+export const normalizeHoldingsForSplits = (
+  holdings: Holding[],
+  events: CorporateActionEvent[] = DEFAULT_STOCK_SPLITS
+): Holding[] => {
+  const ordered = [...events]
+    .filter((event): event is StockSplit => event.type === "split")
+    .sort((a, b) => new Date(a.effectiveDate).getTime() - new Date(b.effectiveDate).getTime());
+
+  let working = holdings;
+  for (const split of ordered) {
+    working = applyStockSplitToHolding(working, split);
+  }
+  return working;
+};
+
+/**
+ * Reverse a previously-applied stock split on manual/snapshot holdings (undo).
+ * Mirrors `reverseStockSplit` for transactions.
+ */
+export const reverseStockSplitFromHolding = (holdings: Holding[], split: StockSplit): Holding[] => {
+  const factor = split.ratio.newShares / split.ratio.oldShares;
+  if (!Number.isFinite(factor) || factor <= 0) return holdings;
+
+  const id = corporateActionId(split);
+
+  return holdings.map((holding) => {
+    if (!holding.appliedCorporateActions?.includes(id)) return holding;
+    return {
+      ...holding,
+      quantity: holding.quantity / factor,
+      averagePrice: holding.averagePrice * factor,
+      appliedCorporateActions: holding.appliedCorporateActions.filter((x) => x !== id),
     };
   });
 };

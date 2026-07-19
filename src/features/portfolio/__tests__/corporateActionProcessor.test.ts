@@ -10,12 +10,15 @@ import {
   CorporateActionProcessor,
   processCorporateActions,
   applyStockSplit,
+  applyStockSplitToHolding,
+  normalizeHoldingsForSplits,
   corporateActionId,
   type StockSplit,
 } from "../corporateActionProcessor";
 import { deriveHoldingsFromTransactions, getAllRealizations } from "../fifoCalculator";
 import { excludeIntradayRoundTrips } from "../intraday";
 import type { Transaction } from "../../../types/transaction";
+import type { Holding } from "../../../types/portfolio";
 
 const makeTx = (
   overrides: Partial<Transaction> & {
@@ -250,6 +253,104 @@ describe("regression — existing calculations unaffected without splits", () =>
 
     expect(procResult.holdings).toEqual(rawResult.holdings);
     expect(getAllRealizations(processed)).toEqual(getAllRealizations(raw));
+  });
+});
+
+describe("splits occurring after the last transaction date", () => {
+  it("adjusts the whole position when the split ex-date is after every transaction", () => {
+    // Single buy, then the stock splits months later and is never traded again.
+    const raw = [makeTx({ type: "BUY", quantity: 10, pricePerShare: 100, transactionDate: "2020-06-01" })];
+    const laterSplit = split({ effectiveDate: "2021-08-31", ratio: { newShares: 4, oldShares: 1 } });
+
+    const processed = processCorporateActions(raw, [laterSplit]);
+    const { holdings } = deriveHoldingsFromTransactions(processed, "acc-1");
+
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0].quantity).toBe(40); // 10 × 4
+    expect(holdings[0].averagePrice).toBe(25); // 100 ÷ 4
+    // Cost basis is unchanged — only the split-adjusted share count/price shift.
+    expect(holdings[0].quantity * holdings[0].averagePrice).toBeCloseTo(1000, 6);
+  });
+
+  it("keeps realized P&L consistent when the last transaction is a partial SELL before the split", () => {
+    const raw = [
+      makeTx({ id: "b1", type: "BUY", quantity: 100, pricePerShare: 10, transactionDate: "2020-01-01" }),
+      makeTx({ id: "s1", type: "SELL", quantity: 50, pricePerShare: 20, transactionDate: "2021-01-01" }),
+    ];
+    const laterSplit = split({ effectiveDate: "2022-01-01", ratio: { newShares: 2, oldShares: 1 } });
+
+    const processed = processCorporateActions(raw, [laterSplit]);
+    const { holdings } = deriveHoldingsFromTransactions(processed, "acc-1");
+
+    // 50 remaining pre-split shares → 100 post-split @ ₹5 avg (cost basis ₹500).
+    expect(holdings[0].quantity).toBe(100);
+    expect(holdings[0].averagePrice).toBe(5);
+
+    // Realized gain is unchanged by the split: proceeds ₹1000 − cost ₹500 = ₹500.
+    const [realization] = getAllRealizations(processed);
+    expect(realization.totalRealizedGainLoss).toBeCloseTo(500, 6);
+  });
+});
+
+describe("applyStockSplitToHolding (manual / snapshot holdings)", () => {
+  const makeHolding = (overrides: Partial<Holding> = {}): Holding => ({
+    id: "h-1",
+    accountId: "acc-1",
+    symbol: "AAPL",
+    companyName: "Apple Inc",
+    quantity: 10,
+    averagePrice: 100,
+    marketPrice: 25,
+    currency: "USD",
+    asOf: "2020-06-01T00:00:00.000Z",
+    ...overrides,
+  });
+
+  it("multiplies quantity and divides averagePrice (cost basis preserved)", () => {
+    const [result] = applyStockSplitToHolding([makeHolding()], split()); // 5-for-1
+    expect(result.quantity).toBe(50);
+    expect(result.averagePrice).toBe(20);
+    expect(result.quantity * result.averagePrice).toBeCloseTo(1000, 6);
+  });
+
+  it("supports reverse splits (1-for-2)", () => {
+    const [result] = applyStockSplitToHolding([makeHolding()], split({ ratio: { newShares: 1, oldShares: 2 } }));
+    expect(result.quantity).toBe(5);
+    expect(result.averagePrice).toBe(200);
+  });
+
+  it("skips holdings whose snapshot is on/after the effective date", () => {
+    const onDate = makeHolding({ id: "h-on", asOf: "2021-01-01T00:00:00.000Z" });
+    const after = makeHolding({ id: "h-after", asOf: "2021-03-01T00:00:00.000Z" });
+    const [r1] = applyStockSplitToHolding([onDate], split());
+    const [r2] = applyStockSplitToHolding([after], split());
+    expect(r1.quantity).toBe(10);
+    expect(r2.quantity).toBe(10);
+  });
+
+  it("treats holdings without asOf as pre-split (adjusts them)", () => {
+    const [result] = applyStockSplitToHolding([makeHolding({ asOf: undefined })], split());
+    expect(result.quantity).toBe(50);
+  });
+
+  it("is idempotent — never double-adjusts on re-run", () => {
+    const s = split();
+    const once = applyStockSplitToHolding([makeHolding()], s);
+    const twice = applyStockSplitToHolding(once, s);
+    expect(twice[0].quantity).toBe(50);
+    expect(twice[0].averagePrice).toBe(20);
+    expect(twice[0].appliedCorporateActions).toEqual([corporateActionId(s)]);
+  });
+
+  it("normalizeHoldingsForSplits applies multiple splits chronologically", () => {
+    const holding = makeHolding({ asOf: "2019-01-01T00:00:00.000Z" });
+    const splits: StockSplit[] = [
+      split({ effectiveDate: "2021-01-01", ratio: { newShares: 5, oldShares: 1 } }),
+      split({ effectiveDate: "2020-06-01", ratio: { newShares: 2, oldShares: 1 } }),
+    ];
+    const [result] = normalizeHoldingsForSplits([holding], splits);
+    expect(result.quantity).toBe(100); // 10 * 2 * 5
+    expect(result.averagePrice).toBe(10); // 100 / 2 / 5
   });
 });
 

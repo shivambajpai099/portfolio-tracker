@@ -3,6 +3,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Platform, View } from "react-native";
 import { PortfolioCloudSyncBootstrap } from "../src/features/portfolio/PortfolioCloudSyncBootstrap";
+import { CorporateActionsBootstrap } from "../src/features/portfolio/CorporateActionsBootstrap";
 import { cleanupAuthStore, useAuthStore } from "../src/store/authStore";
 import { ThemeProvider, useTheme } from "../src/theme";
 
@@ -13,6 +14,7 @@ function RootLayoutContent() {
     <>
       <StatusBar style={isDark ? "light" : "dark"} backgroundColor={colors.bg} />
       <PortfolioCloudSyncBootstrap />
+      <CorporateActionsBootstrap />
       {Platform.OS === "web" ? (
         <View style={{ flex: 1, backgroundColor: colors.bg }}>
           <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>

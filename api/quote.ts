@@ -17,6 +17,9 @@ const EDGE_CACHE_MISS = "public, s-maxage=60, stale-while-revalidate=300";
 const FINNHUB_API_KEY = String(process.env.FINNHUB_API_KEY ?? "").trim();
 const FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote";
 const INDIA_SUFFIX_PATTERN = /\.(NS|BO)$/i;
+// Yahoo FX pairs (e.g. USDINR=X) are unreliable on the v7 quote endpoint but
+// resolve reliably via the chart API — route them through the chart path.
+const FX_SUFFIX_PATTERN = /=X$/i;
 
 const YAHOO_QUOTE_BASE_URLS = [
   "https://query2.finance.yahoo.com",
@@ -32,6 +35,8 @@ type YahooQuoteItem = {
   currency: string;
   exchange: string;
   fullExchangeName: string;
+  longName?: string;
+  shortName?: string;
 };
 
 type YahooCompatiblePayload = {
@@ -219,6 +224,8 @@ const fetchYahooChartQuote = async (symbol: string): Promise<YahooQuoteItem | nu
             exchangeName?: string;
             fullExchangeName?: string;
             regularMarketTime?: number;
+            longName?: string;
+            shortName?: string;
           };
         }>;
         error?: { description?: string };
@@ -239,6 +246,8 @@ const fetchYahooChartQuote = async (symbol: string): Promise<YahooQuoteItem | nu
         currency: meta.currency ?? inferCurrency(symbol),
         exchange: meta.exchangeName ?? (isIndiaSymbol(symbol) ? "NSE" : "NASDAQ"),
         fullExchangeName: meta.fullExchangeName ?? meta.exchangeName ?? "Yahoo",
+        longName: meta.longName,
+        shortName: meta.shortName,
       };
     }
 
@@ -333,34 +342,37 @@ export default async function handler(
   try {
     const allItems: YahooQuoteItem[] = [];
     const symbolList = normalized.split(",");
-    const indiaSymbols = symbolList.filter(isIndiaSymbol);
-    const nonIndiaSymbols = symbolList.filter((s) => !isIndiaSymbol(s));
+    // The chart endpoint is far more reliable than the auth-gated v7 quote
+    // endpoint for Indian tickers AND Yahoo FX pairs (e.g. USDINR=X).
+    const isChartSymbol = (s: string): boolean => isIndiaSymbol(s) || FX_SUFFIX_PATTERN.test(s);
+    const chartSymbols = symbolList.filter(isChartSymbol);
+    const v7Symbols = symbolList.filter((s) => !isChartSymbol(s));
 
-    // Fetch non-India symbols from Yahoo v7 (batch)
-    if (nonIndiaSymbols.length > 0) {
-      const yahooResults = await fetchYahooQuotes(nonIndiaSymbols.join(","));
+    // Fetch plain (US) symbols from Yahoo v7 (batch)
+    if (v7Symbols.length > 0) {
+      const yahooResults = await fetchYahooQuotes(v7Symbols.join(","));
       allItems.push(...yahooResults);
     }
 
-    // For India symbols, use Chart API (more reliable)
-    if (indiaSymbols.length > 0) {
-      const chartResults = await fetchYahooChartQuotes(indiaSymbols);
+    // India + FX symbols: use the Chart API (more reliable)
+    if (chartSymbols.length > 0) {
+      const chartResults = await fetchYahooChartQuotes(chartSymbols);
       allItems.push(...chartResults);
 
       // If Chart API missed some, try v7 API as fallback
-      const foundIndiaSymbols = new Set(chartResults.map((r) => r.symbol));
-      const missingIndiaSymbols = indiaSymbols.filter((s) => !foundIndiaSymbols.has(s));
+      const foundChartSymbols = new Set(chartResults.map((r) => r.symbol));
+      const missingChartSymbols = chartSymbols.filter((s) => !foundChartSymbols.has(s));
 
-      if (missingIndiaSymbols.length > 0) {
-        const yahooV7Results = await fetchYahooQuotes(missingIndiaSymbols.join(","));
+      if (missingChartSymbols.length > 0) {
+        const yahooV7Results = await fetchYahooQuotes(missingChartSymbols.join(","));
         allItems.push(...yahooV7Results);
       }
     }
 
     // Fallback to Finnhub for missing US symbols
-    if (nonIndiaSymbols.length > 0 && FINNHUB_API_KEY) {
+    if (v7Symbols.length > 0 && FINNHUB_API_KEY) {
       const foundSymbols = new Set(allItems.map((r) => r.symbol));
-      const missingNonIndia = nonIndiaSymbols.filter((s) => !foundSymbols.has(s));
+      const missingNonIndia = v7Symbols.filter((s) => !foundSymbols.has(s));
 
       if (missingNonIndia.length > 0) {
         const finnhubResults = await fetchFinnhubQuotes(missingNonIndia);

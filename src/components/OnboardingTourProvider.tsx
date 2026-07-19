@@ -20,7 +20,7 @@ const ONBOARDING_TOUR_STEPS: TourStep[] = [
     key: "holdings-add",
     title: "Import your transactions",
     description:
-      "Once an account is added, import your transaction history from your broker for the complete picture — cost basis, realized gains, and holding periods are calculated automatically. You can also add holdings manually if you prefer.",
+      "Once an account is added, tap Import to bring in your transactions. For the most accurate overview of your equity investments, import your entire transaction statement — cost basis, realized gains, and holding periods are then calculated automatically. Heads up: corporate actions like stock splits and bonus issues may not appear in every statement, which can throw off quantities. You can review and fix these anytime under Settings → Stock Splits. Prefer to enter things yourself? Use Add to record holdings manually.",
     targetTab: "index",
     tooltipPosition: "bottom",
   },
@@ -37,7 +37,7 @@ const ONBOARDING_TOUR_STEPS: TourStep[] = [
     key: "insights",
     title: "Discover portfolio insights",
     description:
-      "Get concentration risk alerts, geographic allocation analysis, and month-over-month drift tracking. Spot imbalances before they become problems.",
+      "See concentration risk, geographic allocation, and performance & behavior analytics — win rate, best and worst performers, and more. Spot imbalances before they become problems.",
     targetTab: "insights",
     tooltipPosition: "bottom",
   },
@@ -128,10 +128,11 @@ export function OnboardingTourProvider({
   // Navigate to the target tab for the given step
   const navigateToStepTab = useCallback((step: TourStep) => {
     if (step.targetTab) {
-      const route = step.targetTab === "index" 
-        ? "/(tabs)/" 
-        : `/(tabs)/${step.targetTab}`;
-      router.push(route as never);
+      // Use `navigate` (not `push`) so we switch tabs in place instead of
+      // stacking screens — otherwise Skip/Done leaves the user deep in a
+      // navigation stack on the last visited tab.
+      const route = step.targetTab === "index" ? "/(tabs)" : `/(tabs)/${step.targetTab}`;
+      router.navigate(route as never);
     }
   }, [router]);
 

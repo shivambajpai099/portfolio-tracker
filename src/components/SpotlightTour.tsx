@@ -69,6 +69,21 @@ const TOOLTIP_MAX_WIDTH = 320;
 const TOOLTIP_PREVIEW_MAX_WIDTH = 460;
 const SPOTLIGHT_PADDING = 8;
 
+/**
+ * Whether a measured target rect is (fully) inside the visible viewport.
+ * Targets that live below the fold measure to coordinates outside the screen,
+ * which would otherwise draw the spotlight cutout in empty space. When a target
+ * isn't usably on-screen we fall back to a centered, anchorless tooltip.
+ */
+const isRectOnScreen = (r: LayoutRectangle | null): boolean =>
+  !!r &&
+  r.width > 0 &&
+  r.height > 0 &&
+  r.y >= 0 &&
+  r.x >= 0 &&
+  r.y + r.height <= SCREEN_HEIGHT &&
+  r.x + r.width <= SCREEN_WIDTH;
+
 export function SpotlightTour({
   visible,
   steps,
@@ -87,6 +102,10 @@ export function SpotlightTour({
   const step = steps[currentStep];
   const isLastStep = currentStep === steps.length - 1;
   const progress = `${currentStep + 1}/${steps.length}`;
+
+  // Only anchor to the target when it's actually visible on screen; otherwise
+  // render a centered, anchorless tooltip so we never spotlight empty space.
+  const effectiveRect = isRectOnScreen(targetRect) ? targetRect : null;
 
   // Steps with a preview carousel use a larger card so the images render big.
   const hasPreview = Boolean(step?.previewImages?.length || step?.previewImage);
@@ -115,7 +134,7 @@ export function SpotlightTour({
   // Calculate tooltip position based on target rect and preferred position
   useEffect(() => {
 
-    if (!targetRect) {
+    if (!effectiveRect) {
       // No anchor for this step: center the card so it still explains clearly.
       setTooltipLayout({
         x: (SCREEN_WIDTH - tooltipWidth) / 2,
@@ -129,26 +148,26 @@ export function SpotlightTour({
 
     // Flip vertically if the preferred side lacks room, so the card stays on
     // screen and next to the highlighted element instead of overlapping it.
-    const spaceBelow = SCREEN_HEIGHT - (targetRect.y + targetRect.height);
-    const spaceAbove = targetRect.y;
+    const spaceBelow = SCREEN_HEIGHT - (effectiveRect.y + effectiveRect.height);
+    const spaceAbove = effectiveRect.y;
     if (position === "bottom" && spaceBelow < tooltipHeight + gap && spaceAbove > spaceBelow) {
       position = "top";
     } else if (position === "top" && spaceAbove < tooltipHeight + gap && spaceBelow > spaceAbove) {
       position = "bottom";
     }
 
-    let x = targetRect.x + targetRect.width / 2 - tooltipWidth / 2;
-    let y = targetRect.y + targetRect.height + gap;
+    let x = effectiveRect.x + effectiveRect.width / 2 - tooltipWidth / 2;
+    let y = effectiveRect.y + effectiveRect.height + gap;
 
     // Adjust based on position preference
     if (position === "top") {
-      y = targetRect.y - tooltipHeight - gap;
+      y = effectiveRect.y - tooltipHeight - gap;
     } else if (position === "left") {
-      x = targetRect.x - tooltipWidth - gap;
-      y = targetRect.y + targetRect.height / 2 - tooltipHeight / 2;
+      x = effectiveRect.x - tooltipWidth - gap;
+      y = effectiveRect.y + effectiveRect.height / 2 - tooltipHeight / 2;
     } else if (position === "right") {
-      x = targetRect.x + targetRect.width + gap;
-      y = targetRect.y + targetRect.height / 2 - tooltipHeight / 2;
+      x = effectiveRect.x + effectiveRect.width + gap;
+      y = effectiveRect.y + effectiveRect.height / 2 - tooltipHeight / 2;
     }
 
     // Clamp to screen bounds
@@ -156,7 +175,7 @@ export function SpotlightTour({
     y = Math.max(spacing.xxl, Math.min(y, SCREEN_HEIGHT - tooltipHeight - spacing.xxl));
 
     setTooltipLayout({ x, y });
-  }, [targetRect, step?.tooltipPosition, tooltipHeight, tooltipWidth]);
+  }, [effectiveRect, step?.tooltipPosition, tooltipHeight, tooltipWidth]);
 
   if (!visible || !step) {
     return null;
@@ -180,7 +199,7 @@ export function SpotlightTour({
             style={[
               styles.overlaySection,
               {
-                height: targetRect ? targetRect.y - SPOTLIGHT_PADDING : SCREEN_HEIGHT / 2,
+                height: effectiveRect ? effectiveRect.y - SPOTLIGHT_PADDING : SCREEN_HEIGHT / 2,
               },
             ]}
           />
@@ -192,20 +211,20 @@ export function SpotlightTour({
               style={[
                 styles.overlaySection,
                 {
-                  width: targetRect ? targetRect.x - SPOTLIGHT_PADDING : 0,
-                  height: targetRect ? targetRect.height + SPOTLIGHT_PADDING * 2 : 0,
+                  width: effectiveRect ? effectiveRect.x - SPOTLIGHT_PADDING : 0,
+                  height: effectiveRect ? effectiveRect.height + SPOTLIGHT_PADDING * 2 : 0,
                 },
               ]}
             />
 
             {/* Spotlight cutout (transparent) */}
-            {targetRect ? (
+            {effectiveRect ? (
               <View
                 style={[
                   styles.spotlight,
                   {
-                    width: targetRect.width + SPOTLIGHT_PADDING * 2,
-                    height: targetRect.height + SPOTLIGHT_PADDING * 2,
+                    width: effectiveRect.width + SPOTLIGHT_PADDING * 2,
+                    height: effectiveRect.height + SPOTLIGHT_PADDING * 2,
                   },
                 ]}
               />
@@ -217,7 +236,7 @@ export function SpotlightTour({
                 styles.overlaySection,
                 {
                   flex: 1,
-                  height: targetRect ? targetRect.height + SPOTLIGHT_PADDING * 2 : 0,
+                  height: effectiveRect ? effectiveRect.height + SPOTLIGHT_PADDING * 2 : 0,
                 },
               ]}
             />

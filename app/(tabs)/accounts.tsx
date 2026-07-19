@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
 import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
 import { AddAccountModal, type AddAccountInput } from "../../src/components/AddAccountModal";
 import { TourTarget } from "../../src/components/OnboardingTourProvider";
@@ -55,11 +54,10 @@ export function AccountsSection() {
   const addCashHolding = usePortfolioStore((state) => state.addCashHolding);
   const updateCashHolding = usePortfolioStore((state) => state.updateCashHolding);
   const removeCashHolding = usePortfolioStore((state) => state.removeCashHolding);
-  const addHolding = usePortfolioStore((state) => state.addHolding);
-  const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const marketPrices = usePortfolioStore((state) => state.marketPrices);
   const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
   const updateMarketPrices = usePortfolioStore((state) => state.updateMarketPrices);
+  const addStockSplits = usePortfolioStore((state) => state.addStockSplits);
 
   // Convert marketPrices record to Map for selectAllHoldings
   const priceMap = useMemo(() => new Map(Object.entries(marketPrices)), [marketPrices]);
@@ -76,8 +74,6 @@ export function AccountsSection() {
   const [deleteCashTarget, setDeleteCashTarget] = useState<CashHolding | null>(null);
   const [menuOpenForAccount, setMenuOpenForAccount] = useState<string | null>(null);
   const [menuOpenForCash, setMenuOpenForCash] = useState<string | null>(null);
-  const [importForAccountId, setImportForAccountId] = useState<string | null>(null);
-  const [importMenuForAccountId, setImportMenuForAccountId] = useState<string | null>(null);
   const [isImportTransactionsVisible, setIsImportTransactionsVisible] = useState(false);
   const [importTransactionsAccountId, setImportTransactionsAccountId] = useState<string | null>(null);
 
@@ -287,7 +283,11 @@ export function AccountsSection() {
         </TourTarget>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} scrollEnabled={false}>
+      {/* Plain View (not a nested ScrollView): the parent screen owns scrolling.
+          A nested ScrollView — even scrollEnabled={false} — sits in the touch
+          responder chain and intermittently swallows taps / blocks scrolling
+          over the account cards. */}
+      <View>
         <View style={styles.listWrap}>
           {/* Summary Total Block */}
           {accounts.length > 0 && (
@@ -473,13 +473,16 @@ export function AccountsSection() {
                       );
                     })}
                     
-                    {/* Import button for broker accounts - opens menu */}
+                    {/* Import button for broker accounts - opens transactions import */}
                     {isBroker && (
                       <Pressable 
                         style={[styles.importBtn, { backgroundColor: colors.accent }]}
-                        onPress={() => setImportMenuForAccountId(account.id)}
+                        onPress={() => {
+                          setImportTransactionsAccountId(account.id);
+                          setIsImportTransactionsVisible(true);
+                        }}
                       >
-                        <Text style={[styles.importBtnText, { color: colors.bg }]}>Import ▾</Text>
+                        <Text style={[styles.importBtnText, { color: colors.bg }]}>Import</Text>
                       </Pressable>
                     )}
                   </View>
@@ -515,7 +518,7 @@ export function AccountsSection() {
             );
           })}
         </View>
-      </ScrollView>
+      </View>
 
       {/* Add/Edit Account Modal — shared component with broker logo support */}
       <AddAccountModal
@@ -576,21 +579,6 @@ export function AccountsSection() {
         </View>
       </Modal>
 
-      {/* Import Holdings Modal */}
-      <ImportHoldingsModal
-        visible={Boolean(importForAccountId)}
-        accounts={brokerAccounts}
-        existingHoldings={holdings}
-        onClose={() => setImportForAccountId(null)}
-        onComplete={(result) => {
-          console.log(`Imported ${result.addedCount} new, ${result.updatedCount} updated to ${result.accountName}`);
-          setImportForAccountId(null);
-        }}
-        addHolding={addHolding}
-        updateHolding={updateHolding}
-        updateAccount={updateAccount}
-        preSelectedAccountId={importForAccountId ?? undefined}
-      />
 
       {/* Import Transactions Modal */}
       <ImportTransactionsModal
@@ -606,44 +594,10 @@ export function AccountsSection() {
         setAccountTransactions={setAccountTransactions}
         updateAccount={updateAccount}
         updateMarketPrices={updateMarketPrices}
+        addStockSplits={addStockSplits}
         preSelectedAccountId={importTransactionsAccountId ?? undefined}
         manualHoldings={manualHoldings}
       />
-
-      {/* Import Menu Modal */}
-      <Modal visible={Boolean(importMenuForAccountId)} transparent animationType="fade" onRequestClose={() => setImportMenuForAccountId(null)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setImportMenuForAccountId(null)}>
-          <View style={styles.importMenuCard}>
-            <Text style={styles.importMenuTitle}>Import Data</Text>
-            <Pressable
-              style={styles.importMenuItem}
-              onPress={() => {
-                const accountId = importMenuForAccountId;
-                setImportMenuForAccountId(null);
-                setImportForAccountId(accountId);
-              }}
-            >
-              <Text style={styles.importMenuItemTitle}>Import Holdings</Text>
-              <Text style={styles.importMenuItemDesc}>Import current holdings snapshot from your broker</Text>
-            </Pressable>
-            <Pressable
-              style={styles.importMenuItem}
-              onPress={() => {
-                const accountId = importMenuForAccountId;
-                setImportMenuForAccountId(null);
-                setImportTransactionsAccountId(accountId);
-                setIsImportTransactionsVisible(true);
-              }}
-            >
-              <Text style={styles.importMenuItemTitle}>Import Transactions</Text>
-              <Text style={styles.importMenuItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
-            </Pressable>
-            <Pressable style={styles.importMenuCancel} onPress={() => setImportMenuForAccountId(null)}>
-              <Text style={styles.importMenuCancelText}>Cancel</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Modal>
     </>
   );
 }
@@ -1013,45 +967,5 @@ const styles = StyleSheet.create({
   modalDangerText: {
     marginTop: spacing.sm,
     fontSize: typography.body,
-  },
-  // Import menu styles
-  importMenuCard: {
-    width: "100%",
-    maxWidth: 400,
-    borderRadius: radii.xl,
-    backgroundColor: defaultColors.surface,
-    padding: spacing.lg,
-  },
-  importMenuTitle: {
-    color: defaultColors.text,
-    fontSize: typography.subheading,
-    fontWeight: typography.weightSemibold,
-    marginBottom: spacing.md,
-  },
-  importMenuItem: {
-    backgroundColor: defaultColors.bg,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    marginBottom: spacing.sm,
-  },
-  importMenuItemTitle: {
-    color: defaultColors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightSemibold,
-    marginBottom: spacing.xs,
-  },
-  importMenuItemDesc: {
-    color: defaultColors.muted,
-    fontSize: typography.caption,
-  },
-  importMenuCancel: {
-    marginTop: spacing.sm,
-    alignItems: "center",
-    paddingVertical: spacing.md,
-  },
-  importMenuCancelText: {
-    color: defaultColors.muted,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
   },
 });

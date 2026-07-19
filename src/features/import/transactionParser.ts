@@ -11,6 +11,7 @@ import { deriveHoldingsFromTransactions } from "../portfolio/fifoCalculator";
 import { applyCorporateActions } from "../portfolio/corporateActions";
 import { processCorporateActions } from "../portfolio/corporateActionProcessor";
 import type { CorporateActionEvent } from "../portfolio/corporateActionProcessor";
+import { applyIndiaAlias } from "../../utils/indiaSymbols";
 import type { EnrichedHolding, TransactionImportReviewData, SkippedRow } from "./types";
 
 /**
@@ -30,12 +31,17 @@ export const createTransactionFromParsed = (
   companyName?: string
 ): Transaction => {
   const now = new Date().toISOString();
+  // Indian tickers are matched by their exact NSE symbol. Correct known
+  // name/abbreviation/rename mismatches (e.g. SONATA -> SONATSOFTW) so price
+  // lookups resolve. Non-INR symbols are left untouched.
+  const rawSymbol = parsed.symbol.toUpperCase();
+  const symbol = currency === "INR" ? applyIndiaAlias(rawSymbol) : rawSymbol;
   return {
     id: generateTransactionId(),
     accountId,
-    symbol: parsed.symbol.toUpperCase(),
+    symbol,
     isin: parsed.isin?.trim().toUpperCase() || undefined,
-    companyName: companyName || parsed.companyName || parsed.symbol.toUpperCase(),
+    companyName: companyName || parsed.companyName || symbol,
     transactionDate: parsed.transactionDate,
     type: parsed.type,
     quantity: parsed.quantity,
@@ -60,12 +66,19 @@ export const createTransactionsFromParseResult = (
 
   const transactions = parseResult.transactions.map((parsed) => {
     const priceData = priceMap?.get(parsed.symbol.toUpperCase());
-    return createTransactionFromParsed(
-      parsed,
-      accountId,
-      currency,
-      priceData?.companyName || parsed.companyName
-    );
+    const symbolUpper = parsed.symbol.trim().toUpperCase();
+    // Prefer a real, human-readable name over a ticker. The quote provider's
+    // name (priceData.companyName) may be a real name or just the ticker when
+    // unavailable; the broker file's parsed.companyName may also be the ticker.
+    // Pick the first candidate that isn't merely the ticker, else fall back.
+    const isRealName = (name?: string): boolean =>
+      Boolean(name) && name!.trim().toUpperCase().replace(/\.(NS|BO)$/i, "") !== symbolUpper;
+    const companyName =
+      (isRealName(priceData?.companyName) && priceData?.companyName) ||
+      (isRealName(parsed.companyName) && parsed.companyName) ||
+      priceData?.companyName ||
+      parsed.companyName;
+    return createTransactionFromParsed(parsed, accountId, currency, companyName);
   });
 
   // Normalization stage. Order matters:

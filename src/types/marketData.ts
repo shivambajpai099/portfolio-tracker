@@ -13,6 +13,8 @@ export interface LivePriceQuote {
   currency: Currency;
   exchange: string;
   asOf: TimestampISO;
+  /** Human-readable company name from the quote provider, when available. */
+  companyName?: string;
 }
 
 export interface ServiceError {

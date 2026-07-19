@@ -41,7 +41,6 @@ import type { AllocationSnapshot, Currency, Holding } from "../../src/types/port
 
 type TopLevelSection = "performance" | "evolution" | "behavior" | null;
 type SubSection =
-  | "performance_breakdown"
   | "winrate"
   | "bestworst"
   | "risk"
@@ -297,7 +296,7 @@ export default function PortfolioInsightsScreen() {
           rc={rc}
         />
 
-        {/* 1. PERFORMANCE — Breakdown, Win Rate, Best & Worst, Monthly Review */}
+        {/* 1. PERFORMANCE — Best & Worst, Win Rate */}
         <View style={styles.groupCard}>
           <Pressable onPress={() => toggleSection("performance")} style={styles.groupHeader}>
             <View style={styles.groupHeaderContent}>
@@ -316,131 +315,6 @@ export default function PortfolioInsightsScreen() {
 
           {expandedSection === "performance" && (
             <View style={styles.groupContent}>
-              <SubSectionHeader
-                title="Performance Breakdown"
-                isExpanded={expandedSubSection === "performance_breakdown"}
-                onPress={() => toggleSubSection("performance_breakdown")}
-              />
-              {expandedSubSection === "performance_breakdown" && (
-                <View style={styles.subSectionContent}>
-                  <View style={styles.performanceChartWrap}>
-                    <DonutChart
-                      size={140}
-                      strokeWidth={20}
-                      slices={[
-                        { value: Math.max(analytics.performance.realizedGains, 0), color: defaultColors.positive },
-                        { value: Math.max(analytics.performance.unrealizedGains, 0), color: defaultColors.accent },
-                        { value: analytics.performance.realizedLosses, color: defaultColors.negative },
-                        { value: analytics.performance.unrealizedLosses, color: "#EF444480" },
-                      ]}
-                    />
-                    <View style={styles.performanceLegend}>
-                      <LegendItem label="Realized Gains" value={formatMoney(analytics.performance.realizedGains, rc)} color={defaultColors.positive} />
-                      <LegendItem label="Unrealized Gains" value={formatMoney(analytics.performance.unrealizedGains, rc)} color={defaultColors.accent} />
-                      <LegendItem label="Realized Losses" value={`-${formatMoney(analytics.performance.realizedLosses, rc)}`} color={defaultColors.negative} />
-                      <LegendItem label="Unrealized Losses" value={`-${formatMoney(analytics.performance.unrealizedLosses, rc)}`} color="#EF444480" />
-                    </View>
-                  </View>
-
-                  <View style={styles.performanceSummary}>
-                    <View style={styles.performanceRow}>
-                      <Text style={styles.performanceLabel}>Total Return</Text>
-                      <Text
-                        style={[
-                          styles.performanceTotal,
-                          { color: analytics.performance.totalReturn >= 0 ? defaultColors.positive : defaultColors.negative },
-                        ]}
-                      >
-                        {signedMoney(analytics.performance.totalReturn, rc)}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {analytics.performance.byAsset.length > 0 && (
-                    <View style={styles.subsection}>
-                      <Text style={styles.subsectionTitle}>Return by Asset</Text>
-                      <Leaderboard
-                        items={analytics.performance.byAsset.slice(0, 5).map((a, i) => ({
-                          rank: i + 1,
-                          label: a.symbol,
-                          value: signedMoney(a.totalReturn, rc),
-                          positive: a.totalReturn >= 0,
-                        }))}
-                      />
-                    </View>
-                  )}
-                </View>
-              )}
-
-              <SubSectionHeader
-                title="Win Rate Analysis"
-                isExpanded={expandedSubSection === "winrate"}
-                onPress={() => toggleSubSection("winrate")}
-              />
-              {expandedSubSection === "winrate" && (
-                <View style={styles.subSectionContent}>
-                  {analytics.winRate.totalClosedTrades === 0 ? (
-                    <Text style={styles.noDataText}>No closed trades yet. Win rate is calculated from completed (sold) positions.</Text>
-                  ) : (
-                    <>
-                      <View style={styles.winRateChartWrap}>
-                        <DonutChart
-                          size={120}
-                          strokeWidth={18}
-                          slices={[
-                            { value: analytics.winRate.winningTrades, color: defaultColors.positive },
-                            { value: analytics.winRate.losingTrades, color: defaultColors.negative },
-                          ]}
-                        />
-                        <View style={styles.winRateCenter}>
-                          <Text style={styles.winRatePct}>{analytics.winRate.winRate.toFixed(0)}%</Text>
-                          <Text style={styles.winRateLabel}>Win Rate</Text>
-                        </View>
-                      </View>
-
-                      <MetricGrid>
-                        <MetricCard label="Closed Trades" value={String(analytics.winRate.totalClosedTrades)} compact />
-                        <MetricCard label="Winning / Losing" value={`${analytics.winRate.winningTrades} / ${analytics.winRate.losingTrades}`} compact />
-                        <MetricCard label="Avg Win" value={formatMoney(analytics.winRate.averageWin, rc)} compact />
-                        <MetricCard label="Avg Loss" value={formatMoney(analytics.winRate.averageLoss, rc)} compact />
-                        <MetricCard
-                          label="Profit Factor"
-                          value={analytics.winRate.profitFactor === Infinity ? "∞" : analytics.winRate.profitFactor.toFixed(2)}
-                          subtitle="Total profit / Total loss"
-                          compact
-                        />
-                      </MetricGrid>
-
-                      {analytics.winRate.largestWin && (
-                        <View style={styles.subsection}>
-                          <Text style={styles.subsectionTitle}>Largest Win</Text>
-                          <View style={styles.tradeHighlight}>
-                            <Text style={styles.tradeSymbol}>{analytics.winRate.largestWin.symbol}</Text>
-                            <Text style={[styles.tradeGain, { color: defaultColors.positive }]}>
-                              +{formatMoney(analytics.winRate.largestWin.gainLoss, rc)}
-                            </Text>
-                            <Text style={styles.tradeMeta}>Held for {analytics.winRate.largestWin.holdingPeriodDays} days</Text>
-                          </View>
-                        </View>
-                      )}
-
-                      {analytics.winRate.largestLoss && (
-                        <View style={styles.subsection}>
-                          <Text style={styles.subsectionTitle}>Largest Loss</Text>
-                          <View style={styles.tradeHighlight}>
-                            <Text style={styles.tradeSymbol}>{analytics.winRate.largestLoss.symbol}</Text>
-                            <Text style={[styles.tradeGain, { color: defaultColors.negative }]}>
-                              {formatMoney(analytics.winRate.largestLoss.gainLoss, rc)}
-                            </Text>
-                            <Text style={styles.tradeMeta}>Held for {analytics.winRate.largestLoss.holdingPeriodDays} days</Text>
-                          </View>
-                        </View>
-                      )}
-                    </>
-                  )}
-                </View>
-              )}
-
               <SubSectionHeader
                 title="Best & Worst"
                 isExpanded={expandedSubSection === "bestworst"}
@@ -545,6 +419,75 @@ export default function PortfolioInsightsScreen() {
                         </View>
                       ))}
                     </View>
+                  )}
+                </View>
+              )}
+
+              <SubSectionHeader
+                title="Win Rate Analysis"
+                isExpanded={expandedSubSection === "winrate"}
+                onPress={() => toggleSubSection("winrate")}
+              />
+              {expandedSubSection === "winrate" && (
+                <View style={styles.subSectionContent}>
+                  {analytics.winRate.totalClosedTrades === 0 ? (
+                    <Text style={styles.noDataText}>No closed trades yet. Win rate is calculated from completed (sold) positions.</Text>
+                  ) : (
+                    <>
+                      <View style={styles.winRateChartWrap}>
+                        <DonutChart
+                          size={120}
+                          strokeWidth={18}
+                          slices={[
+                            { value: analytics.winRate.winningTrades, color: defaultColors.positive },
+                            { value: analytics.winRate.losingTrades, color: defaultColors.negative },
+                          ]}
+                        />
+                        <View style={styles.winRateCenter}>
+                          <Text style={styles.winRatePct}>{analytics.winRate.winRate.toFixed(0)}%</Text>
+                          <Text style={styles.winRateLabel}>Win Rate</Text>
+                        </View>
+                      </View>
+
+                      <MetricGrid>
+                        <MetricCard label="Closed Trades" value={String(analytics.winRate.totalClosedTrades)} compact />
+                        <MetricCard label="Winning / Losing" value={`${analytics.winRate.winningTrades} / ${analytics.winRate.losingTrades}`} compact />
+                        <MetricCard label="Avg Win" value={formatMoney(analytics.winRate.averageWin, rc)} compact />
+                        <MetricCard label="Avg Loss" value={formatMoney(analytics.winRate.averageLoss, rc)} compact />
+                        <MetricCard
+                          label="Profit Factor"
+                          value={analytics.winRate.profitFactor === Infinity ? "∞" : analytics.winRate.profitFactor.toFixed(2)}
+                          subtitle="Total profit / Total loss"
+                          compact
+                        />
+                      </MetricGrid>
+
+                      {analytics.winRate.largestWin && (
+                        <View style={styles.subsection}>
+                          <Text style={styles.subsectionTitle}>Largest Win</Text>
+                          <View style={styles.tradeHighlight}>
+                            <Text style={styles.tradeSymbol}>{analytics.winRate.largestWin.symbol}</Text>
+                            <Text style={[styles.tradeGain, { color: defaultColors.positive }]}>
+                              +{formatMoney(analytics.winRate.largestWin.gainLoss, rc)}
+                            </Text>
+                            <Text style={styles.tradeMeta}>Held for {analytics.winRate.largestWin.holdingPeriodDays} days</Text>
+                          </View>
+                        </View>
+                      )}
+
+                      {analytics.winRate.largestLoss && (
+                        <View style={styles.subsection}>
+                          <Text style={styles.subsectionTitle}>Largest Loss</Text>
+                          <View style={styles.tradeHighlight}>
+                            <Text style={styles.tradeSymbol}>{analytics.winRate.largestLoss.symbol}</Text>
+                            <Text style={[styles.tradeGain, { color: defaultColors.negative }]}>
+                              {formatMoney(analytics.winRate.largestLoss.gainLoss, rc)}
+                            </Text>
+                            <Text style={styles.tradeMeta}>Held for {analytics.winRate.largestLoss.holdingPeriodDays} days</Text>
+                          </View>
+                        </View>
+                      )}
+                    </>
                   )}
                 </View>
               )}
@@ -962,18 +905,6 @@ function SubSectionHeader({
   );
 }
 
-function LegendItem({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <View style={styles.legendItem}>
-      <View style={[styles.legendDot, { backgroundColor: color }]} />
-      <View style={styles.legendText}>
-        <Text style={styles.legendLabel}>{label}</Text>
-        <Text style={styles.legendValue}>{value}</Text>
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 112,
@@ -1157,56 +1088,6 @@ const styles = StyleSheet.create({
   },
   dcaCurrentGain: {
     fontSize: typography.caption,
-    fontWeight: typography.weightSemibold,
-  },
-  performanceChartWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.lg,
-  },
-  performanceLegend: {
-    flex: 1,
-    gap: spacing.sm,
-  },
-  legendItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  legendText: {
-    flex: 1,
-  },
-  legendLabel: {
-    color: defaultColors.muted,
-    fontSize: typography.micro,
-  },
-  legendValue: {
-    color: defaultColors.text,
-    fontSize: typography.caption,
-    fontWeight: typography.weightMedium,
-  },
-  performanceSummary: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: defaultColors.border,
-    paddingTop: spacing.md,
-  },
-  performanceRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  performanceLabel: {
-    color: defaultColors.text,
-    fontSize: typography.body,
-    fontWeight: typography.weightMedium,
-  },
-  performanceTotal: {
-    fontSize: typography.subheading,
     fontWeight: typography.weightSemibold,
   },
   winRateChartWrap: {
