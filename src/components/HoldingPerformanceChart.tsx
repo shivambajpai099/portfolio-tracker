@@ -10,17 +10,13 @@ import type { HoldingPerformancePoint } from "../features/portfolio/calculations
 // Types
 // ---------------------------------------------------------------------------
 
-export type PerformanceTimeRange = "1Y" | "2Y" | "ALL";
+export type PerformanceTimeRange = "YTD" | "1Y" | "2Y" | "ALL";
 
 interface HoldingPerformanceChartProps {
   /** Performance data points (from calcHoldingPerformanceHistory) */
   data: HoldingPerformancePoint[];
   /** Currency for formatting values */
   currency: Currency;
-  /** Current time range view */
-  view?: PerformanceTimeRange;
-  /** Callback when view changes */
-  onViewChange?: (view: PerformanceTimeRange) => void;
   /** Current shares held (for tooltip) */
   sharesHeld?: number;
   /** Average cost per share (for tooltip) */
@@ -38,10 +34,34 @@ interface HoldingPerformanceChartProps {
 const CHART_HEIGHT = 180;
 const INVESTED_COLOR = "#6366F1"; // Indigo/purple - step line
 const CURRENT_VALUE_COLOR = "#22C55E"; // Green - continuous line
+// Horizontal layout reserved for the y-axis labels + inner padding so the
+// plotted lines always fit inside the card and the latest point isn't clipped.
+const Y_AXIS_LABEL_WIDTH = 48;
+const CHART_INITIAL_SPACING = 10;
+const CHART_END_SPACING = 12;
+// Number of horizontal gridline sections on the y-axis.
+const Y_AXIS_SECTIONS = 4;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Round a positive value up to a "nice" number (1, 2, 5 × 10^n) so y-axis
+ * step values and labels stay clean and human-readable.
+ */
+const niceCeil = (value: number): number => {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  const exponent = Math.floor(Math.log10(value));
+  const magnitude = Math.pow(10, exponent);
+  const fraction = value / magnitude;
+  let niceFraction: number;
+  if (fraction <= 1) niceFraction = 1;
+  else if (fraction <= 2) niceFraction = 2;
+  else if (fraction <= 5) niceFraction = 5;
+  else niceFraction = 10;
+  return niceFraction * magnitude;
+};
 
 /**
  * Formats a date string with year context.
@@ -69,35 +89,6 @@ const formatFullDate = (dateStr: string): string => {
     month: "short", 
     day: "numeric" 
   });
-};
-
-/**
- * Filters data points based on the selected time range.
- */
-const filterDataByRange = (
-  data: HoldingPerformancePoint[],
-  range: PerformanceTimeRange
-): HoldingPerformancePoint[] => {
-  if (data.length === 0) return [];
-
-  const now = new Date();
-  let cutoffDate: Date;
-
-  switch (range) {
-    case "1Y":
-      cutoffDate = new Date(now);
-      cutoffDate.setMonth(cutoffDate.getMonth() - 12);
-      break;
-    case "2Y":
-      cutoffDate = new Date(now);
-      cutoffDate.setMonth(cutoffDate.getMonth() - 24);
-      break;
-    case "ALL":
-    default:
-      return data;
-  }
-
-  return data.filter((point) => new Date(point.date) >= cutoffDate);
 };
 
 /**
@@ -170,24 +161,30 @@ const expandForStepLine = (
 export function HoldingPerformanceChart({
   data,
   currency,
-  view = "ALL",
   sharesHeld: propSharesHeld,
   avgCost: propAvgCost,
   currentPrice: propCurrentPrice,
 }: HoldingPerformanceChartProps) {
   const { colors } = useTheme();
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // Measured width of the chart container so the plot always fits its card
+  // (using the raw window width can overflow and clip the right edge of the
+  // lines, especially on web/large screens).
+  const [containerWidth, setContainerWidth] = useState(0);
 
-  // Filter data by range
-  const filteredData = useMemo(() => filterDataByRange(data, view), [data, view]);
+  // Always render the full history so the entire lines are visible.
+  const filteredData = useMemo(() => data, [data]);
   
   // Expand for step line rendering (invested line)
   const chartData = useMemo(() => expandForStepLine(filteredData), [filteredData]);
 
-  // Get screen width for responsive chart
-  const screenWidth = Dimensions.get("window").width;
-  // Chart takes full container width minus padding (no max limit)
-  const chartWidth = screenWidth - spacing.lg * 2 - spacing.md * 2;
+  // Chart width: prefer the actually measured container width so the plot
+  // never overflows its card. Fall back to a window-based estimate for the
+  // very first render before onLayout fires.
+  const fallbackWidth = Dimensions.get("window").width - spacing.lg * 2 - spacing.md * 2;
+  const chartWidth = Math.max(0, (containerWidth || fallbackWidth));
+  // Drawable plot area after reserving space for the y-axis labels.
+  const plotWidth = Math.max(0, chartWidth - Y_AXIS_LABEL_WIDTH);
 
   // Derive shares held and avg cost from latest data point if not provided
   const derivedMetrics = useMemo(() => {
@@ -262,12 +259,23 @@ export function HoldingPerformanceChart({
     );
   }
 
-  // Calculate Y-axis range
+  // Calculate Y-axis range.
+  // Goal: the top gridline/label is at or above the highest plotted value so
+  // the peak of the lines is always visible, while the bottom zooms into the
+  // data (not forced to zero). We snap the range to "nice" step values so the
+  // axis labels stay clean, and derive maxValue/stepValue to match.
   const allValues = chartData.flatMap(p => [p.invested, p.current]);
-  const minValue = Math.min(...allValues);
-  const maxValue = Math.max(...allValues);
-  const range = maxValue - minValue || 1;
-  const yAxisOffset = Math.max(0, minValue - range * 0.1);
+  const dataMin = allValues.length ? Math.min(...allValues) : 0;
+  const dataMax = allValues.length ? Math.max(...allValues) : 1;
+  const span = dataMax - dataMin || dataMax || 1;
+  // Headroom above the peak and below the trough (10% of the visible span).
+  const paddedMax = dataMax + span * 0.1;
+  const paddedMin = Math.max(0, dataMin - span * 0.1);
+  // Snap the per-section step up to a nice number so the top of the axis
+  // (yAxisOffset + step * sections) is guaranteed to cover the highest value.
+  const stepValue = niceCeil((paddedMax - paddedMin) / Y_AXIS_SECTIONS);
+  const yAxisOffset = Math.max(0, Math.floor(paddedMin / stepValue) * stepValue);
+  const maxValue = yAxisOffset + stepValue * Y_AXIS_SECTIONS;
 
   // Format Y-axis label using compact axis formatter
   const formatYLabel = (valueStr: string): string => {
@@ -278,6 +286,7 @@ export function HoldingPerformanceChart({
 
   return (
     <View style={styles.container}>
+
 
       {/* Tooltip for selected point - uses full formatting */}
       {selectedPoint && (
@@ -340,11 +349,17 @@ export function HoldingPerformanceChart({
       )}
 
       {/* Chart */}
-      <View style={styles.chartContainer}>
+      <View
+        style={styles.chartContainer}
+        onLayout={(e) => {
+          const w = e.nativeEvent.layout.width;
+          if (w && Math.abs(w - containerWidth) > 1) setContainerWidth(w);
+        }}
+      >
         <LineChart
           data={investedLineData}
           data2={currentLineData}
-          width={chartWidth}
+          width={plotWidth}
           height={CHART_HEIGHT}
           color1={INVESTED_COLOR}
           color2={CURRENT_VALUE_COLOR}
@@ -363,11 +378,14 @@ export function HoldingPerformanceChart({
           startOpacity1={0}
           endOpacity1={0}
           hideDataPoints
-          spacing={(chartWidth - 60) / Math.max(chartData.length - 1, 1)}
-          initialSpacing={15}
-          endSpacing={15}
+          yAxisLabelWidth={Y_AXIS_LABEL_WIDTH}
+          spacing={(plotWidth - CHART_INITIAL_SPACING - CHART_END_SPACING) / Math.max(chartData.length - 1, 1)}
+          initialSpacing={CHART_INITIAL_SPACING}
+          endSpacing={CHART_END_SPACING}
           yAxisOffset={yAxisOffset}
-          noOfSections={4}
+          maxValue={maxValue}
+          stepValue={stepValue}
+          noOfSections={Y_AXIS_SECTIONS}
           yAxisColor="transparent"
           xAxisColor={colors.border}
           yAxisTextStyle={{ color: colors.muted, fontSize: 10 }}
@@ -427,7 +445,7 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "flex-end",
     marginBottom: spacing.xs,
     paddingHorizontal: spacing.md,
   },

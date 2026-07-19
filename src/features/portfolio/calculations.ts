@@ -337,5 +337,175 @@ export const calcHoldingPerformanceHistory = (
   return { points, currency, symbol };
 };
 
+// ---------------------------------------------------------------------------
+// Portfolio Performance History (aggregated Approach A across all holdings)
+// ---------------------------------------------------------------------------
+
+export type PortfolioPerformanceView = "monthly" | "quarterly" | "yearly";
+
+/** A transaction input for the portfolio performance calculation. */
+export interface PortfolioPerformanceTransaction {
+  transactionDate: string;
+  type: "BUY" | "SELL";
+  quantity: number;
+  pricePerShare: number;
+  symbol: string;
+  currency: Currency;
+}
+
+export interface PortfolioPerformancePoint {
+  /** ISO date string (first day of the period) */
+  date: string;
+  /** Aggregated cost basis across all holdings in the reporting currency */
+  investedAmount: number;
+  /** Aggregated market value across all holdings in the reporting currency */
+  currentValue: number;
+}
+
+/**
+ * Calculates the portfolio-wide performance history (invested vs current) by
+ * aggregating the SAME per-holding logic (see calcHoldingPerformanceHistory)
+ * across every symbol.
+ *
+ * For each symbol we maintain running state using the average cost basis method:
+ * - BUY: shares += qty, costBasis += qty × price
+ * - SELL: reduce costBasis by qty × avgCost, then reduce shares
+ *
+ * At every transaction date the aggregate snapshot is recorded:
+ * - invested = Σ costBasis (per symbol, converted to reporting currency)
+ * - current  = Σ shares × mostRecentTxPrice (Approach A, converted)
+ *
+ * The trailing point (today's period) uses live market prices for `current`,
+ * mirroring how the per-holding chart adds a final "today" point.
+ *
+ * Points are bucketed by period (monthly/quarterly/yearly) so the last
+ * transaction within each period wins, matching the dashboard's time toggle.
+ *
+ * @param transactions - All transactions across all accounts/symbols
+ * @param currentPrices - Map of UPPERCASE symbol → current market price (native currency)
+ * @param fxRates - FX rates for currency conversion
+ * @param reportingCurrency - Currency to express aggregated values in
+ * @param view - Period bucketing granularity
+ */
+export const calcPortfolioPerformanceHistory = (
+  transactions: PortfolioPerformanceTransaction[],
+  currentPrices: Map<string, number>,
+  fxRates: FxRates,
+  reportingCurrency: Currency,
+  view: PortfolioPerformanceView
+): PortfolioPerformancePoint[] => {
+  if (transactions.length === 0) return [];
+
+  const sorted = [...transactions].sort(
+    (a, b) => new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()
+  );
+
+  interface SymbolState {
+    shares: number;
+    costBasis: number;
+    lastPrice: number;
+    currency: Currency;
+  }
+  const state = new Map<string, SymbolState>();
+
+  const periodKey = (d: Date): string => {
+    if (view === "monthly") {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    }
+    if (view === "quarterly") {
+      return `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
+    }
+    return `${d.getFullYear()}`;
+  };
+
+  const periodDate = (key: string): string => {
+    if (view === "monthly") {
+      const [year, month] = key.split("-");
+      return new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1).toISOString();
+    }
+    if (view === "quarterly") {
+      const [year, q] = key.split("-Q");
+      return new Date(parseInt(year, 10), (parseInt(q, 10) - 1) * 3, 1).toISOString();
+    }
+    return new Date(parseInt(key, 10), 0, 1).toISOString();
+  };
+
+  // Aggregate current invested + market value across every symbol, converting
+  // each symbol's native values into the reporting currency.
+  const aggregate = (): { invested: number; current: number } => {
+    let invested = 0;
+    let current = 0;
+    for (const s of state.values()) {
+      invested += convert(s.costBasis, s.currency, reportingCurrency, fxRates);
+      current += convert(s.shares * s.lastPrice, s.currency, reportingCurrency, fxRates);
+    }
+    return { invested, current };
+  };
+
+  // Bucket by period; the last transaction in each period overwrites the value.
+  const byPeriod = new Map<string, { invested: number; current: number }>();
+
+  for (const tx of sorted) {
+    const key = tx.symbol.toUpperCase();
+    const s = state.get(key) ?? { shares: 0, costBasis: 0, lastPrice: 0, currency: tx.currency };
+
+    if (tx.type === "BUY") {
+      s.shares += tx.quantity;
+      s.costBasis += tx.quantity * tx.pricePerShare;
+    } else if (s.shares > 0) {
+      const avgCost = s.costBasis / s.shares;
+      s.costBasis -= tx.quantity * avgCost;
+      s.shares -= tx.quantity;
+      if (s.shares < 0.0001) {
+        s.shares = 0;
+        s.costBasis = 0;
+      }
+      if (s.costBasis < 0) {
+        s.costBasis = 0;
+      }
+    }
+
+    // Approach A: most recent transaction price approximates market price.
+    s.lastPrice = tx.pricePerShare;
+    s.currency = tx.currency;
+    state.set(key, s);
+
+    byPeriod.set(periodKey(new Date(tx.transactionDate)), aggregate());
+  }
+
+  const periods = [...byPeriod.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const points: PortfolioPerformancePoint[] = periods.map(([key, agg]) => ({
+    date: periodDate(key),
+    investedAmount: agg.invested,
+    currentValue: agg.current,
+  }));
+
+  // Final "today" point: recompute `current` using live market prices.
+  let liveInvested = 0;
+  let liveCurrent = 0;
+  for (const [key, s] of state.entries()) {
+    liveInvested += convert(s.costBasis, s.currency, reportingCurrency, fxRates);
+    const livePrice = currentPrices.get(key) ?? s.lastPrice;
+    liveCurrent += convert(s.shares * livePrice, s.currency, reportingCurrency, fxRates);
+  }
+
+  const todayKey = periodKey(new Date());
+  const lastKey = periods.length > 0 ? periods[periods.length - 1][0] : null;
+
+  if (lastKey === todayKey && points.length > 0) {
+    // Refresh the current period with live market values.
+    points[points.length - 1].investedAmount = liveInvested;
+    points[points.length - 1].currentValue = liveCurrent;
+  } else {
+    points.push({
+      date: periodDate(todayKey),
+      investedAmount: liveInvested,
+      currentValue: liveCurrent,
+    });
+  }
+
+  return points;
+};
+
 // Rebalancing/deploy-cash and snapshot/concentration helpers were removed with the Overview cleanup.
 

@@ -10,7 +10,7 @@ import { ImportTransactionsModal } from "../../src/components/ImportTransactions
 import { HoldingsSection } from "./holdings";
 import {
   calcPortfolioTotals,
-  convert,
+  calcPortfolioPerformanceHistory,
 } from "../../src/features/portfolio/calculations";
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
@@ -93,76 +93,22 @@ export default function DashboardScreen() {
     [holdings, totalsCashHoldings, fxRates, rc]
   );
 
-  // Build performance chart data from transactions
-  const performanceData = useMemo((): PortfolioHistoryPoint[] => {
-    if (transactions.length === 0) return [];
-
-    // Sort transactions by date
-    const sorted = [...transactions].sort(
-      (a, b) => new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()
-    );
-
-    // Build cumulative invested amounts per period
-    const periodData = new Map<string, { invested: number; value: number }>();
-    let cumulativeInvested = 0;
-
-    for (const tx of sorted) {
-      const d = new Date(tx.transactionDate);
-      const txValue = tx.quantity * tx.pricePerShare + (tx.fees ?? 0);
-      
-      // For BUY, add to invested; for SELL, subtract
-      if (tx.type === "BUY") {
-        cumulativeInvested += convert(txValue, tx.currency, rc, fxRates);
-      } else {
-        cumulativeInvested -= convert(txValue, tx.currency, rc, fxRates);
-      }
-
-      // Create period key based on view
-      let key: string;
-      if (performanceView === "monthly") {
-        key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      } else if (performanceView === "quarterly") {
-        const quarter = Math.floor(d.getMonth() / 3) + 1;
-        key = `${d.getFullYear()}-Q${quarter}`;
-      } else {
-        key = `${d.getFullYear()}`;
-      }
-
-      // Update period with latest cumulative value
-      periodData.set(key, {
-        invested: cumulativeInvested,
-        value: cumulativeInvested, // Will use current value for last period
-      });
+  // Current market price per symbol (resolved live price from holdings).
+  const currentPrices = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const holding of holdings) {
+      map.set(holding.symbol.toUpperCase(), holding.marketPrice);
     }
+    return map;
+  }, [holdings]);
 
-    // Convert to array and sort by period
-    const periods = [...periodData.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-
-    // For the last period, use current portfolio value
-    const currentValue = totals.currentValue;
-
-    return periods.map(([key, data], index) => {
-      // Parse key back to a representative date
-      let date: string;
-      if (performanceView === "monthly") {
-        const [year, month] = key.split("-");
-        date = new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1).toISOString();
-      } else if (performanceView === "quarterly") {
-        const [year, q] = key.split("-Q");
-        const month = (parseInt(q, 10) - 1) * 3;
-        date = new Date(parseInt(year, 10), month, 1).toISOString();
-      } else {
-        date = new Date(parseInt(key, 10), 0, 1).toISOString();
-      }
-
-      return {
-        date,
-        investedAmount: data.invested,
-        // Only last period shows current value, others show invested as estimate
-        currentValue: index === periods.length - 1 ? currentValue : data.invested,
-      };
-    });
-  }, [transactions, performanceView, rc, fxRates, totals.currentValue]);
+  // Build performance chart data using the SAME per-holding logic (average
+  // cost basis + Approach A market value) aggregated across all holdings.
+  const performanceData = useMemo(
+    (): PortfolioHistoryPoint[] =>
+      calcPortfolioPerformanceHistory(transactions, currentPrices, fxRates, rc, performanceView),
+    [transactions, currentPrices, fxRates, rc, performanceView]
+  );
 
   // State A: No accounts at all — show centered empty state only
   const hasNoAccounts = accounts.length === 0;

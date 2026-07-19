@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { Animated, Easing, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { AddHoldingModal } from "../../src/components/AddHoldingModal";
+import { AddAccountModal, type AddAccountInput } from "../../src/components/AddAccountModal";
 import { ImportHoldingsModal } from "../../src/components/ImportHoldingsModal";
 import { ImportTransactionsModal } from "../../src/components/ImportTransactionsModal";
 import { TourTarget } from "../../src/components/OnboardingTourProvider";
@@ -77,6 +78,8 @@ type EditDraft = {
 
 const nowIso = () => new Date().toISOString();
 const createHoldingId = () => `h-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+const createAccountId = () => `acc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+const createCashId = () => `cash-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
 const parseNumber = (value: string): number => {
   const parsed = Number(value);
@@ -106,6 +109,8 @@ export function HoldingsSection() {
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
+  const addAccount = usePortfolioStore((state) => state.addAccount);
+  const addCashHolding = usePortfolioStore((state) => state.addCashHolding);
   const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
   const transactions = usePortfolioStore((state) => state.transactions);
   const marketPrices = usePortfolioStore((state) => state.marketPrices);
@@ -130,8 +135,11 @@ export function HoldingsSection() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [expandedTab, setExpandedTab] = useState<Record<string, "accounts" | "transactions" | "info">>({});
   const [isAddVisible, setIsAddVisible] = useState(false);
+  const [isAddMenuVisible, setIsAddMenuVisible] = useState(false);
+  const [isAddAccountVisible, setIsAddAccountVisible] = useState(false);
   const [isImportVisible, setIsImportVisible] = useState(false);
   const [isImportMenuVisible, setIsImportMenuVisible] = useState(false);
+  const [pendingImportAccountId, setPendingImportAccountId] = useState<string | null>(null);
   const [isImportTransactionsVisible, setIsImportTransactionsVisible] = useState(false);
   const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
   const [lastPricesRefreshedAt, setLastPricesRefreshedAt] = useState<string | null>(null);
@@ -499,6 +507,40 @@ export function HoldingsSection() {
     setSortDirection("desc");
   };
 
+  const handleCreateAccount = (input: AddAccountInput) => {
+    const timestamp = nowIso();
+    const accountId = createAccountId();
+    addAccount({
+      id: accountId,
+      name: input.name,
+      owner: input.owner,
+      broker: input.broker,
+      type: input.type,
+      baseCurrency: input.baseCurrency,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    if (input.type === "SAVINGS") {
+      addCashHolding({
+        id: createCashId(),
+        accountId,
+        currency: input.baseCurrency,
+        balance: input.savingsInitialBalance ?? 0,
+        updatedAt: timestamp,
+      });
+    }
+
+    setIsAddAccountVisible(false);
+
+    // For brokerage-style accounts, immediately offer to import data into the
+    // account that was just created (preselected in the import flow).
+    if (accountSupportsHoldings(input.type)) {
+      setPendingImportAccountId(accountId);
+      setIsImportMenuVisible(true);
+    }
+  };
+
   // Renders a single holding row (with expand/collapse + tabs).
   const renderHoldingRow = (group: DisplayGroup, indent = false) => {
     const isExpanded = Boolean(expandedGroups[group.id]);
@@ -690,6 +732,30 @@ export function HoldingsSection() {
                     holdingCurrency
                   ).points;
 
+                  // Extend the series to "today" using the latest market
+                  // value — but only when there is real transaction history.
+                  // For holdings without transactions the series is empty and
+                  // we intentionally leave it so, otherwise a lone synthetic
+                  // point (where market value equals cost) makes the invested
+                  // and current lines converge into a single point.
+                  if (performancePoints.length > 0) {
+                    const todayIso = new Date().toISOString().split("T")[0] + "T00:00:00.000Z";
+                    const todayDateOnly = todayIso.split("T")[0];
+                    const todayCurrentValue = totalShares * marketPrice;
+                    const lastPoint = performancePoints[performancePoints.length - 1];
+                    if (lastPoint.date.split("T")[0] === todayDateOnly) {
+                      // Refresh the existing today point with the latest values.
+                      lastPoint.invested = totalCostNative;
+                      lastPoint.current = todayCurrentValue;
+                    } else {
+                      performancePoints.push({
+                        date: todayIso,
+                        invested: totalCostNative,
+                        current: todayCurrentValue,
+                      });
+                    }
+                  }
+
                   return (
                     <>
                       {/* Four-block stat row */}
@@ -832,7 +898,7 @@ export function HoldingsSection() {
             <Text style={styles.actionBtnLabel}>Import</Text>
           </Pressable>
           <TourTarget tourKey="holdings-add">
-            <Pressable style={styles.addBtn} onPress={() => setIsAddVisible(true)}>
+            <Pressable style={styles.addBtn} onPress={() => setIsAddMenuVisible(true)}>
               <Text style={styles.addBtnText}>Add</Text>
             </Pressable>
           </TourTarget>
@@ -1029,9 +1095,14 @@ export function HoldingsSection() {
         visible={isImportVisible}
         accounts={brokerAccounts}
         existingHoldings={holdings}
-        onClose={() => setIsImportVisible(false)}
+        preSelectedAccountId={pendingImportAccountId ?? undefined}
+        onClose={() => {
+          setIsImportVisible(false);
+          setPendingImportAccountId(null);
+        }}
         onComplete={(result) => {
           console.log(`Imported ${result.addedCount} new, ${result.updatedCount} updated to ${result.accountName}`);
+          setPendingImportAccountId(null);
         }}
         addHolding={addHolding}
         updateHolding={updateHolding}
@@ -1041,18 +1112,61 @@ export function HoldingsSection() {
       <ImportTransactionsModal
         visible={isImportTransactionsVisible}
         accounts={brokerAccounts}
-        onClose={() => setIsImportTransactionsVisible(false)}
+        preSelectedAccountId={pendingImportAccountId ?? undefined}
+        onClose={() => {
+          setIsImportTransactionsVisible(false);
+          setPendingImportAccountId(null);
+        }}
         onComplete={(result) => {
           console.log(`Imported ${result.transactionCount} transactions, ${result.derivedHoldingCount} derived holdings to ${result.accountName}`);
+          setPendingImportAccountId(null);
         }}
         setAccountTransactions={setAccountTransactions}
         updateAccount={updateAccount}
         updateMarketPrices={updateMarketPrices}
       />
 
+      {/* Add Menu Modal */}
+      <Modal visible={isAddMenuVisible} transparent animationType="fade" onRequestClose={() => setIsAddMenuVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setIsAddMenuVisible(false)}>
+          <View style={styles.importMenuCard}>
+            <Text style={styles.importMenuTitle}>Add</Text>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                setIsAddMenuVisible(false);
+                setIsAddAccountVisible(true);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Add Account</Text>
+              <Text style={styles.importMenuItemDesc}>Create a new broker or savings account</Text>
+            </Pressable>
+            <Pressable
+              style={styles.importMenuItem}
+              onPress={() => {
+                setIsAddMenuVisible(false);
+                setIsAddVisible(true);
+              }}
+            >
+              <Text style={styles.importMenuItemTitle}>Add Holding</Text>
+              <Text style={styles.importMenuItemDesc}>Add an individual holding to an account</Text>
+            </Pressable>
+            <Pressable style={styles.importMenuCancel} onPress={() => setIsAddMenuVisible(false)}>
+              <Text style={styles.importMenuCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <AddAccountModal
+        visible={isAddAccountVisible}
+        onClose={() => setIsAddAccountVisible(false)}
+        onCreate={handleCreateAccount}
+      />
+
       {/* Import Menu Modal */}
-      <Modal visible={isImportMenuVisible} transparent animationType="fade" onRequestClose={() => setIsImportMenuVisible(false)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setIsImportMenuVisible(false)}>
+      <Modal visible={isImportMenuVisible} transparent animationType="fade" onRequestClose={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
+        <Pressable style={styles.modalOverlay} onPress={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
           <View style={styles.importMenuCard}>
             <Text style={styles.importMenuTitle}>Import Data</Text>
             <Pressable
@@ -1075,7 +1189,7 @@ export function HoldingsSection() {
               <Text style={styles.importMenuItemTitle}>Import Transactions</Text>
               <Text style={styles.importMenuItemDesc}>Import buy/sell history to derive holdings with FIFO cost basis</Text>
             </Pressable>
-            <Pressable style={styles.importMenuCancel} onPress={() => setIsImportMenuVisible(false)}>
+            <Pressable style={styles.importMenuCancel} onPress={() => { setIsImportMenuVisible(false); setPendingImportAccountId(null); }}>
               <Text style={styles.importMenuCancelText}>Cancel</Text>
             </Pressable>
           </View>
