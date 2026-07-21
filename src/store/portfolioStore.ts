@@ -302,6 +302,17 @@ interface PortfolioState {
   exposure: () => ExposureBySymbol[];
 }
 
+/**
+ * Timestamp used for pristine, unmodified seed/default state. It is intentionally
+ * the epoch so that untouched local data is always treated as the *oldest*
+ * possible snapshot. On first login (e.g. fresh install or a new device) this
+ * ensures a genuine, older remote snapshot still wins over empty/seed local data
+ * instead of the local seed clobbering the user's cloud records. Any real local
+ * mutation overwrites this with `new Date().toISOString()`, so legitimate local
+ * edits continue to win over stale remote data.
+ */
+const SEED_SNAPSHOT_TIMESTAMP = new Date(0).toISOString();
+
 export const usePortfolioStore = create<PortfolioState>()(
   persist(
     (set, get) => ({
@@ -322,7 +333,7 @@ export const usePortfolioStore = create<PortfolioState>()(
       fxRates: seedFxRates,
       marketPrices: {},
       stockSplits: [],
-      snapshotUpdatedAt: new Date().toISOString(),
+      snapshotUpdatedAt: SEED_SNAPSHOT_TIMESTAMP,
       hydrated: false,
       setHydrated: (value: boolean) => set({ hydrated: value }),
       getSnapshot: () => {
