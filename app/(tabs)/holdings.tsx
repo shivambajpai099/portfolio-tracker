@@ -169,28 +169,44 @@ const TrimStatusCard = ({
   trimTriggerPct: number;
 }) => {
   const trimAlert = calcTrimAlert(alertInput);
-  const stateColor = trimAlert.shouldTrim ? defaultColors.negative : trimAlert.isOverCeiling ? "#D39A3E" : defaultColors.positive;
+  const stateColor = trimAlert.shouldTrim ? defaultColors.negative : trimAlert.isOverCeiling ? "#D39A3E" : defaultColors.muted;
   const gainSinceReferencePct = trimAlert.gainSinceReference * 100;
+  const remainingGainPct = Math.max(0, trimTriggerPct - gainSinceReferencePct);
   const allocationScaleMax = Math.max(allocationPct, ceilingPct, 1);
   const allocationFillPct = clamp((allocationPct / allocationScaleMax) * 100, 0, 100);
-  const ceilingMarkerPct = clamp((ceilingPct / allocationScaleMax) * 100, 0, 100);
   const gainProgressPct = trimTriggerPct > 0 ? clamp((gainSinceReferencePct / trimTriggerPct) * 100, 0, 100) : 0;
+  const verdict = !trimAlert.isOverCeiling
+    ? "Within target allocation — no trim suggested"
+    : trimAlert.shouldTrim
+      ? `Trim suggested: ~${trimAlert.suggestedShares.toLocaleString()} shares`
+      : `Over ceiling — waiting for +${remainingGainPct.toFixed(1)}% more gain to trigger`;
 
   return (
-    <View style={styles.trimStatusCard}>
-      <Text style={[styles.trimProgressLabel, { color: stateColor }]}>
+    <View style={styles.trimStatusWrap}>
+      <Text style={[styles.trimVerdictText, { color: stateColor }]}>{verdict}</Text>
+      <View style={[styles.trimStatusDetails, !trimAlert.isOverCeiling && styles.trimStatusDetailsMuted]}>
+        <Text style={[styles.trimProgressLabel, { color: stateColor }]}>
         {allocationPct.toFixed(1)}% / {ceilingPct.toFixed(1)}% ceiling
-      </Text>
-      <View style={styles.trimProgressTrack}>
-        <View style={[styles.trimProgressFill, { width: `${allocationFillPct}%`, backgroundColor: stateColor }]} />
-        <View style={[styles.trimProgressMarker, { left: `${ceilingMarkerPct}%` }]} />
-      </View>
-      <Text style={[styles.trimProgressSubLabel, { color: stateColor }]}>
-        {gainSinceReferencePct >= 0 ? "+" : ""}
-        {gainSinceReferencePct.toFixed(0)}% of +{trimTriggerPct.toFixed(0)}% trigger gain
-      </Text>
-      <View style={[styles.trimProgressTrack, styles.trimProgressTrackThin]}>
-        <View style={[styles.trimProgressFill, { width: `${gainProgressPct}%`, backgroundColor: stateColor }]} />
+        </Text>
+        <View style={styles.trimProgressTrack}>
+          <View style={[styles.trimProgressFill, { width: `${allocationFillPct}%`, backgroundColor: stateColor }]} />
+        </View>
+        {trimAlert.shouldTrim ? (
+          <Text style={[styles.trimProgressSubLabel, { color: stateColor }]}>
+            {gainSinceReferencePct >= 0 ? "+" : ""}
+            {gainSinceReferencePct.toFixed(1)}% since reference
+          </Text>
+        ) : (
+          <>
+            <Text style={[styles.trimProgressSubLabel, { color: stateColor }]}>
+              {gainSinceReferencePct >= 0 ? "+" : ""}
+              {gainSinceReferencePct.toFixed(1)}% of +{trimTriggerPct.toFixed(1)}% trigger gain
+            </Text>
+            <View style={[styles.trimProgressTrack, styles.trimProgressTrackThin]}>
+              <View style={[styles.trimProgressFill, { width: `${gainProgressPct}%`, backgroundColor: stateColor }]} />
+            </View>
+          </>
+        )}
       </View>
     </View>
   );
@@ -1230,137 +1246,144 @@ export function HoldingsSection() {
 
                 <View style={styles.trimSettingsCard}>
                   <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Trim settings for {group.title}</Text>
+                  <View style={styles.trimSettingsList}>
+                    <View style={styles.trimSettingRow}>
+                      <Text style={[styles.trimSettingLabel, { color: colors.muted }]}>Ceiling %</Text>
+                      <View style={styles.trimStepperRow}>
+                        <Pressable
+                          style={styles.trimStepperBtn}
+                          onPress={() =>
+                            nudgeTrimSetting(
+                              group.id,
+                              "ceilingPct",
+                              trimSettings.ceilingPct,
+                              TRIM_CEILING_MIN,
+                              TRIM_CEILING_MAX,
+                              -1
+                            )
+                          }
+                        >
+                          <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
+                        </Pressable>
+                        <TextInput
+                          value={trimSettingsDraft.ceilingPct}
+                          onChangeText={(value) => {
+                            setTrimDraftField(group.id, "ceilingPct", value);
+                            setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+                          }}
+                          keyboardType="decimal-pad"
+                          style={[styles.trimInput, styles.trimStepperInput]}
+                          placeholderTextColor={colors.muted}
+                        />
+                        <Pressable
+                          style={styles.trimStepperBtn}
+                          onPress={() =>
+                            nudgeTrimSetting(
+                              group.id,
+                              "ceilingPct",
+                              trimSettings.ceilingPct,
+                              TRIM_CEILING_MIN,
+                              TRIM_CEILING_MAX,
+                              1
+                            )
+                          }
+                        >
+                          <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
+                        </Pressable>
+                      </View>
+                    </View>
 
-                  <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Ceiling %</Text>
-                  <View style={styles.trimStepperRow}>
-                    <Pressable
-                      style={styles.trimStepperBtn}
-                      onPress={() =>
-                        nudgeTrimSetting(
-                          group.id,
-                          "ceilingPct",
-                          trimSettings.ceilingPct,
-                          TRIM_CEILING_MIN,
-                          TRIM_CEILING_MAX,
-                          -1
-                        )
-                      }
-                    >
-                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
-                    </Pressable>
-                    <TextInput
-                      value={trimSettingsDraft.ceilingPct}
-                      onChangeText={(value) => {
-                        setTrimDraftField(group.id, "ceilingPct", value);
-                        setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
-                      }}
-                      keyboardType="decimal-pad"
-                      style={[styles.trimInput, styles.trimStepperInput]}
-                      placeholderTextColor={colors.muted}
-                    />
-                    <Pressable
-                      style={styles.trimStepperBtn}
-                      onPress={() =>
-                        nudgeTrimSetting(
-                          group.id,
-                          "ceilingPct",
-                          trimSettings.ceilingPct,
-                          TRIM_CEILING_MIN,
-                          TRIM_CEILING_MAX,
-                          1
-                        )
-                      }
-                    >
-                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
-                    </Pressable>
-                  </View>
+                    <View style={styles.trimSettingRow}>
+                      <Text style={[styles.trimSettingLabel, { color: colors.muted }]}>Trigger gain %</Text>
+                      <View style={styles.trimStepperRow}>
+                        <Pressable
+                          style={styles.trimStepperBtn}
+                          onPress={() =>
+                            nudgeTrimSetting(
+                              group.id,
+                              "trimTriggerPct",
+                              trimSettings.trimTriggerPct,
+                              TRIM_TRIGGER_MIN,
+                              TRIM_TRIGGER_MAX,
+                              -1
+                            )
+                          }
+                        >
+                          <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
+                        </Pressable>
+                        <TextInput
+                          value={trimSettingsDraft.trimTriggerPct}
+                          onChangeText={(value) => {
+                            setTrimDraftField(group.id, "trimTriggerPct", value);
+                            setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+                          }}
+                          keyboardType="decimal-pad"
+                          style={[styles.trimInput, styles.trimStepperInput]}
+                          placeholderTextColor={colors.muted}
+                        />
+                        <Pressable
+                          style={styles.trimStepperBtn}
+                          onPress={() =>
+                            nudgeTrimSetting(
+                              group.id,
+                              "trimTriggerPct",
+                              trimSettings.trimTriggerPct,
+                              TRIM_TRIGGER_MIN,
+                              TRIM_TRIGGER_MAX,
+                              1
+                            )
+                          }
+                        >
+                          <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
+                        </Pressable>
+                      </View>
+                    </View>
 
-                  <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Trigger gain %</Text>
-                  <View style={styles.trimStepperRow}>
-                    <Pressable
-                      style={styles.trimStepperBtn}
-                      onPress={() =>
-                        nudgeTrimSetting(
-                          group.id,
-                          "trimTriggerPct",
-                          trimSettings.trimTriggerPct,
-                          TRIM_TRIGGER_MIN,
-                          TRIM_TRIGGER_MAX,
-                          -1
-                        )
-                      }
-                    >
-                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
-                    </Pressable>
-                    <TextInput
-                      value={trimSettingsDraft.trimTriggerPct}
-                      onChangeText={(value) => {
-                        setTrimDraftField(group.id, "trimTriggerPct", value);
-                        setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
-                      }}
-                      keyboardType="decimal-pad"
-                      style={[styles.trimInput, styles.trimStepperInput]}
-                      placeholderTextColor={colors.muted}
-                    />
-                    <Pressable
-                      style={styles.trimStepperBtn}
-                      onPress={() =>
-                        nudgeTrimSetting(
-                          group.id,
-                          "trimTriggerPct",
-                          trimSettings.trimTriggerPct,
-                          TRIM_TRIGGER_MIN,
-                          TRIM_TRIGGER_MAX,
-                          1
-                        )
-                      }
-                    >
-                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
-                    </Pressable>
-                  </View>
-
-                  <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Trim slice %</Text>
-                  <View style={styles.trimStepperRow}>
-                    <Pressable
-                      style={styles.trimStepperBtn}
-                      onPress={() =>
-                        nudgeTrimSetting(
-                          group.id,
-                          "trimSlicePct",
-                          trimSettings.trimSlicePct,
-                          TRIM_SLICE_MIN,
-                          TRIM_SLICE_MAX,
-                          -1
-                        )
-                      }
-                    >
-                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
-                    </Pressable>
-                    <TextInput
-                      value={trimSettingsDraft.trimSlicePct}
-                      onChangeText={(value) => {
-                        setTrimDraftField(group.id, "trimSlicePct", value);
-                        setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
-                      }}
-                      keyboardType="decimal-pad"
-                      style={[styles.trimInput, styles.trimStepperInput]}
-                      placeholderTextColor={colors.muted}
-                    />
-                    <Pressable
-                      style={styles.trimStepperBtn}
-                      onPress={() =>
-                        nudgeTrimSetting(
-                          group.id,
-                          "trimSlicePct",
-                          trimSettings.trimSlicePct,
-                          TRIM_SLICE_MIN,
-                          TRIM_SLICE_MAX,
-                          1
-                        )
-                      }
-                    >
-                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
-                    </Pressable>
+                    <View style={styles.trimSettingRow}>
+                      <Text style={[styles.trimSettingLabel, { color: colors.muted }]}>Trim slice %</Text>
+                      <View style={styles.trimStepperRow}>
+                        <Pressable
+                          style={styles.trimStepperBtn}
+                          onPress={() =>
+                            nudgeTrimSetting(
+                              group.id,
+                              "trimSlicePct",
+                              trimSettings.trimSlicePct,
+                              TRIM_SLICE_MIN,
+                              TRIM_SLICE_MAX,
+                              -1
+                            )
+                          }
+                        >
+                          <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
+                        </Pressable>
+                        <TextInput
+                          value={trimSettingsDraft.trimSlicePct}
+                          onChangeText={(value) => {
+                            setTrimDraftField(group.id, "trimSlicePct", value);
+                            setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+                          }}
+                          keyboardType="decimal-pad"
+                          style={[styles.trimInput, styles.trimStepperInput]}
+                          placeholderTextColor={colors.muted}
+                        />
+                        <Pressable
+                          style={styles.trimStepperBtn}
+                          onPress={() =>
+                            nudgeTrimSetting(
+                              group.id,
+                              "trimSlicePct",
+                              trimSettings.trimSlicePct,
+                              TRIM_SLICE_MIN,
+                              TRIM_SLICE_MAX,
+                              1
+                            )
+                          }
+                        >
+                          <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
+                        </Pressable>
+                      </View>
+                    </View>
                   </View>
 
                   {trimSettingsError ? (
@@ -1370,9 +1393,7 @@ export function HoldingsSection() {
                   <Pressable style={styles.trimPrimaryBtn} onPress={() => saveTrimSettings(group)}>
                     <Text style={styles.trimPrimaryBtnText}>Save settings</Text>
                   </Pressable>
-                </View>
-
-                <View style={styles.trimSettingsCard}>
+                  <View style={styles.trimSectionDivider} />
                   <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Mark as trimmed</Text>
                   <Pressable
                     style={styles.trimPrimaryBtn}
@@ -2569,31 +2590,35 @@ const styles = StyleSheet.create({
   trimTabWrap: {
     gap: spacing.xs,
   },
-  trimStatusCard: {
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: defaultColors.border,
-    backgroundColor: defaultColors.bg,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+  trimStatusWrap: {
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
   },
-  trimProgressLabel: {
+  trimVerdictText: {
     fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
+    lineHeight: 18,
+  },
+  trimStatusDetails: {
+    gap: spacing.xs,
+  },
+  trimStatusDetailsMuted: {
+    opacity: 0.55,
+  },
+  trimProgressLabel: {
+    fontSize: typography.micro,
+    fontWeight: typography.weightMedium,
     fontVariant: ["tabular-nums"],
   },
   trimProgressSubLabel: {
-    marginTop: spacing.xs,
     fontSize: typography.micro,
     fontVariant: ["tabular-nums"],
   },
   trimProgressTrack: {
-    marginTop: spacing.xs,
     height: 6,
     borderRadius: radii.pill,
     backgroundColor: defaultColors.surface,
     overflow: "hidden",
-    position: "relative",
   },
   trimProgressTrackThin: {
     height: 4,
@@ -2601,15 +2626,6 @@ const styles = StyleSheet.create({
   trimProgressFill: {
     height: "100%",
     borderRadius: radii.pill,
-  },
-  trimProgressMarker: {
-    position: "absolute",
-    top: -1,
-    width: 2,
-    height: 8,
-    marginLeft: -1,
-    borderRadius: radii.pill,
-    backgroundColor: defaultColors.text,
   },
   trimSettingsCard: {
     borderRadius: radii.lg,
@@ -2622,6 +2638,20 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
     marginBottom: 2,
+  },
+  trimSettingsList: {
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  trimSettingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
+  trimSettingLabel: {
+    flex: 1,
+    fontSize: typography.micro,
   },
   trimInputLabel: {
     marginTop: spacing.xs,
@@ -2638,7 +2668,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   trimStepperRow: {
-    marginTop: spacing.xs,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
@@ -2659,10 +2688,11 @@ const styles = StyleSheet.create({
     lineHeight: typography.body,
   },
   trimStepperInput: {
-    flex: 1,
+    width: 92,
     marginTop: 0,
     textAlign: "center",
     fontVariant: ["tabular-nums"],
+    paddingHorizontal: spacing.sm,
   },
   trimPrimaryBtn: {
     marginTop: spacing.sm,
@@ -2684,8 +2714,13 @@ const styles = StyleSheet.create({
     fontSize: typography.micro,
     lineHeight: 16,
   },
-  trimMarkFormWrap: {
+  trimSectionDivider: {
     marginTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: defaultColors.border,
+  },
+  trimMarkFormWrap: {
+    marginTop: spacing.xs,
     gap: spacing.xs,
   },
   trimInlineActions: {
