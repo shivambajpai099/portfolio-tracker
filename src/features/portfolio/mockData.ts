@@ -120,7 +120,11 @@ export const seedSettings: PortfolioSettings = {
   excludeIntradayFromInsights: true,
   onboardingTipsSeen: false,
   spotlightTourSeen: false,
+  trimPolicy: {
+    ceilingPct: 7,
+    trimTriggerPct: 20,
+    trimSlicePct: 12,
+  },
   timelineRetention: "1Y",
   themeMode: "dark",
 };
-

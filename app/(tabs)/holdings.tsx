@@ -17,7 +17,7 @@ import { toINR, toUSD } from "../../src/features/portfolio/selectors";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { spec } from "../../src/theme/specTokens";
-import { accountSupportsHoldings, type Currency, type Holding } from "../../src/types/portfolio";
+import { accountSupportsHoldings, type Currency, type Holding, type TrimHistoryEntry } from "../../src/types/portfolio";
 import type { Transaction } from "../../src/types/transaction";
 import type { LivePriceQuote } from "../../src/types/marketData";
 import { formatMoney } from "../../src/utils/format";
@@ -78,6 +78,129 @@ type EditDraft = {
 };
 
 const nowIso = () => new Date().toISOString();
+const DEFAULT_TRIM_CEILING_PCT = 7;
+const DEFAULT_TRIM_TRIGGER_PCT = 20;
+const DEFAULT_TRIM_SLICE_PCT = 12;
+
+type TrimAlertInput = {
+  shares: number;
+  costBasisPrice: number;
+  currentPrice: number;
+  currentAllocPct: number;
+  ceilingPct?: number;
+  lastTrimPrice?: number | null;
+  trimTriggerPct?: number;
+  trimSlicePct?: number;
+};
+
+type TrimAlertResult = {
+  shouldTrim: boolean;
+  suggestedShares: number;
+  gainSinceReference: number;
+  isOverCeiling: boolean;
+};
+
+type TrimSettingsDraft = {
+  ceilingPct: string;
+  trimTriggerPct: string;
+  trimSlicePct: string;
+};
+
+type TrimMarkDraft = {
+  sharesTrimmed: string;
+  price: string;
+  date: string;
+};
+
+const resolveTrimSettings = (
+  settings: { trimPolicy?: { ceilingPct: number; trimTriggerPct: number; trimSlicePct: number } }
+): { ceilingPct: number; trimTriggerPct: number; trimSlicePct: number } => ({
+  ceilingPct: settings.trimPolicy?.ceilingPct ?? DEFAULT_TRIM_CEILING_PCT,
+  trimTriggerPct: settings.trimPolicy?.trimTriggerPct ?? DEFAULT_TRIM_TRIGGER_PCT,
+  trimSlicePct: settings.trimPolicy?.trimSlicePct ?? DEFAULT_TRIM_SLICE_PCT,
+});
+
+const calcTrimAlert = (holding: TrimAlertInput): TrimAlertResult => {
+  const referencePrice = holding.lastTrimPrice ?? holding.costBasisPrice;
+  const validReferencePrice = referencePrice > 0 ? referencePrice : holding.currentPrice;
+  const gainSinceReference = validReferencePrice > 0 ? (holding.currentPrice - validReferencePrice) / validReferencePrice : 0;
+  const ceilingPct = holding.ceilingPct ?? DEFAULT_TRIM_CEILING_PCT;
+  const trimTriggerPct = holding.trimTriggerPct ?? DEFAULT_TRIM_TRIGGER_PCT;
+  const trimSlicePct = holding.trimSlicePct ?? DEFAULT_TRIM_SLICE_PCT;
+  const isOverCeiling = holding.currentAllocPct > ceilingPct;
+  const shouldTrim = isOverCeiling && gainSinceReference >= trimTriggerPct / 100;
+  const suggestedShares = Math.round(holding.shares * (trimSlicePct / 100));
+  return { shouldTrim, suggestedShares, gainSinceReference, isOverCeiling };
+};
+
+const useTrimAlert = (holding: TrimAlertInput): TrimAlertResult =>
+  useMemo(
+    () => calcTrimAlert(holding),
+    [
+      holding.shares,
+      holding.costBasisPrice,
+      holding.currentPrice,
+      holding.currentAllocPct,
+      holding.ceilingPct,
+      holding.lastTrimPrice,
+      holding.trimTriggerPct,
+      holding.trimSlicePct,
+    ]
+  );
+
+const toDateInputValue = (isoOrDate: string): string => {
+  const parsed = new Date(isoOrDate);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date().toISOString().slice(0, 10);
+  }
+  return parsed.toISOString().slice(0, 10);
+};
+
+const parseDateInput = (value: string): string | null => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return null;
+  }
+  const normalized = `${value.trim()}T00:00:00.000Z`;
+  return Number.isNaN(new Date(normalized).getTime()) ? null : normalized;
+};
+
+const TrimStatusCard = ({
+  alertInput,
+  allocationPct,
+  ceilingPct,
+  trimTriggerPct,
+}: {
+  alertInput: TrimAlertInput;
+  allocationPct: number;
+  ceilingPct: number;
+  trimTriggerPct: number;
+}) => {
+  const trimAlert = useTrimAlert(alertInput);
+  const overByPct = Math.max(0, allocationPct - ceilingPct);
+  const gainSinceReferencePct = trimAlert.gainSinceReference * 100;
+  const remainingGainPct = Math.max(0, trimTriggerPct - gainSinceReferencePct);
+
+  return (
+    <View
+      style={[
+        styles.trimStatusCard,
+        trimAlert.shouldTrim
+          ? styles.trimStatusAlert
+          : trimAlert.isOverCeiling
+            ? styles.trimStatusWaiting
+            : styles.trimStatusWithin,
+      ]}
+    >
+      <Text style={styles.trimStatusText}>
+        {trimAlert.shouldTrim
+          ? `Over ceiling by ${overByPct.toFixed(1)}% • Up ${gainSinceReferencePct.toFixed(1)}% since last trim • Suggested trim: ${trimAlert.suggestedShares} shares`
+          : trimAlert.isOverCeiling
+            ? `Over ceiling, waiting for +${remainingGainPct.toFixed(1)}% more gain to trigger`
+            : "Within target allocation"}
+      </Text>
+    </View>
+  );
+};
 
 /**
  * Full-precision currency formatting for the mobile row — always 2 decimals,
@@ -119,6 +242,7 @@ export function HoldingsSection() {
   // Below this width we swap the column table for a single stacked-column row list.
   const isMobile = viewportWidth < 768;
   const settings = usePortfolioStore((state) => state.settings);
+  const trimBySymbol = usePortfolioStore((state) => state.trimBySymbol);
   const accounts = usePortfolioStore((state) => state.accounts);
   const fxRates = usePortfolioStore((state) => state.fxRates);
   const manualHoldings = usePortfolioStore((state) => state.holdings);
@@ -127,6 +251,8 @@ export function HoldingsSection() {
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
+  const updateSettings = usePortfolioStore((state) => state.updateSettings);
+  const recordTrimEvent = usePortfolioStore((state) => state.recordTrimEvent);
   const addAccount = usePortfolioStore((state) => state.addAccount);
   const addCashHolding = usePortfolioStore((state) => state.addCashHolding);
   const setAccountTransactions = usePortfolioStore((state) => state.setAccountTransactions);
@@ -152,7 +278,7 @@ export function HoldingsSection() {
   const [showCash, setShowCash] = useState(false);
   const [cashInfoVisible, setCashInfoVisible] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const [expandedTab, setExpandedTab] = useState<Record<string, "accounts" | "transactions" | "info">>({});
+  const [expandedTab, setExpandedTab] = useState<Record<string, "accounts" | "transactions" | "info" | "trim">>({});
   const [isAddVisible, setIsAddVisible] = useState(false);
   const [isAddMenuVisible, setIsAddMenuVisible] = useState(false);
   const [addMenuAnchor, setAddMenuAnchor] = useState<{ top: number; right: number } | null>(null);
@@ -165,6 +291,9 @@ export function HoldingsSection() {
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
   const [hoveredHeader, setHoveredHeader] = useState<SortColumn | null>(null);
   const [collapsedAccounts, setCollapsedAccounts] = useState<Record<string, boolean>>({});
+  const [trimSettingsDrafts, setTrimSettingsDrafts] = useState<Record<string, TrimSettingsDraft>>({});
+  const [trimMarkDrafts, setTrimMarkDrafts] = useState<Record<string, TrimMarkDraft>>({});
+  const [openTrimMarkForm, setOpenTrimMarkForm] = useState<Record<string, boolean>>({});
 
   // Subtle continuous spin for the refresh icon while a refresh is in-flight.
   const spinValue = useRef(new Animated.Value(0)).current;
@@ -575,6 +704,55 @@ export function HoldingsSection() {
     setSortDirection("desc");
   };
 
+  const saveTrimSettings = (group: DisplayGroup) => {
+    const draft = trimSettingsDrafts[group.id];
+    if (!draft) return;
+    const ceilingPct = parseNumber(draft.ceilingPct);
+    const trimTriggerPct = parseNumber(draft.trimTriggerPct);
+    const trimSlicePct = parseNumber(draft.trimSlicePct);
+    if (ceilingPct < 0 || trimTriggerPct < 0 || trimSlicePct <= 0) return;
+    if (!Number.isFinite(ceilingPct) || !Number.isFinite(trimTriggerPct) || !Number.isFinite(trimSlicePct)) return;
+    updateSettings({
+      trimPolicy: {
+        ceilingPct,
+        trimTriggerPct,
+        trimSlicePct,
+      },
+      updatedAt: nowIso(),
+    });
+  };
+
+  const openMarkTrimForm = (group: DisplayGroup, defaultPrice: number) => {
+    setTrimMarkDrafts((prev) => ({
+      ...prev,
+      [group.id]: prev[group.id] ?? {
+        sharesTrimmed: "",
+        price: defaultPrice > 0 ? String(defaultPrice) : "",
+        date: toDateInputValue(nowIso()),
+      },
+    }));
+    setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: true }));
+  };
+
+  const submitTrimMark = (group: DisplayGroup) => {
+    const draft = trimMarkDrafts[group.id];
+    if (!draft) return;
+    const sharesTrimmed = parseNumber(draft.sharesTrimmed);
+    const price = parseNumber(draft.price);
+    const parsedDate = parseDateInput(draft.date);
+    if (!Number.isFinite(sharesTrimmed) || !Number.isFinite(price) || sharesTrimmed <= 0 || price <= 0 || !parsedDate) return;
+    const trimEvent: TrimHistoryEntry = { date: parsedDate, price, sharesTrimmed };
+    recordTrimEvent(group.title, trimEvent);
+    setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }));
+    setTrimMarkDrafts((prev) => ({
+      ...prev,
+      [group.id]: {
+        ...(prev[group.id] ?? { sharesTrimmed: "", price: String(price), date: toDateInputValue(parsedDate) }),
+        sharesTrimmed: "",
+      },
+    }));
+  };
+
   // Open the Add / Import dropdowns anchored just below their buttons.
   const openAddMenu = () => {
     addBtnRef.current?.measureInWindow((x, y, width, height) => {
@@ -625,6 +803,36 @@ export function HoldingsSection() {
     const tickerColor = getTickerColor(group.title);
     const tickerTransactions =
       isExpanded && (currentTab === "transactions" || currentTab === "info") ? getTickerTransactions(group.title) : [];
+    const primaryLot = group.lots[0];
+    const trimSettings = resolveTrimSettings(settings);
+    const trimSymbolKey = normalizeIndiaTicker(group.title);
+    const trimState = trimBySymbol[trimSymbolKey] ?? { lastTrimPrice: null, history: [] };
+    const totalShares = group.lots.reduce((sum, lot) => sum + lot.quantity, 0);
+    const totalCostNative = group.lots.reduce((sum, lot) => sum + lot.quantity * lot.averagePrice, 0);
+    const weightedAvgCost = totalShares > 0 ? totalCostNative / totalShares : 0;
+    const weightedMarketPrice =
+      totalShares > 0 ? group.lots.reduce((sum, lot) => sum + lot.quantity * lot.marketPrice, 0) / totalShares : 0;
+    const trimAlertInput: TrimAlertInput = {
+      shares: totalShares,
+      costBasisPrice: weightedAvgCost,
+      currentPrice: weightedMarketPrice,
+      currentAllocPct: group.allocationPct,
+      ceilingPct: trimSettings.ceilingPct,
+      lastTrimPrice: trimState.lastTrimPrice,
+      trimTriggerPct: trimSettings.trimTriggerPct,
+      trimSlicePct: trimSettings.trimSlicePct,
+    };
+    const trimSettingsDraft = trimSettingsDrafts[group.id] ?? {
+      ceilingPct: String(trimSettings.ceilingPct),
+      trimTriggerPct: String(trimSettings.trimTriggerPct),
+      trimSlicePct: String(trimSettings.trimSlicePct),
+    };
+    const trimMarkDraft = trimMarkDrafts[group.id] ?? {
+      sharesTrimmed: "",
+      price: weightedMarketPrice > 0 ? String(weightedMarketPrice) : "",
+      date: toDateInputValue(nowIso()),
+    };
+    const trimHistory = trimState.history;
 
     return (
       <View key={group.id}>
@@ -745,6 +953,12 @@ export function HoldingsSection() {
                 style={[styles.tab, currentTab === "info" && styles.tabActive]}
               >
                 <Text style={[styles.tabText, currentTab === "info" && { color: colors.accent }]}>Info</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setExpandedTab((prev) => ({ ...prev, [group.id]: "trim" }))}
+                style={[styles.tab, currentTab === "trim" && styles.tabActive]}
+              >
+                <Text style={[styles.tabText, currentTab === "trim" && { color: colors.accent }]}>Trim</Text>
               </Pressable>
             </View>
 
@@ -919,6 +1133,178 @@ export function HoldingsSection() {
                     </>
                   );
                 })()}
+              </View>
+            )}
+
+            {currentTab === "trim" && (
+              <View style={styles.trimTabWrap}>
+                <TrimStatusCard
+                  alertInput={trimAlertInput}
+                  allocationPct={group.allocationPct}
+                  ceilingPct={trimSettings.ceilingPct}
+                  trimTriggerPct={trimSettings.trimTriggerPct}
+                />
+
+                <View style={styles.trimSettingsCard}>
+                  <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Global trim settings</Text>
+
+                  <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Ceiling %</Text>
+                  <TextInput
+                    value={trimSettingsDraft.ceilingPct}
+                    onChangeText={(value) =>
+                      setTrimSettingsDrafts((prev) => ({
+                        ...prev,
+                        [group.id]: { ...trimSettingsDraft, ceilingPct: value },
+                      }))
+                    }
+                    keyboardType="decimal-pad"
+                    style={styles.trimInput}
+                    placeholderTextColor={colors.muted}
+                  />
+
+                  <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Trigger gain %</Text>
+                  <TextInput
+                    value={trimSettingsDraft.trimTriggerPct}
+                    onChangeText={(value) =>
+                      setTrimSettingsDrafts((prev) => ({
+                        ...prev,
+                        [group.id]: { ...trimSettingsDraft, trimTriggerPct: value },
+                      }))
+                    }
+                    keyboardType="decimal-pad"
+                    style={styles.trimInput}
+                    placeholderTextColor={colors.muted}
+                  />
+
+                  <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Trim slice %</Text>
+                  <TextInput
+                    value={trimSettingsDraft.trimSlicePct}
+                    onChangeText={(value) =>
+                      setTrimSettingsDrafts((prev) => ({
+                        ...prev,
+                        [group.id]: { ...trimSettingsDraft, trimSlicePct: value },
+                      }))
+                    }
+                    keyboardType="decimal-pad"
+                    style={styles.trimInput}
+                    placeholderTextColor={colors.muted}
+                  />
+
+                  <Pressable style={styles.trimPrimaryBtn} onPress={() => saveTrimSettings(group)}>
+                    <Text style={styles.trimPrimaryBtnText}>Save settings</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.trimSettingsCard}>
+                  <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Mark as trimmed</Text>
+                  <Pressable style={styles.trimPrimaryBtn} onPress={() => openMarkTrimForm(group, weightedMarketPrice)}>
+                    <Text style={styles.trimPrimaryBtnText}>Mark as trimmed</Text>
+                  </Pressable>
+
+                  {openTrimMarkForm[group.id] ? (
+                    <View style={styles.trimMarkFormWrap}>
+                      <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Shares sold</Text>
+                      <TextInput
+                        value={trimMarkDraft.sharesTrimmed}
+                        onChangeText={(value) =>
+                          setTrimMarkDrafts((prev) => ({
+                            ...prev,
+                            [group.id]: { ...trimMarkDraft, sharesTrimmed: value },
+                          }))
+                        }
+                        keyboardType="decimal-pad"
+                        style={styles.trimInput}
+                        placeholderTextColor={colors.muted}
+                      />
+                      <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Price</Text>
+                      <TextInput
+                        value={trimMarkDraft.price}
+                        onChangeText={(value) =>
+                          setTrimMarkDrafts((prev) => ({
+                            ...prev,
+                            [group.id]: { ...trimMarkDraft, price: value },
+                          }))
+                        }
+                        keyboardType="decimal-pad"
+                        style={styles.trimInput}
+                        placeholderTextColor={colors.muted}
+                      />
+                      <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Date (YYYY-MM-DD)</Text>
+                      <TextInput
+                        value={trimMarkDraft.date}
+                        onChangeText={(value) =>
+                          setTrimMarkDrafts((prev) => ({
+                            ...prev,
+                            [group.id]: { ...trimMarkDraft, date: value },
+                          }))
+                        }
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        style={styles.trimInput}
+                        placeholderTextColor={colors.muted}
+                      />
+                      <View style={styles.trimInlineActions}>
+                        <Pressable
+                          style={styles.trimGhostBtn}
+                          onPress={() => setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }))}
+                        >
+                          <Text style={[styles.trimGhostBtnText, { color: colors.muted }]}>Cancel</Text>
+                        </Pressable>
+                        <Pressable style={styles.trimPrimaryBtn} onPress={() => submitTrimMark(group)}>
+                          <Text style={styles.trimPrimaryBtnText}>Save trim</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.trimSettingsCard}>
+                  <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Trim history</Text>
+                  {trimHistory.length === 0 ? (
+                    <Text style={[styles.trimHintText, { color: colors.muted }]}>No trims recorded yet.</Text>
+                  ) : (
+                    <View style={styles.trimHistoryTable}>
+                      <View style={styles.trimHistoryHeaderRow}>
+                        <Text style={[styles.trimHistoryHeaderCell, { color: colors.muted }]}>Date</Text>
+                        <Text style={[styles.trimHistoryHeaderCell, styles.trimHistoryCellRight, { color: colors.muted }]}>Price</Text>
+                        <Text style={[styles.trimHistoryHeaderCell, styles.trimHistoryCellRight, { color: colors.muted }]}>Shares</Text>
+                        <Text style={[styles.trimHistoryHeaderCell, styles.trimHistoryCellRight, { color: colors.muted }]}>Realized</Text>
+                      </View>
+                      {[...trimHistory]
+                        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                        .map((event, idx) => {
+                          const realizedGain = (event.price - weightedAvgCost) * event.sharesTrimmed;
+                          return (
+                            <View key={`${event.date}-${event.price}-${event.sharesTrimmed}-${idx}`} style={styles.trimHistoryDataRow}>
+                              <Text style={[styles.trimHistoryCell, { color: colors.text }]}>
+                                {new Date(event.date).toLocaleDateString(undefined, {
+                                  year: "numeric",
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                              </Text>
+                              <Text style={[styles.trimHistoryCell, styles.trimHistoryCellRight, { color: colors.text }]}>
+                                {formatMoney(event.price, primaryLot?.currency ?? settings.reportingCurrency)}
+                              </Text>
+                              <Text style={[styles.trimHistoryCell, styles.trimHistoryCellRight, { color: colors.text }]}>
+                                {event.sharesTrimmed.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.trimHistoryCell,
+                                  styles.trimHistoryCellRight,
+                                  { color: realizedGain >= 0 ? colors.positive : colors.negative },
+                                ]}
+                              >
+                                {realizedGain >= 0 ? "+" : ""}
+                                {formatMoney(realizedGain, primaryLot?.currency ?? settings.reportingCurrency)}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                    </View>
+                  )}
+                </View>
               </View>
             )}
           </View>
@@ -1978,6 +2364,134 @@ const styles = StyleSheet.create({
   },
   tabContent: {
     gap: spacing.sm,
+  },
+  trimTabWrap: {
+    gap: spacing.sm,
+  },
+  trimStatusCard: {
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  trimStatusAlert: {
+    borderColor: "#A64848",
+    backgroundColor: "rgba(166,72,72,0.18)",
+  },
+  trimStatusWaiting: {
+    borderColor: "#7A6733",
+    backgroundColor: "rgba(122,103,51,0.18)",
+  },
+  trimStatusWithin: {
+    borderColor: "#2F7A52",
+    backgroundColor: "rgba(47,122,82,0.16)",
+  },
+  trimStatusText: {
+    color: defaultColors.text,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  trimSettingsCard: {
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: defaultColors.border,
+    backgroundColor: defaultColors.bg,
+    padding: spacing.md,
+  },
+  trimSectionTitle: {
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
+    marginBottom: spacing.xs,
+  },
+  trimInputLabel: {
+    marginTop: spacing.sm,
+    fontSize: typography.micro,
+  },
+  trimInput: {
+    marginTop: spacing.xs,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: defaultColors.border,
+    backgroundColor: defaultColors.surface,
+    color: defaultColors.text,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  trimInputDisabled: {
+    opacity: 0.6,
+  },
+  trimPrimaryBtn: {
+    marginTop: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: defaultColors.accent,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    alignSelf: "flex-start",
+  },
+  trimPrimaryBtnText: {
+    color: defaultColors.bg,
+    fontSize: typography.caption,
+    fontWeight: typography.weightSemibold,
+  },
+  trimBtnDisabled: {
+    opacity: 0.55,
+  },
+  trimHintText: {
+    fontSize: typography.micro,
+    lineHeight: 16,
+  },
+  trimMarkFormWrap: {
+    marginTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  trimInlineActions: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.sm,
+  },
+  trimGhostBtn: {
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  trimGhostBtnText: {
+    fontSize: typography.caption,
+  },
+  trimHistoryTable: {
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: defaultColors.border,
+    borderRadius: radii.md,
+    overflow: "hidden",
+  },
+  trimHistoryHeaderRow: {
+    flexDirection: "row",
+    backgroundColor: defaultColors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: defaultColors.border,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  trimHistoryDataRow: {
+    flexDirection: "row",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: defaultColors.border,
+  },
+  trimHistoryHeaderCell: {
+    flex: 1,
+    fontSize: typography.micro,
+    fontWeight: typography.weightSemibold,
+  },
+  trimHistoryCell: {
+    flex: 1,
+    fontSize: typography.caption,
+  },
+  trimHistoryCellRight: {
+    textAlign: "right",
+    fontVariant: ["tabular-nums"],
   },
   lotRow: {
     flexDirection: "row",

@@ -50,6 +50,33 @@ export interface Holding {
    * twice to the same snapshot/manual holding.
    */
   appliedCorporateActions?: string[];
+  /** Maximum portfolio allocation target for this stock (percentage). */
+  ceilingPct?: number;
+  /** Most recent trim execution price used as the next trigger reference. */
+  lastTrimPrice?: number | null;
+  /** Gain threshold (percentage) from reference price to trigger trim alert. */
+  trimTriggerPct?: number;
+  /** Suggested trim size as percent of held shares when triggered. */
+  trimSlicePct?: number;
+  /** Historical trim events recorded by the user. */
+  trimHistory?: TrimHistoryEntry[];
+}
+
+export interface TrimHistoryEntry {
+  date: TimestampISO;
+  price: number;
+  sharesTrimmed: number;
+}
+
+export interface TrimPolicy {
+  ceilingPct: number;
+  trimTriggerPct: number;
+  trimSlicePct: number;
+}
+
+export interface TrimSymbolState {
+  lastTrimPrice: number | null;
+  history: TrimHistoryEntry[];
 }
 
 export interface CashHolding {
@@ -106,6 +133,8 @@ export interface PortfolioSettings {
   spotlightTourSeen?: boolean;
   /** User-defined target allocation for rebalancing suggestions. */
   targetAllocation?: TargetAllocation | null;
+  /** Global trim policy applied to all symbols for this user. */
+  trimPolicy?: TrimPolicy;
   /** How long to retain historical allocation/timeline snapshots. */
   timelineRetention?: TimelineRetention;
   /** App theme mode: light, dark, or system default */
@@ -138,4 +167,3 @@ export interface ExposureBySymbol {
   totalValueInINR: number;
   totalValueInUSD: number;
 }
-

@@ -24,6 +24,9 @@ import type {
   FxRates,
   Holding,
   PortfolioSettings,
+  TrimHistoryEntry,
+  TrimPolicy,
+  TrimSymbolState,
   TimelineRetention,
 } from "../types/portfolio";
 import type { Transaction } from "../types/transaction";
@@ -35,6 +38,98 @@ const normalizeSettings = (settings: Partial<PortfolioSettings> | undefined): Po
   onboardingTipsSeen: Boolean(settings?.onboardingTipsSeen),
   spotlightTourSeen: Boolean(settings?.spotlightTourSeen),
 });
+
+const DEFAULT_TRIM_POLICY: TrimPolicy = {
+  ceilingPct: 7,
+  trimTriggerPct: 20,
+  trimSlicePct: 12,
+};
+
+const normalizeTrimSymbolKey = (symbol: string): string => symbol.trim().toUpperCase().replace(/\.(NS|BO)$/i, "");
+
+const normalizeTrimBySymbol = (
+  trimBySymbol: Record<string, TrimSymbolState> | undefined
+): Record<string, TrimSymbolState> => {
+  if (!trimBySymbol) return {};
+  const next: Record<string, TrimSymbolState> = {};
+  for (const [rawSymbol, entry] of Object.entries(trimBySymbol)) {
+    if (!entry || typeof entry !== "object") continue;
+    const symbol = normalizeTrimSymbolKey(rawSymbol);
+    const prev = next[symbol] ?? { lastTrimPrice: null, history: [] };
+    const history = Array.isArray(entry.history)
+      ? entry.history.filter(
+          (event): event is TrimHistoryEntry =>
+            Boolean(event) &&
+            typeof event.date === "string" &&
+            typeof event.price === "number" &&
+            typeof event.sharesTrimmed === "number"
+        )
+      : [];
+    next[symbol] = {
+      lastTrimPrice: typeof entry.lastTrimPrice === "number" ? entry.lastTrimPrice : prev.lastTrimPrice,
+      history: [...prev.history, ...history],
+    };
+  }
+  return next;
+};
+
+const deriveLegacyTrimBySymbol = (holdings: Holding[]): Record<string, TrimSymbolState> => {
+  const ledger: Record<string, TrimSymbolState> = {};
+  for (const holding of holdings) {
+    const symbol = normalizeTrimSymbolKey(holding.symbol);
+    if (!symbol) continue;
+    const existing = ledger[symbol] ?? { lastTrimPrice: null, history: [] };
+    const history = Array.isArray(holding.trimHistory)
+      ? holding.trimHistory.filter(
+          (event): event is TrimHistoryEntry =>
+            Boolean(event) &&
+            typeof event.date === "string" &&
+            typeof event.price === "number" &&
+            typeof event.sharesTrimmed === "number"
+        )
+      : [];
+    ledger[symbol] = {
+      lastTrimPrice: typeof holding.lastTrimPrice === "number" ? holding.lastTrimPrice : existing.lastTrimPrice,
+      history: [...existing.history, ...history],
+    };
+  }
+  return ledger;
+};
+
+const deriveLegacyTrimPolicy = (holdings: Holding[]): Partial<TrimPolicy> => {
+  for (const holding of holdings) {
+    const ceilingPct = typeof holding.ceilingPct === "number" ? holding.ceilingPct : undefined;
+    const trimTriggerPct = typeof holding.trimTriggerPct === "number" ? holding.trimTriggerPct : undefined;
+    const trimSlicePct = typeof holding.trimSlicePct === "number" ? holding.trimSlicePct : undefined;
+    if (ceilingPct !== undefined || trimTriggerPct !== undefined || trimSlicePct !== undefined) {
+      return { ceilingPct, trimTriggerPct, trimSlicePct };
+    }
+  }
+  return {};
+};
+
+const normalizeTrimState = (
+  settings: PortfolioSettings,
+  holdings: Holding[],
+  trimBySymbol: Record<string, TrimSymbolState> | undefined
+): { settings: PortfolioSettings; trimBySymbol: Record<string, TrimSymbolState> } => {
+  const legacyPolicy = deriveLegacyTrimPolicy(holdings);
+  const policy: TrimPolicy = {
+    ceilingPct: settings.trimPolicy?.ceilingPct ?? legacyPolicy.ceilingPct ?? DEFAULT_TRIM_POLICY.ceilingPct,
+    trimTriggerPct:
+      settings.trimPolicy?.trimTriggerPct ?? legacyPolicy.trimTriggerPct ?? DEFAULT_TRIM_POLICY.trimTriggerPct,
+    trimSlicePct: settings.trimPolicy?.trimSlicePct ?? legacyPolicy.trimSlicePct ?? DEFAULT_TRIM_POLICY.trimSlicePct,
+  };
+
+  const normalizedLedger = normalizeTrimBySymbol(trimBySymbol);
+  const legacyLedger = deriveLegacyTrimBySymbol(holdings);
+  const mergedLedger = { ...legacyLedger, ...normalizedLedger };
+
+  return {
+    settings: { ...settings, trimPolicy: policy },
+    trimBySymbol: mergedLedger,
+  };
+};
 
 const DRIFT_SNAPSHOT_LIMIT = 500;
 
@@ -238,6 +333,7 @@ interface PortfolioState {
   allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
   fxRates: FxRates;
+  trimBySymbol: Record<string, TrimSymbolState>;
   /** Cached market prices for symbols (used for transaction-derived holdings) */
   marketPrices: Record<string, number>;
   /**
@@ -294,6 +390,7 @@ interface PortfolioState {
   removeStockSplit: (id: string) => void;
 
   updateSettings: (updates: Partial<PortfolioSettings>) => void;
+  recordTrimEvent: (symbol: string, event: TrimHistoryEntry) => void;
   updateFxRates: (rates: FxRates) => void;
   clearAllData: () => void;
 
@@ -331,13 +428,14 @@ export const usePortfolioStore = create<PortfolioState>()(
       ],
       settings: seedSettings,
       fxRates: seedFxRates,
+      trimBySymbol: {},
       marketPrices: {},
       stockSplits: [],
       snapshotUpdatedAt: SEED_SNAPSHOT_TIMESTAMP,
       hydrated: false,
       setHydrated: (value: boolean) => set({ hydrated: value }),
       getSnapshot: () => {
-        const { accounts, holdings, cashHoldings, transactions, allocationSnapshots, settings, fxRates, snapshotUpdatedAt } = get();
+        const { accounts, holdings, cashHoldings, transactions, allocationSnapshots, settings, trimBySymbol, fxRates, snapshotUpdatedAt } = get();
         return {
           accounts,
           holdings,
@@ -345,36 +443,42 @@ export const usePortfolioStore = create<PortfolioState>()(
           transactions,
           allocationSnapshots,
           settings,
+          trimBySymbol,
           fxRates,
           snapshotUpdatedAt,
         };
       },
       replaceFromSnapshot: (snapshot: PortfolioSnapshotData) =>
-        set({
-          accounts: snapshot.accounts,
-          holdings: snapshot.holdings,
-          cashHoldings: snapshot.cashHoldings,
-          transactions: snapshot.transactions ?? [],
-          allocationSnapshots: pruneSnapshotsByRetention(
-            normalizeAllocationSnapshots(
-              snapshot.allocationSnapshots?.length
-                ? snapshot.allocationSnapshots
-                : [
-                    buildAllocationSnapshot(
-                      snapshot.holdings,
-                      snapshot.cashHoldings,
-                      snapshot.fxRates,
-                      snapshot.settings.reportingCurrency,
-                      snapshot.snapshotUpdatedAt
-                    ),
-                  ]
+        set(() => {
+          const normalizedSettings = normalizeSettings(snapshot.settings);
+          const normalizedTrim = normalizeTrimState(normalizedSettings, snapshot.holdings, snapshot.trimBySymbol);
+          return {
+            accounts: snapshot.accounts,
+            holdings: snapshot.holdings,
+            cashHoldings: snapshot.cashHoldings,
+            transactions: snapshot.transactions ?? [],
+            allocationSnapshots: pruneSnapshotsByRetention(
+              normalizeAllocationSnapshots(
+                snapshot.allocationSnapshots?.length
+                  ? snapshot.allocationSnapshots
+                  : [
+                      buildAllocationSnapshot(
+                        snapshot.holdings,
+                        snapshot.cashHoldings,
+                        snapshot.fxRates,
+                        snapshot.settings.reportingCurrency,
+                        snapshot.snapshotUpdatedAt
+                      ),
+                    ]
+              ),
+              snapshot.settings.timelineRetention,
+              snapshot.snapshotUpdatedAt
             ),
-            snapshot.settings.timelineRetention,
-            snapshot.snapshotUpdatedAt
-          ),
-          settings: normalizeSettings(snapshot.settings),
-          fxRates: snapshot.fxRates,
-          snapshotUpdatedAt: snapshot.snapshotUpdatedAt,
+            settings: normalizedTrim.settings,
+            trimBySymbol: normalizedTrim.trimBySymbol,
+            fxRates: snapshot.fxRates,
+            snapshotUpdatedAt: snapshot.snapshotUpdatedAt,
+          };
         }),
 
       addAccount: (account: Account) =>
@@ -592,7 +696,7 @@ export const usePortfolioStore = create<PortfolioState>()(
       updateSettings: (updates: Partial<PortfolioSettings>) =>
         set((state) => {
           const now = new Date().toISOString();
-          const settings = { ...state.settings, ...updates };
+          const settings = normalizeSettings({ ...state.settings, ...updates });
           const retentionChanged =
             typeof updates.timelineRetention !== "undefined" &&
             updates.timelineRetention !== state.settings.timelineRetention;
@@ -602,6 +706,25 @@ export const usePortfolioStore = create<PortfolioState>()(
               ? pruneSnapshotsByRetention(state.allocationSnapshots, settings.timelineRetention, now)
               : state.allocationSnapshots,
             snapshotUpdatedAt: now,
+          };
+        }),
+      recordTrimEvent: (symbol: string, event: TrimHistoryEntry) =>
+        set((state) => {
+          const key = normalizeTrimSymbolKey(symbol);
+          if (!key) return {};
+          const current = state.trimBySymbol[key] ?? { lastTrimPrice: null, history: [] };
+          const nextHistory = [...current.history, event].sort(
+            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+          );
+          return {
+            trimBySymbol: {
+              ...state.trimBySymbol,
+              [key]: {
+                lastTrimPrice: event.price,
+                history: nextHistory,
+              },
+            },
+            snapshotUpdatedAt: new Date().toISOString(),
           };
         }),
       updateFxRates: (rates: FxRates) => set({ fxRates: rates, snapshotUpdatedAt: new Date().toISOString() }),
@@ -687,6 +810,7 @@ export const usePortfolioStore = create<PortfolioState>()(
           allocationSnapshots: [],
           settings: seedSettings,
           fxRates: seedFxRates,
+          trimBySymbol: {},
           marketPrices: {},
           snapshotUpdatedAt: new Date().toISOString(),
         }),
@@ -732,6 +856,7 @@ export const usePortfolioStore = create<PortfolioState>()(
         transactions: state.transactions,
         allocationSnapshots: state.allocationSnapshots,
         settings: state.settings,
+        trimBySymbol: state.trimBySymbol,
         fxRates: state.fxRates,
         marketPrices: state.marketPrices,
         stockSplits: state.stockSplits,
@@ -758,6 +883,7 @@ export const usePortfolioStore = create<PortfolioState>()(
             transactions: state.transactions ?? [],
             allocationSnapshots: state.allocationSnapshots,
             settings: normalizeSettings(state.settings),
+            trimBySymbol: state.trimBySymbol ?? {},
             fxRates: state.fxRates,
             snapshotUpdatedAt: new Date().toISOString(),
           });
@@ -781,6 +907,7 @@ export const usePortfolioStore = create<PortfolioState>()(
               ),
             ],
             settings: normalizeSettings(state.settings),
+            trimBySymbol: state.trimBySymbol ?? {},
             fxRates: state.fxRates,
             snapshotUpdatedAt: state.snapshotUpdatedAt || new Date().toISOString(),
           });
@@ -801,18 +928,35 @@ export const usePortfolioStore = create<PortfolioState>()(
             transactions: state.transactions ?? [],
             allocationSnapshots: normalizeAllocationSnapshots(state.allocationSnapshots),
             settings: normalizeSettings(state.settings),
+            trimBySymbol: state.trimBySymbol ?? {},
             fxRates: state.fxRates,
             snapshotUpdatedAt: state.snapshotUpdatedAt || new Date().toISOString(),
           });
         } else if (
           state &&
-          (typeof state.settings?.onboardingTipsSeen !== "boolean" || !state.settings?.timelineRetention)
+          (
+            typeof state.settings?.onboardingTipsSeen !== "boolean" ||
+            !state.settings?.timelineRetention ||
+            !state.settings?.trimPolicy ||
+            !state.trimBySymbol
+          )
         ) {
-          state.updateSettings(normalizeSettings(state.settings));
+          const normalizedSettings = normalizeSettings(state.settings);
+          const normalizedTrim = normalizeTrimState(normalizedSettings, state.holdings, state.trimBySymbol);
+          state.replaceFromSnapshot({
+            accounts: state.accounts,
+            holdings: state.holdings,
+            cashHoldings: state.cashHoldings,
+            transactions: state.transactions ?? [],
+            allocationSnapshots: state.allocationSnapshots,
+            settings: normalizedTrim.settings,
+            trimBySymbol: normalizedTrim.trimBySymbol,
+            fxRates: state.fxRates,
+            snapshotUpdatedAt: state.snapshotUpdatedAt || new Date().toISOString(),
+          });
         }
         state?.setHydrated(true);
       },
     }
   )
 );
-

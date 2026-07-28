@@ -5,6 +5,7 @@ import type {
   FxRates,
   Holding,
   PortfolioSettings,
+  TrimSymbolState,
 } from "../../types/portfolio";
 import type { Transaction } from "../../types/transaction";
 
@@ -15,6 +16,7 @@ export interface PortfolioSnapshotData {
   transactions?: Transaction[];
   allocationSnapshots: AllocationSnapshot[];
   settings: PortfolioSettings;
+  trimBySymbol?: Record<string, TrimSymbolState>;
   fxRates: FxRates;
   snapshotUpdatedAt: string;
 }
@@ -81,8 +83,29 @@ export const parseSnapshotPayload = (input: unknown): PortfolioSnapshotData | nu
         }))
       : [],
     settings: p.settings,
+    trimBySymbol:
+      p.trimBySymbol && typeof p.trimBySymbol === "object"
+        ? Object.entries(p.trimBySymbol as Record<string, TrimSymbolState>).reduce<Record<string, TrimSymbolState>>(
+            (acc, [symbol, entry]) => {
+              const history = Array.isArray(entry?.history)
+                ? entry.history.filter(
+                    (event) =>
+                      Boolean(event) &&
+                      typeof event.date === "string" &&
+                      typeof event.price === "number" &&
+                      typeof event.sharesTrimmed === "number"
+                  )
+                : [];
+              acc[symbol] = {
+                lastTrimPrice: typeof entry?.lastTrimPrice === "number" ? entry.lastTrimPrice : null,
+                history,
+              };
+              return acc;
+            },
+            {}
+          )
+        : {},
     fxRates: p.fxRates,
     snapshotUpdatedAt: p.snapshotUpdatedAt,
   } as PortfolioSnapshotData;
 };
-
