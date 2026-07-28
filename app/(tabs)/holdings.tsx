@@ -81,6 +81,12 @@ const nowIso = () => new Date().toISOString();
 const DEFAULT_TRIM_CEILING_PCT = 7;
 const DEFAULT_TRIM_TRIGGER_PCT = 20;
 const DEFAULT_TRIM_SLICE_PCT = 12;
+const TRIM_CEILING_MIN = 1;
+const TRIM_CEILING_MAX = 100;
+const TRIM_TRIGGER_MIN = 1;
+const TRIM_TRIGGER_MAX = 200;
+const TRIM_SLICE_MIN = 1;
+const TRIM_SLICE_MAX = 100;
 
 type TrimAlertInput = {
   shares: number;
@@ -113,11 +119,11 @@ type TrimMarkDraft = {
 };
 
 const resolveTrimSettings = (
-  settings: { trimPolicy?: { ceilingPct: number; trimTriggerPct: number; trimSlicePct: number } }
+  holding: Pick<Holding, "ceilingPct" | "trimTriggerPct" | "trimSlicePct"> | undefined
 ): { ceilingPct: number; trimTriggerPct: number; trimSlicePct: number } => ({
-  ceilingPct: settings.trimPolicy?.ceilingPct ?? DEFAULT_TRIM_CEILING_PCT,
-  trimTriggerPct: settings.trimPolicy?.trimTriggerPct ?? DEFAULT_TRIM_TRIGGER_PCT,
-  trimSlicePct: settings.trimPolicy?.trimSlicePct ?? DEFAULT_TRIM_SLICE_PCT,
+  ceilingPct: holding?.ceilingPct ?? DEFAULT_TRIM_CEILING_PCT,
+  trimTriggerPct: holding?.trimTriggerPct ?? DEFAULT_TRIM_TRIGGER_PCT,
+  trimSlicePct: holding?.trimSlicePct ?? DEFAULT_TRIM_SLICE_PCT,
 });
 
 const calcTrimAlert = (holding: TrimAlertInput): TrimAlertResult => {
@@ -132,21 +138,6 @@ const calcTrimAlert = (holding: TrimAlertInput): TrimAlertResult => {
   const suggestedShares = Math.round(holding.shares * (trimSlicePct / 100));
   return { shouldTrim, suggestedShares, gainSinceReference, isOverCeiling };
 };
-
-const useTrimAlert = (holding: TrimAlertInput): TrimAlertResult =>
-  useMemo(
-    () => calcTrimAlert(holding),
-    [
-      holding.shares,
-      holding.costBasisPrice,
-      holding.currentPrice,
-      holding.currentAllocPct,
-      holding.ceilingPct,
-      holding.lastTrimPrice,
-      holding.trimTriggerPct,
-      holding.trimSlicePct,
-    ]
-  );
 
 const toDateInputValue = (isoOrDate: string): string => {
   const parsed = new Date(isoOrDate);
@@ -164,6 +155,8 @@ const parseDateInput = (value: string): string | null => {
   return Number.isNaN(new Date(normalized).getTime()) ? null : normalized;
 };
 
+const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
+
 const TrimStatusCard = ({
   alertInput,
   allocationPct,
@@ -175,29 +168,30 @@ const TrimStatusCard = ({
   ceilingPct: number;
   trimTriggerPct: number;
 }) => {
-  const trimAlert = useTrimAlert(alertInput);
-  const overByPct = Math.max(0, allocationPct - ceilingPct);
+  const trimAlert = calcTrimAlert(alertInput);
+  const stateColor = trimAlert.shouldTrim ? defaultColors.negative : trimAlert.isOverCeiling ? "#D39A3E" : defaultColors.positive;
   const gainSinceReferencePct = trimAlert.gainSinceReference * 100;
-  const remainingGainPct = Math.max(0, trimTriggerPct - gainSinceReferencePct);
+  const allocationScaleMax = Math.max(allocationPct, ceilingPct, 1);
+  const allocationFillPct = clamp((allocationPct / allocationScaleMax) * 100, 0, 100);
+  const ceilingMarkerPct = clamp((ceilingPct / allocationScaleMax) * 100, 0, 100);
+  const gainProgressPct = trimTriggerPct > 0 ? clamp((gainSinceReferencePct / trimTriggerPct) * 100, 0, 100) : 0;
 
   return (
-    <View
-      style={[
-        styles.trimStatusCard,
-        trimAlert.shouldTrim
-          ? styles.trimStatusAlert
-          : trimAlert.isOverCeiling
-            ? styles.trimStatusWaiting
-            : styles.trimStatusWithin,
-      ]}
-    >
-      <Text style={styles.trimStatusText}>
-        {trimAlert.shouldTrim
-          ? `Over ceiling by ${overByPct.toFixed(1)}% • Up ${gainSinceReferencePct.toFixed(1)}% since last trim • Suggested trim: ${trimAlert.suggestedShares} shares`
-          : trimAlert.isOverCeiling
-            ? `Over ceiling, waiting for +${remainingGainPct.toFixed(1)}% more gain to trigger`
-            : "Within target allocation"}
+    <View style={styles.trimStatusCard}>
+      <Text style={[styles.trimProgressLabel, { color: stateColor }]}>
+        {allocationPct.toFixed(1)}% / {ceilingPct.toFixed(1)}% ceiling
       </Text>
+      <View style={styles.trimProgressTrack}>
+        <View style={[styles.trimProgressFill, { width: `${allocationFillPct}%`, backgroundColor: stateColor }]} />
+        <View style={[styles.trimProgressMarker, { left: `${ceilingMarkerPct}%` }]} />
+      </View>
+      <Text style={[styles.trimProgressSubLabel, { color: stateColor }]}>
+        {gainSinceReferencePct >= 0 ? "+" : ""}
+        {gainSinceReferencePct.toFixed(0)}% of +{trimTriggerPct.toFixed(0)}% trigger gain
+      </Text>
+      <View style={[styles.trimProgressTrack, styles.trimProgressTrackThin]}>
+        <View style={[styles.trimProgressFill, { width: `${gainProgressPct}%`, backgroundColor: stateColor }]} />
+      </View>
     </View>
   );
 };
@@ -251,7 +245,6 @@ export function HoldingsSection() {
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
-  const updateSettings = usePortfolioStore((state) => state.updateSettings);
   const recordTrimEvent = usePortfolioStore((state) => state.recordTrimEvent);
   const addAccount = usePortfolioStore((state) => state.addAccount);
   const addCashHolding = usePortfolioStore((state) => state.addCashHolding);
@@ -292,7 +285,9 @@ export function HoldingsSection() {
   const [hoveredHeader, setHoveredHeader] = useState<SortColumn | null>(null);
   const [collapsedAccounts, setCollapsedAccounts] = useState<Record<string, boolean>>({});
   const [trimSettingsDrafts, setTrimSettingsDrafts] = useState<Record<string, TrimSettingsDraft>>({});
+  const [trimSettingsErrors, setTrimSettingsErrors] = useState<Record<string, string>>({});
   const [trimMarkDrafts, setTrimMarkDrafts] = useState<Record<string, TrimMarkDraft>>({});
+  const [trimMarkErrors, setTrimMarkErrors] = useState<Record<string, string>>({});
   const [openTrimMarkForm, setOpenTrimMarkForm] = useState<Record<string, boolean>>({});
 
   // Subtle continuous spin for the refresh icon while a refresh is in-flight.
@@ -704,22 +699,80 @@ export function HoldingsSection() {
     setSortDirection("desc");
   };
 
+  const setTrimDraftField = (groupId: string, key: keyof TrimSettingsDraft, value: string) => {
+    setTrimSettingsDrafts((prev) => ({
+      ...prev,
+      [groupId]: {
+        ...(prev[groupId] ?? {
+          ceilingPct: String(DEFAULT_TRIM_CEILING_PCT),
+          trimTriggerPct: String(DEFAULT_TRIM_TRIGGER_PCT),
+          trimSlicePct: String(DEFAULT_TRIM_SLICE_PCT),
+        }),
+        [key]: value,
+      },
+    }));
+  };
+
+  const nudgeTrimSetting = (
+    groupId: string,
+    key: keyof TrimSettingsDraft,
+    fallback: number,
+    min: number,
+    max: number,
+    delta: number
+  ) => {
+    const currentRaw = trimSettingsDrafts[groupId]?.[key] ?? String(fallback);
+    const current = parseNumber(currentRaw);
+    const base = Number.isFinite(current) ? current : fallback;
+    const next = clamp(base + delta, min, max);
+    setTrimDraftField(groupId, key, String(next));
+    setTrimSettingsErrors((prev) => ({ ...prev, [groupId]: "" }));
+  };
+
   const saveTrimSettings = (group: DisplayGroup) => {
     const draft = trimSettingsDrafts[group.id];
     if (!draft) return;
     const ceilingPct = parseNumber(draft.ceilingPct);
     const trimTriggerPct = parseNumber(draft.trimTriggerPct);
     const trimSlicePct = parseNumber(draft.trimSlicePct);
-    if (ceilingPct < 0 || trimTriggerPct < 0 || trimSlicePct <= 0) return;
-    if (!Number.isFinite(ceilingPct) || !Number.isFinite(trimTriggerPct) || !Number.isFinite(trimSlicePct)) return;
-    updateSettings({
-      trimPolicy: {
-        ceilingPct,
-        trimTriggerPct,
-        trimSlicePct,
+    if (!Number.isFinite(ceilingPct) || !Number.isFinite(trimTriggerPct) || !Number.isFinite(trimSlicePct)) {
+      setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "Enter valid numbers for all three settings." }));
+      return;
+    }
+    if (ceilingPct < TRIM_CEILING_MIN || ceilingPct > TRIM_CEILING_MAX) {
+      setTrimSettingsErrors((prev) => ({
+        ...prev,
+        [group.id]: `Ceiling must be between ${TRIM_CEILING_MIN} and ${TRIM_CEILING_MAX}.`,
+      }));
+      return;
+    }
+    if (trimTriggerPct < TRIM_TRIGGER_MIN || trimTriggerPct > TRIM_TRIGGER_MAX) {
+      setTrimSettingsErrors((prev) => ({
+        ...prev,
+        [group.id]: `Trigger must be between ${TRIM_TRIGGER_MIN} and ${TRIM_TRIGGER_MAX}.`,
+      }));
+      return;
+    }
+    if (trimSlicePct < TRIM_SLICE_MIN || trimSlicePct > TRIM_SLICE_MAX) {
+      setTrimSettingsErrors((prev) => ({
+        ...prev,
+        [group.id]: `Slice must be between ${TRIM_SLICE_MIN} and ${TRIM_SLICE_MAX}.`,
+      }));
+      return;
+    }
+    const updatedAt = nowIso();
+    for (const lot of group.lots) {
+      updateHolding(lot.id, { ceilingPct, trimTriggerPct, trimSlicePct, updatedAt });
+    }
+    setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+    setTrimSettingsDrafts((prev) => ({
+      ...prev,
+      [group.id]: {
+        ceilingPct: String(ceilingPct),
+        trimTriggerPct: String(trimTriggerPct),
+        trimSlicePct: String(trimSlicePct),
       },
-      updatedAt: nowIso(),
-    });
+    }));
   };
 
   const openMarkTrimForm = (group: DisplayGroup, defaultPrice: number) => {
@@ -731,6 +784,7 @@ export function HoldingsSection() {
         date: toDateInputValue(nowIso()),
       },
     }));
+    setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
     setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: true }));
   };
 
@@ -740,9 +794,29 @@ export function HoldingsSection() {
     const sharesTrimmed = parseNumber(draft.sharesTrimmed);
     const price = parseNumber(draft.price);
     const parsedDate = parseDateInput(draft.date);
-    if (!Number.isFinite(sharesTrimmed) || !Number.isFinite(price) || sharesTrimmed <= 0 || price <= 0 || !parsedDate) return;
+    const totalShares = group.lots.reduce((sum, lot) => sum + lot.quantity, 0);
+    if (!Number.isFinite(sharesTrimmed) || sharesTrimmed <= 0) {
+      setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "Enter a valid shares sold value." }));
+      return;
+    }
+    if (sharesTrimmed > totalShares) {
+      setTrimMarkErrors((prev) => ({
+        ...prev,
+        [group.id]: `Shares sold cannot exceed current holding shares (${totalShares.toLocaleString(undefined, { maximumFractionDigits: 4 })}).`,
+      }));
+      return;
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "Enter a valid trim price." }));
+      return;
+    }
+    if (!parsedDate) {
+      setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "Use date format YYYY-MM-DD." }));
+      return;
+    }
     const trimEvent: TrimHistoryEntry = { date: parsedDate, price, sharesTrimmed };
     recordTrimEvent(group.title, trimEvent);
+    setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
     setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }));
     setTrimMarkDrafts((prev) => ({
       ...prev,
@@ -804,7 +878,14 @@ export function HoldingsSection() {
     const tickerTransactions =
       isExpanded && (currentTab === "transactions" || currentTab === "info") ? getTickerTransactions(group.title) : [];
     const primaryLot = group.lots[0];
-    const trimSettings = resolveTrimSettings(settings);
+    const trimSettingsSource =
+      group.lots.find(
+        (lot) =>
+          typeof lot.ceilingPct === "number" ||
+          typeof lot.trimTriggerPct === "number" ||
+          typeof lot.trimSlicePct === "number"
+      ) ?? primaryLot;
+    const trimSettings = resolveTrimSettings(trimSettingsSource);
     const trimSymbolKey = normalizeIndiaTicker(group.title);
     const trimState = trimBySymbol[trimSymbolKey] ?? { lastTrimPrice: null, history: [] };
     const totalShares = group.lots.reduce((sum, lot) => sum + lot.quantity, 0);
@@ -832,6 +913,8 @@ export function HoldingsSection() {
       price: weightedMarketPrice > 0 ? String(weightedMarketPrice) : "",
       date: toDateInputValue(nowIso()),
     };
+    const trimSettingsError = trimSettingsErrors[group.id];
+    const trimMarkError = trimMarkErrors[group.id];
     const trimHistory = trimState.history;
 
     return (
@@ -1146,49 +1229,143 @@ export function HoldingsSection() {
                 />
 
                 <View style={styles.trimSettingsCard}>
-                  <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Global trim settings</Text>
+                  <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Trim settings for {group.title}</Text>
 
                   <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Ceiling %</Text>
-                  <TextInput
-                    value={trimSettingsDraft.ceilingPct}
-                    onChangeText={(value) =>
-                      setTrimSettingsDrafts((prev) => ({
-                        ...prev,
-                        [group.id]: { ...trimSettingsDraft, ceilingPct: value },
-                      }))
-                    }
-                    keyboardType="decimal-pad"
-                    style={styles.trimInput}
-                    placeholderTextColor={colors.muted}
-                  />
+                  <View style={styles.trimStepperRow}>
+                    <Pressable
+                      style={styles.trimStepperBtn}
+                      onPress={() =>
+                        nudgeTrimSetting(
+                          group.id,
+                          "ceilingPct",
+                          trimSettings.ceilingPct,
+                          TRIM_CEILING_MIN,
+                          TRIM_CEILING_MAX,
+                          -1
+                        )
+                      }
+                    >
+                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
+                    </Pressable>
+                    <TextInput
+                      value={trimSettingsDraft.ceilingPct}
+                      onChangeText={(value) => {
+                        setTrimDraftField(group.id, "ceilingPct", value);
+                        setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+                      }}
+                      keyboardType="decimal-pad"
+                      style={[styles.trimInput, styles.trimStepperInput]}
+                      placeholderTextColor={colors.muted}
+                    />
+                    <Pressable
+                      style={styles.trimStepperBtn}
+                      onPress={() =>
+                        nudgeTrimSetting(
+                          group.id,
+                          "ceilingPct",
+                          trimSettings.ceilingPct,
+                          TRIM_CEILING_MIN,
+                          TRIM_CEILING_MAX,
+                          1
+                        )
+                      }
+                    >
+                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
+                    </Pressable>
+                  </View>
 
                   <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Trigger gain %</Text>
-                  <TextInput
-                    value={trimSettingsDraft.trimTriggerPct}
-                    onChangeText={(value) =>
-                      setTrimSettingsDrafts((prev) => ({
-                        ...prev,
-                        [group.id]: { ...trimSettingsDraft, trimTriggerPct: value },
-                      }))
-                    }
-                    keyboardType="decimal-pad"
-                    style={styles.trimInput}
-                    placeholderTextColor={colors.muted}
-                  />
+                  <View style={styles.trimStepperRow}>
+                    <Pressable
+                      style={styles.trimStepperBtn}
+                      onPress={() =>
+                        nudgeTrimSetting(
+                          group.id,
+                          "trimTriggerPct",
+                          trimSettings.trimTriggerPct,
+                          TRIM_TRIGGER_MIN,
+                          TRIM_TRIGGER_MAX,
+                          -1
+                        )
+                      }
+                    >
+                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
+                    </Pressable>
+                    <TextInput
+                      value={trimSettingsDraft.trimTriggerPct}
+                      onChangeText={(value) => {
+                        setTrimDraftField(group.id, "trimTriggerPct", value);
+                        setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+                      }}
+                      keyboardType="decimal-pad"
+                      style={[styles.trimInput, styles.trimStepperInput]}
+                      placeholderTextColor={colors.muted}
+                    />
+                    <Pressable
+                      style={styles.trimStepperBtn}
+                      onPress={() =>
+                        nudgeTrimSetting(
+                          group.id,
+                          "trimTriggerPct",
+                          trimSettings.trimTriggerPct,
+                          TRIM_TRIGGER_MIN,
+                          TRIM_TRIGGER_MAX,
+                          1
+                        )
+                      }
+                    >
+                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
+                    </Pressable>
+                  </View>
 
                   <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Trim slice %</Text>
-                  <TextInput
-                    value={trimSettingsDraft.trimSlicePct}
-                    onChangeText={(value) =>
-                      setTrimSettingsDrafts((prev) => ({
-                        ...prev,
-                        [group.id]: { ...trimSettingsDraft, trimSlicePct: value },
-                      }))
-                    }
-                    keyboardType="decimal-pad"
-                    style={styles.trimInput}
-                    placeholderTextColor={colors.muted}
-                  />
+                  <View style={styles.trimStepperRow}>
+                    <Pressable
+                      style={styles.trimStepperBtn}
+                      onPress={() =>
+                        nudgeTrimSetting(
+                          group.id,
+                          "trimSlicePct",
+                          trimSettings.trimSlicePct,
+                          TRIM_SLICE_MIN,
+                          TRIM_SLICE_MAX,
+                          -1
+                        )
+                      }
+                    >
+                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>-</Text>
+                    </Pressable>
+                    <TextInput
+                      value={trimSettingsDraft.trimSlicePct}
+                      onChangeText={(value) => {
+                        setTrimDraftField(group.id, "trimSlicePct", value);
+                        setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+                      }}
+                      keyboardType="decimal-pad"
+                      style={[styles.trimInput, styles.trimStepperInput]}
+                      placeholderTextColor={colors.muted}
+                    />
+                    <Pressable
+                      style={styles.trimStepperBtn}
+                      onPress={() =>
+                        nudgeTrimSetting(
+                          group.id,
+                          "trimSlicePct",
+                          trimSettings.trimSlicePct,
+                          TRIM_SLICE_MIN,
+                          TRIM_SLICE_MAX,
+                          1
+                        )
+                      }
+                    >
+                      <Text style={[styles.trimStepperBtnText, { color: colors.text }]}>+</Text>
+                    </Pressable>
+                  </View>
+
+                  {trimSettingsError ? (
+                    <Text style={[styles.trimHintText, { color: colors.negative }]}>{trimSettingsError}</Text>
+                  ) : null}
 
                   <Pressable style={styles.trimPrimaryBtn} onPress={() => saveTrimSettings(group)}>
                     <Text style={styles.trimPrimaryBtnText}>Save settings</Text>
@@ -1197,8 +1374,17 @@ export function HoldingsSection() {
 
                 <View style={styles.trimSettingsCard}>
                   <Text style={[styles.trimSectionTitle, { color: colors.text }]}>Mark as trimmed</Text>
-                  <Pressable style={styles.trimPrimaryBtn} onPress={() => openMarkTrimForm(group, weightedMarketPrice)}>
-                    <Text style={styles.trimPrimaryBtnText}>Mark as trimmed</Text>
+                  <Pressable
+                    style={styles.trimPrimaryBtn}
+                    onPress={() => {
+                      if (openTrimMarkForm[group.id]) {
+                        setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }));
+                        return;
+                      }
+                      openMarkTrimForm(group, weightedMarketPrice);
+                    }}
+                  >
+                    <Text style={styles.trimPrimaryBtnText}>{openTrimMarkForm[group.id] ? "Hide form" : "Mark as trimmed"}</Text>
                   </Pressable>
 
                   {openTrimMarkForm[group.id] ? (
@@ -1206,25 +1392,30 @@ export function HoldingsSection() {
                       <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Shares sold</Text>
                       <TextInput
                         value={trimMarkDraft.sharesTrimmed}
-                        onChangeText={(value) =>
+                        onChangeText={(value) => {
                           setTrimMarkDrafts((prev) => ({
                             ...prev,
                             [group.id]: { ...trimMarkDraft, sharesTrimmed: value },
-                          }))
-                        }
+                          }));
+                          setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
+                        }}
                         keyboardType="decimal-pad"
                         style={styles.trimInput}
                         placeholderTextColor={colors.muted}
                       />
+                      <Text style={[styles.trimHintText, { color: colors.muted }]}>
+                        Available: {totalShares.toLocaleString(undefined, { maximumFractionDigits: 4 })} shares
+                      </Text>
                       <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Price</Text>
                       <TextInput
                         value={trimMarkDraft.price}
-                        onChangeText={(value) =>
+                        onChangeText={(value) => {
                           setTrimMarkDrafts((prev) => ({
                             ...prev,
                             [group.id]: { ...trimMarkDraft, price: value },
-                          }))
-                        }
+                          }));
+                          setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
+                        }}
                         keyboardType="decimal-pad"
                         style={styles.trimInput}
                         placeholderTextColor={colors.muted}
@@ -1232,21 +1423,28 @@ export function HoldingsSection() {
                       <Text style={[styles.trimInputLabel, { color: colors.muted }]}>Date (YYYY-MM-DD)</Text>
                       <TextInput
                         value={trimMarkDraft.date}
-                        onChangeText={(value) =>
+                        onChangeText={(value) => {
                           setTrimMarkDrafts((prev) => ({
                             ...prev,
                             [group.id]: { ...trimMarkDraft, date: value },
-                          }))
-                        }
+                          }));
+                          setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
+                        }}
                         autoCapitalize="none"
                         autoCorrect={false}
                         style={styles.trimInput}
                         placeholderTextColor={colors.muted}
                       />
+                      {trimMarkError ? (
+                        <Text style={[styles.trimHintText, { color: colors.negative }]}>{trimMarkError}</Text>
+                      ) : null}
                       <View style={styles.trimInlineActions}>
                         <Pressable
                           style={styles.trimGhostBtn}
-                          onPress={() => setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }))}
+                          onPress={() => {
+                            setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
+                            setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }));
+                          }}
                         >
                           <Text style={[styles.trimGhostBtnText, { color: colors.muted }]}>Cancel</Text>
                         </Pressable>
@@ -1610,6 +1808,9 @@ export function HoldingsSection() {
             averagePrice: input.averagePrice,
             marketPrice: input.marketPrice,
             currency: input.currency,
+            ceilingPct: DEFAULT_TRIM_CEILING_PCT,
+            trimTriggerPct: DEFAULT_TRIM_TRIGGER_PCT,
+            trimSlicePct: DEFAULT_TRIM_SLICE_PCT,
             asOf: nowIso(),
             updatedAt: nowIso(),
           });
@@ -2366,45 +2567,64 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   trimTabWrap: {
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   trimStatusCard: {
     borderRadius: radii.lg,
     borderWidth: 1,
-    paddingHorizontal: spacing.md,
+    borderColor: defaultColors.border,
+    backgroundColor: defaultColors.bg,
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
-  trimStatusAlert: {
-    borderColor: "#A64848",
-    backgroundColor: "rgba(166,72,72,0.18)",
-  },
-  trimStatusWaiting: {
-    borderColor: "#7A6733",
-    backgroundColor: "rgba(122,103,51,0.18)",
-  },
-  trimStatusWithin: {
-    borderColor: "#2F7A52",
-    backgroundColor: "rgba(47,122,82,0.16)",
-  },
-  trimStatusText: {
-    color: defaultColors.text,
+  trimProgressLabel: {
     fontSize: typography.caption,
-    lineHeight: 18,
+    fontWeight: typography.weightSemibold,
+    fontVariant: ["tabular-nums"],
+  },
+  trimProgressSubLabel: {
+    marginTop: spacing.xs,
+    fontSize: typography.micro,
+    fontVariant: ["tabular-nums"],
+  },
+  trimProgressTrack: {
+    marginTop: spacing.xs,
+    height: 6,
+    borderRadius: radii.pill,
+    backgroundColor: defaultColors.surface,
+    overflow: "hidden",
+    position: "relative",
+  },
+  trimProgressTrackThin: {
+    height: 4,
+  },
+  trimProgressFill: {
+    height: "100%",
+    borderRadius: radii.pill,
+  },
+  trimProgressMarker: {
+    position: "absolute",
+    top: -1,
+    width: 2,
+    height: 8,
+    marginLeft: -1,
+    borderRadius: radii.pill,
+    backgroundColor: defaultColors.text,
   },
   trimSettingsCard: {
     borderRadius: radii.lg,
     borderWidth: 1,
     borderColor: defaultColors.border,
     backgroundColor: defaultColors.bg,
-    padding: spacing.md,
+    padding: spacing.sm,
   },
   trimSectionTitle: {
     fontSize: typography.caption,
     fontWeight: typography.weightSemibold,
-    marginBottom: spacing.xs,
+    marginBottom: 2,
   },
   trimInputLabel: {
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
     fontSize: typography.micro,
   },
   trimInput: {
@@ -2417,15 +2637,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  trimInputDisabled: {
-    opacity: 0.6,
+  trimStepperRow: {
+    marginTop: spacing.xs,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  trimStepperBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: defaultColors.border,
+    backgroundColor: defaultColors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  trimStepperBtnText: {
+    fontSize: typography.body,
+    fontWeight: typography.weightSemibold,
+    lineHeight: typography.body,
+  },
+  trimStepperInput: {
+    flex: 1,
+    marginTop: 0,
+    textAlign: "center",
+    fontVariant: ["tabular-nums"],
   },
   trimPrimaryBtn: {
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     borderRadius: radii.md,
     backgroundColor: defaultColors.accent,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs + 2,
     alignSelf: "flex-start",
   },
   trimPrimaryBtnText: {
