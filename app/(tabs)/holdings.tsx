@@ -11,9 +11,12 @@ import { TickerImage } from "../../src/components/TickerImage";
 import { HoldingAvatar } from "../../src/components/HoldingAvatar";
 import { HoldingPerformanceChart } from "../../src/components/HoldingPerformanceChart";
 import { calcHoldingPerformanceHistory, holdingCost, holdingMarketValue } from "../../src/features/portfolio/calculations";
+import { pushSnapshot } from "../../src/features/portfolio/cloudSyncService";
 import { selectAllHoldings } from "../../src/features/portfolio/selectors";
+import { hasSupabaseConfig } from "../../src/features/auth/supabaseClient";
 import { fetchLivePrices, resolveSymbolByIsin } from "../../src/services/yahooFinanceService";
 import { toINR, toUSD } from "../../src/features/portfolio/selectors";
+import { useAuthStore } from "../../src/store/authStore";
 import { usePortfolioStore } from "../../src/store/portfolioStore";
 import { colors as defaultColors, radii, spacing, typography, useTheme } from "../../src/theme";
 import { spec } from "../../src/theme/specTokens";
@@ -246,6 +249,7 @@ export function HoldingsSection() {
   const { colors } = useTheme();
   const router = useRouter();
   const { width: viewportWidth } = useWindowDimensions();
+  const cloudUserId = useAuthStore((state) => state.user?.id ?? null);
   // On narrow viewports the three value columns don't comfortably fit, so the
   // secondary Invested figure (header + per-row value) is hidden. Current + Alloc stay.
   const hideInvested = viewportWidth < 480;
@@ -260,6 +264,8 @@ export function HoldingsSection() {
   const addHolding = usePortfolioStore((state) => state.addHolding);
   const updateHolding = usePortfolioStore((state) => state.updateHolding);
   const removeHolding = usePortfolioStore((state) => state.removeHolding);
+  const getSnapshot = usePortfolioStore((state) => state.getSnapshot);
+  const replaceFromSnapshot = usePortfolioStore((state) => state.replaceFromSnapshot);
   const updateAccount = usePortfolioStore((state) => state.updateAccount);
   const recordTrimEvent = usePortfolioStore((state) => state.recordTrimEvent);
   const addAccount = usePortfolioStore((state) => state.addAccount);
@@ -746,8 +752,19 @@ export function HoldingsSection() {
   };
 
   const saveTrimSettings = (group: DisplayGroup) => {
-    const draft = trimSettingsDrafts[group.id];
-    if (!draft) return;
+    const settingsSource =
+      group.lots.find(
+        (lot) =>
+          typeof lot.ceilingPct === "number" ||
+          typeof lot.trimTriggerPct === "number" ||
+          typeof lot.trimSlicePct === "number"
+      ) ?? group.lots[0];
+    const effectiveSettings = resolveTrimSettings(settingsSource);
+    const draft = trimSettingsDrafts[group.id] ?? {
+      ceilingPct: String(effectiveSettings.ceilingPct),
+      trimTriggerPct: String(effectiveSettings.trimTriggerPct),
+      trimSlicePct: String(effectiveSettings.trimSlicePct),
+    };
     const ceilingPct = parseNumber(draft.ceilingPct);
     const trimTriggerPct = parseNumber(draft.trimTriggerPct);
     const trimSlicePct = parseNumber(draft.trimSlicePct);
@@ -777,18 +794,29 @@ export function HoldingsSection() {
       return;
     }
     const updatedAt = nowIso();
+    const prevSnapshot = getSnapshot();
     for (const lot of group.lots) {
       updateHolding(lot.id, { ceilingPct, trimTriggerPct, trimSlicePct, updatedAt });
     }
-    setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
-    setTrimSettingsDrafts((prev) => ({
-      ...prev,
-      [group.id]: {
-        ceilingPct: String(ceilingPct),
-        trimTriggerPct: String(trimTriggerPct),
-        trimSlicePct: String(trimSlicePct),
-      },
-    }));
+    void (async () => {
+      if (hasSupabaseConfig && cloudUserId) {
+        const error = await pushSnapshot(cloudUserId, usePortfolioStore.getState().getSnapshot());
+        if (error) {
+          replaceFromSnapshot(prevSnapshot);
+          setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: `Could not save settings: ${error}` }));
+          return;
+        }
+      }
+      setTrimSettingsErrors((prev) => ({ ...prev, [group.id]: "" }));
+      setTrimSettingsDrafts((prev) => ({
+        ...prev,
+        [group.id]: {
+          ceilingPct: String(ceilingPct),
+          trimTriggerPct: String(trimTriggerPct),
+          trimSlicePct: String(trimSlicePct),
+        },
+      }));
+    })();
   };
 
   const openMarkTrimForm = (group: DisplayGroup, defaultPrice: number) => {
@@ -830,17 +858,28 @@ export function HoldingsSection() {
       setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "Use date format YYYY-MM-DD." }));
       return;
     }
+    const prevSnapshot = getSnapshot();
     const trimEvent: TrimHistoryEntry = { date: parsedDate, price, sharesTrimmed };
     recordTrimEvent(group.title, trimEvent);
-    setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
-    setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }));
-    setTrimMarkDrafts((prev) => ({
-      ...prev,
-      [group.id]: {
-        ...(prev[group.id] ?? { sharesTrimmed: "", price: String(price), date: toDateInputValue(parsedDate) }),
-        sharesTrimmed: "",
-      },
-    }));
+    void (async () => {
+      if (hasSupabaseConfig && cloudUserId) {
+        const error = await pushSnapshot(cloudUserId, usePortfolioStore.getState().getSnapshot());
+        if (error) {
+          replaceFromSnapshot(prevSnapshot);
+          setTrimMarkErrors((prev) => ({ ...prev, [group.id]: `Could not save trim event: ${error}` }));
+          return;
+        }
+      }
+      setTrimMarkErrors((prev) => ({ ...prev, [group.id]: "" }));
+      setOpenTrimMarkForm((prev) => ({ ...prev, [group.id]: false }));
+      setTrimMarkDrafts((prev) => ({
+        ...prev,
+        [group.id]: {
+          ...(prev[group.id] ?? { sharesTrimmed: "", price: String(price), date: toDateInputValue(parsedDate) }),
+          sharesTrimmed: "",
+        },
+      }));
+    })();
   };
 
   // Open the Add / Import dropdowns anchored just below their buttons.
